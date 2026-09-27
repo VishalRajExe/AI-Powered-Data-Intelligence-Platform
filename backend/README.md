@@ -55,3 +55,24 @@ it does not discover sources or run Firecrawl tools. Configure `LLM_PROVIDER`,
 `LLM_MODEL_ID`, and the matching provider credential before calling it. The
 parser uses the Agent Core provider resolver and validates generated output
 against strict Zod schemas before returning it.
+
+## Workflow planning API
+
+`POST /api/v1/workflows/plan` accepts a validated structured requirement with
+`workspaceId`, `createdById`, and an optional `originalPrompt`. The API requires
+an active membership for the supplied user and workspace, stores a workflow in
+`PLANNING`, and asks the configured LLM for a requirement-specific plan. It
+allows one schema-correction attempt, validates the complete result, then saves
+version 1 and sets `planningStatus` to `PLANNED`. A terminal model or validation
+failure sets the workflow to `FAILED` with a sanitized error code/message. The
+response contains the `workflowId`, typed `plan`, and planning status. This
+phase only plans and persists; it does not execute SEARCH, SCRAPE, browser, or
+worker operations. Since authentication is not active yet, `createdById` is
+currently supplied by the caller; production authorization must bind this ID
+to the authenticated principal when the auth phase is implemented.
+
+Plans use a versioned strict Zod contract with a fixed safe step vocabulary,
+bounded retries/timeouts, permitted-source policy, extraction schema, typed
+transform/validation/deduplication rules, and measurable completion criteria.
+Unsupported step types, missing fields, missing extraction schema, and missing
+completion criteria are rejected before persistence.

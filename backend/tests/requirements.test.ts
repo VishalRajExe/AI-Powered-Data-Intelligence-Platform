@@ -231,6 +231,7 @@ describe("natural-language requirement parsing", () => {
       config,
       logger: pino({ enabled: false }),
       requirementParser: parser,
+      workflowPlanner: { plan: async () => { throw new Error("Workflow planner not used in this test"); } },
       readiness: { mysql: async () => 1, redis: async () => "PONG" },
     });
 

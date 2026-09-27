@@ -35,6 +35,13 @@ enum WorkflowStatus {
   ARCHIVED
 }
 
+enum WorkflowPlanningStatus {
+  NOT_STARTED
+  PLANNING
+  PLANNED
+  FAILED
+}
+
 enum WorkflowRunStatus {
   PENDING
   PLANNING
@@ -181,14 +188,17 @@ model WorkspaceMember {
 }
 
 model Workflow {
-  id          String         @id @default(uuid()) @db.Char(36)
-  workspaceId String         @map("workspace_id") @db.Char(36)
-  createdById String         @map("created_by_id") @db.Char(36)
-  name        String         @db.VarChar(200)
-  requirement String         @db.Text
-  status      WorkflowStatus @default(DRAFT)
-  createdAt   DateTime       @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt   DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
+  id                   String                 @id @default(uuid()) @db.Char(36)
+  workspaceId          String                 @map("workspace_id") @db.Char(36)
+  createdById          String                 @map("created_by_id") @db.Char(36)
+  name                 String                 @db.VarChar(200)
+  requirement          String                 @db.Text
+  status               WorkflowStatus         @default(DRAFT)
+  planningStatus       WorkflowPlanningStatus @default(NOT_STARTED) @map("planning_status")
+  planningErrorCode    String?                @map("planning_error_code") @db.VarChar(100)
+  planningErrorMessage String?                @map("planning_error_message") @db.VarChar(1000)
+  createdAt            DateTime               @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt            DateTime               @updatedAt @map("updated_at") @db.DateTime(3)
 
   workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy User           @relation("WorkflowCreator", fields: [createdById], references: [id], onDelete: Restrict)
@@ -207,6 +217,7 @@ model WorkflowPlan {
   workflowId          String   @map("workflow_id") @db.Char(36)
   version             Int
   objective           String   @db.Text
+  requirement         Json
   constraints         Json?
   sourcePolicy        Json
   searchStrategy      Json
@@ -216,6 +227,7 @@ model WorkflowPlan {
   validationRules     Json?
   deduplicationRules  Json?
   outputConfiguration Json?
+  completionCriteria  Json     @map("completion_criteria")
   planHash            String   @map("plan_hash") @db.Char(64)
   createdAt           DateTime @default(now()) @map("created_at") @db.DateTime(3)
 

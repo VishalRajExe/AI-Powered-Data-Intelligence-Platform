@@ -45,10 +45,10 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
     const applied = await prisma.$queryRaw<Array<{ migration_name: string }>>`
       SELECT migration_name
       FROM _prisma_migrations
-      WHERE (migration_name LIKE '%_phase2_domain_model' OR migration_name LIKE '%_workspace_membership_state')
+      WHERE (migration_name LIKE '%_phase2_domain_model' OR migration_name LIKE '%_workspace_membership_state' OR migration_name LIKE '%_workflow_planning_state')
         AND finished_at IS NOT NULL
     `;
-    expect(applied).toHaveLength(2);
+    expect(applied).toHaveLength(3);
   });
 
   it("persists workflows, plans, runs, rows, validation and field-level source provenance", async () => {
@@ -110,6 +110,8 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
     });
 
     expect(result.plans).toHaveLength(1);
+    expect(result.plans[0]?.requirement).toEqual({ objective: "Create a fixture for persistence tests." });
+    expect(result.plans[0]?.completionCriteria).toEqual({ requireSourceEvidence: true });
     expect(result.runs).toHaveLength(1);
     expect(result.runs[0]?.dataset?.rows[0]?.sourceEvidence[0]?.source.canonicalUrl).toBe(fixture.source.canonicalUrl);
     expect(result.runs[0]?.dataset?.rows[0]?.sourceEvidence[0]?.column?.key).toBe("company");
@@ -135,10 +137,12 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
         workflowId: fixture.workflow.id,
         version: fixture.plan.version,
         objective: "duplicate version",
+        requirement: { objective: "duplicate version" },
         sourcePolicy: {},
         searchStrategy: {},
         extractionSchema: {},
         steps: [],
+        completionCriteria: {},
         planHash: "f".repeat(64),
       },
     })).rejects.toMatchObject({ code: "P2002" });
@@ -206,6 +210,7 @@ async function createFixture(label: string) {
       createdById: user.id,
       name: `Workflow ${label}`,
       requirement: "Collect a development-only test fixture.",
+      planningStatus: "PLANNED",
     },
   });
   const plan: WorkflowPlan = await prisma.workflowPlan.create({
@@ -214,11 +219,13 @@ async function createFixture(label: string) {
       workflowId: workflow.id,
       version: 1,
       objective: "Create a fixture for persistence tests.",
+      requirement: { objective: "Create a fixture for persistence tests." },
       constraints: { permittedDomain: "example.invalid" },
       sourcePolicy: { respectRobots: true },
       searchStrategy: { queries: ["integration fixture"] },
       extractionSchema: { type: "object", required: ["company"] },
       steps: [{ type: "SEARCH" }, { type: "EXTRACT" }],
+      completionCriteria: { requireSourceEvidence: true },
       planHash: "a".repeat(64),
     },
   });

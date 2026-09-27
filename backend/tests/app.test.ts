@@ -25,6 +25,7 @@ function makeApp(mysql: () => Promise<unknown> = async () => 1, redis: () => Pro
     config: makeConfig(),
     logger: pino({ enabled: false }),
     requirementParser: { parse: async () => { throw new Error("Requirement parser not used in this test"); } },
+    workflowPlanner: { plan: async () => { throw new Error("Workflow planner not used in this test"); } },
     readiness: { mysql, redis },
   });
 }

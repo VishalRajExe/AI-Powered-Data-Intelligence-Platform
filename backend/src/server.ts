@@ -7,6 +7,7 @@ import { createLogger } from "./logger.js";
 import { createRedisConnection } from "./queue/connection.js";
 import { createWorkflowQueue } from "./queue/workflowQueue.js";
 import { createRequirementParser } from "./modules/requirements/index.js";
+import { createWorkflowPlanner } from "./modules/planner/index.js";
 
 const config = loadEnvConfig();
 process.env.DATABASE_URL = config.DATABASE_URL;
@@ -19,6 +20,7 @@ const app = createApp({
   config,
   logger,
   requirementParser: createRequirementParser(config, logger),
+  workflowPlanner: createWorkflowPlanner(config, logger, prisma),
   readiness: {
     mysql: () => prisma.$queryRaw`SELECT 1`,
     redis: () => redis.ping(),
