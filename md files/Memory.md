@@ -7,7 +7,7 @@
 - **Current Phase:** Phase 2 — Database and domain model complete.
 - **Last updated:** 2026-09-27.
 - **App runnable end-to-end:** Backend foundation starts; product collection workflows and APIs are not implemented yet.
-- **Git state:** Workspace is on `main` and tracks `origin/main`; Phase 2 changes are being prepared for the requested push.
+- **Git state:** Phase 2 is committed and pushed to `origin/main` (`620b3d5`); the workspace is clean after the Memory update is pushed.
 
 ## 2. Completed Phases / Features
 
