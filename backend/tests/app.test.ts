@@ -24,6 +24,7 @@ function makeApp(mysql: () => Promise<unknown> = async () => 1, redis: () => Pro
   return createApp({
     config: makeConfig(),
     logger: pino({ enabled: false }),
+    requirementParser: { parse: async () => { throw new Error("Requirement parser not used in this test"); } },
     readiness: { mysql, redis },
   });
 }
@@ -98,6 +99,6 @@ describe("environment configuration", () => {
     const config = makeConfig();
     expect(() => assertAgentCredentials(config)).toThrow(/FIRECRAWL_API_KEY/);
     expect(() => assertAgentCredentials(makeConfig({ FIRECRAWL_API_KEY: "fc-test" }))).toThrow(/LLM_PROVIDER=google/);
-    expect(() => assertAgentCredentials(makeConfig({ FIRECRAWL_API_KEY: "fc-test", GOOGLE_GENERATIVE_AI_API_KEY: "key" }))).not.toThrow();
+    expect(() => assertAgentCredentials(makeConfig({ FIRECRAWL_API_KEY: "fc-test", GOOGLE_GENERATIVE_AI_API_KEY: "key", LLM_MODEL_ID: "gemini-test" }))).not.toThrow();
   });
 });

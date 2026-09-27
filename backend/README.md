@@ -45,3 +45,13 @@ npm run test:db
 ```
 
 Use `npm run db:deploy` to apply checked-in migrations in deployed environments.
+
+## Requirement parsing API
+
+`POST /api/v1/requirements/parse` accepts `{ "prompt": "..." }` and returns
+`parsedRequirement`, `validationStatus` (`valid` or `needs_clarification`),
+`warnings`, and `missingInformation`. It performs structured LLM analysis only;
+it does not discover sources or run Firecrawl tools. Configure `LLM_PROVIDER`,
+`LLM_MODEL_ID`, and the matching provider credential before calling it. The
+parser uses the Agent Core provider resolver and validates generated output
+against strict Zod schemas before returning it.

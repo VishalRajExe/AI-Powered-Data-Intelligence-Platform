@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import type { ErrorRequestHandler, Request } from "express";
+import type { ErrorRequestHandler, Request, RequestHandler } from "express";
 import type { Logger } from "pino";
 import { ZodError } from "zod";
 
@@ -15,8 +15,8 @@ export class AppError extends Error {
   }
 }
 
-export function notFoundHandler(): ErrorRequestHandler {
-  return (_error, _request, _response, next) => next(new AppError("Route not found", 404, "NOT_FOUND"));
+export function notFoundHandler(): RequestHandler {
+  return (_request, _response, next) => next(new AppError("Route not found", 404, "NOT_FOUND"));
 }
 
 export function createErrorHandler(logger: Logger): ErrorRequestHandler {

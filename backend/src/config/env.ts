@@ -106,6 +106,10 @@ function buildMysqlUrl(parts: { host: string; port: number; user: string; passwo
 
 export function assertAgentCredentials(config: AppConfig): void {
   if (!config.FIRECRAWL_API_KEY) throw new Error("FIRECRAWL_API_KEY is required to execute a collection run");
+  assertLlmCredentials(config);
+}
+
+export function assertLlmCredentials(config: AppConfig): void {
   const providerKey = {
     google: config.GOOGLE_GENERATIVE_AI_API_KEY,
     anthropic: config.ANTHROPIC_API_KEY,
@@ -114,4 +118,5 @@ export function assertAgentCredentials(config: AppConfig): void {
     "custom-openai": config.CUSTOM_OPENAI_API_KEY,
   }[config.LLM_PROVIDER];
   if (!providerKey) throw new Error(`Credentials for LLM_PROVIDER=${config.LLM_PROVIDER} are not configured`);
+  if (!config.LLM_MODEL_ID) throw new Error("LLM_MODEL_ID must be configured to parse a requirement");
 }

@@ -4,16 +4,17 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 2 — Database and domain model complete.
+- **Current Phase:** Phase 3 — Natural-language requirement engine complete.
 - **Last updated:** 2026-09-27.
-- **App runnable end-to-end:** Backend foundation starts; product collection workflows and APIs are not implemented yet.
-- **Git state:** Phase 2 is committed and pushed to `origin/main` (`620b3d5`); the workspace is clean after the Memory update is pushed.
+- **App runnable end-to-end:** Backend and requirement parse API start; downstream workflow planning/collection is not implemented yet.
+- **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
 
 - [x] Phase 0 — Repository and architecture forensic audit. Firecrawl Agent Core is the primary foundation; its MIT source is vendored locally with provenance metadata. Other reference repositories were not merged.
 - [x] Phase 1 — Backend workspace, strict TypeScript, Express foundation, environment validation, logging, Prisma/MySQL and Redis/BullMQ wiring, health/readiness, tests, and setup documentation.
 - [x] Phase 2 — Workspace-scoped domain schema, two Prisma migrations, development seed, dataset row/provenance repository, and MySQL integration tests.
+- [x] Phase 3 — Strict requirement schemas, configurable structured-output provider, prompt template, ambiguity/validation result, and `POST /api/v1/requirements/parse`.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -26,6 +27,8 @@
 | 2026-09-27 | Store dynamic dataset values and versioned plan definitions as JSON; store dataset columns, evidence, validation issues, and deduplication decisions relationally. | Preserves flexible data contracts while keeping provenance and common metadata queryable. Raw page bodies are not persisted in MySQL. |
 | 2026-09-27 | Require row creation through `DatasetRepository.insertRowWithEvidence`. | Persists row and evidence in one transaction, rejects rows without evidence, and verifies sources were fetched in the dataset's workflow run. |
 | 2026-09-27 | Keep authentication inactive; retain nullable password hashes and workspace membership models for later auth phases. | Phase 2 defines persistence and ownership boundaries but does not implement login/session behavior. |
+| 2026-09-27 | Reuse the vendored Agent Core `resolveModel` through a requirement-provider interface; use AI SDK structured output and revalidate with Zod. | Uses the same configurable provider resolution as the agent while keeping requirement analysis independently mockable and free of collection tools. The direct `ai` dependency is pinned to the same 6.0.293 Apache-2.0 version already resolved for Agent Core. |
+| 2026-09-27 | Return `needs_clarification` for unresolved entity, objective, fields, or explicit ambiguity; fail closed on malformed model output or provider errors. | Prevents invented requirements and ensures this stage cannot silently perform web collection. |
 
 ## 4. Database / Schema Changes
 
@@ -34,19 +37,22 @@
 - Added migrations `20260927143730_phase2_domain_model` and `20260927144412_workspace_membership_state` under `backend/prisma/migrations/`.
 - Seed command creates an idempotent development user/workspace only and refuses `APP_ENV=production`.
 - Database tests run against local `aidp_dev` MySQL using credentials supplied transiently to the shell; credentials are not stored in source, `.env`, or this file.
+- Requirement schema, provider, service, prompt, and route are under `backend/src/modules/requirements/` and `backend/src/routes/requirements.routes.ts`. API path is `POST /api/v1/requirements/parse`.
 
 ## 5. Known Bugs / Issues / Verification Limits
 
 - The live integration tests ran successfully against the installed MySQL 9.6 service. MySQL 8.4 remains the version in `docker-compose.yml`; Docker is unavailable here, so that exact service version was not started.
 - Redis is not running locally; readiness was not rechecked in this phase. Phase 1 records that `/ready` returns 503 when required services are unavailable.
 - Integration tests require `RUN_DATABASE_TESTS=true` and a migrated disposable database. The normal `npm test` run skips these integration checks when that flag is absent.
+- No live LLM request was made because no provider credentials are configured in this workspace. The parser path and failures are covered with injected provider fixtures; live model behavior remains unverified.
 - No `.env` file exists. `.env.example` contains placeholders.
 - The requested remote is configured as `origin`; no credential values are stored in project files.
 
 ## 6. Pending Work / Next Steps
 
-- Stop after Phase 2 as requested; wait for the next phase prompt.
-- No later API, auth, worker, or frontend work was started.
+- Stop after Phase 3 as requested; wait for the next phase prompt.
+- The Phase 3 endpoint only analyzes and validates requirements. It does not create a workflow, invoke Firecrawl, or scrape.
+- `Phases.md` uses older phase numbering; follow the user's current phase prompts and do not build its later planner phase early.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
 
 ## 7. Environment / Commands / Configuration
@@ -57,7 +63,7 @@
 - **Checks:** `npm run typecheck`; `npm run lint`; `npm test`; `npm run test:db` with `RUN_DATABASE_TESTS=true` and `DATABASE_URL`; `npm run build`; `npm audit`.
 - **Schema validation:** `npm run db:validate`.
 - **Environment variables:** `APP_ENV`, `PORT`, `FRONTEND_ORIGIN`, `LOG_LEVEL`, `REQUEST_BODY_LIMIT`, `DATABASE_URL` or `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE`, `REDIS_URL`, `FIRECRAWL_API_KEY`, `FIRECRAWL_BASE_URL`, `LLM_PROVIDER`, `LLM_MODEL_ID`, provider credentials, and paired `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` when auth is introduced.
-- **API:** `GET /health` and `GET /ready` only; product routes and auth are not active.
+- **API:** `GET /health`, `GET /ready`, and `POST /api/v1/requirements/parse`. The parse endpoint requires configured `LLM_PROVIDER`, `LLM_MODEL_ID`, and provider credential. It returns parsed requirement, validation status, warnings, and missing information. Auth and collection routes are not active.
 - **Data services:** `docker-compose.yml` defines local MySQL 8.4 and Redis 7.
 
 ## 8. Notes for the Next AI Session
@@ -69,4 +75,4 @@
 
 ## 9. Last Session Summary
 
-Completed Phase 2. Designed and migrated the workspace-scoped domain schema, added development-only seed data and an atomic dataset-row repository that requires fetched source evidence, and added MySQL integration coverage for migrations, CRUD/relationships, constraints, pagination, row insertion, and provenance. Both migrations applied to the local MySQL 9.6 `aidp_dev` database using the supplied root credentials through transient shell environment only. Typecheck, lint, normal tests (9 passed; DB suite skipped by default), DB integration tests (3 passed), build, schema validation, seed, and npm audit passed. No `.env` was created. Stop and wait for the next phase.
+Completed Phase 3. Added strict Zod requirement/output schemas, a versioned system prompt, provider abstraction using the Agent Core resolver plus `generateObject`, post-generation validation, ambiguity and missing-information handling, and the parse API. The parser makes no web requests. Added test coverage for jobs, sales leads, sponsor opportunities, companies, products, market information, mixed fields, ambiguous prompts, invalid input/output, missing credentials, and provider failures. Typecheck, lint, 22 unit tests, build, and npm audit passed; the three MySQL integration tests are skipped in the normal test run. No live LLM call was made because provider credentials are not configured. No `.env` was created. Stop and wait for the next phase.
