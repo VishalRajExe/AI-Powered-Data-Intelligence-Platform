@@ -1,0 +1,733 @@
+Use firecrawl/web-agent as the CORE
+
+Do not start from Agentic Browser or the small Web Research Agent.
+
+Use:
+
+Firecrawl Web Agent = brain/orchestrator + web tools + structured extraction
+
+Then selectively add functionality from other repositories and build the remaining product layer yourselves.
+
+Firecrawl's current repo already has an agent loop, planning/acting/observing, parallel subagents, Search/Scrape/Interact/browser tools, reusable skills, streaming and structured JSON output. It also has a Next.js template with a chat UI.
+
+Firecrawl Web Agent GitHub
+
+First, understand what PS2 actually wants
+
+Your PS says:
+
+Natural-language requirement
+          ↓
+       AI understands
+          ↓
+   Dynamically creates
+      a workflow
+          ↓
+ Search permitted sources
+          ↓
+      Collect data
+          ↓
+    Clean + structure
+          ↓
+      Validate
+          ↓
+    Deduplicate
+          ↓
+ Store dataset + sources
+          ↓
+     Dashboard
+          ↓
+ Search / Filter / Export
+          ↓
+ Workflow history
+ + task monitoring
+
+So this is not simply an AI scraper.
+
+The hardest missing part is actually the product/platform layer around the agent.
+
+1. Firecrawl Web Agent — your foundation
+What it already has
+PS2 requirement	Firecrawl
+Natural-language prompt	✅
+Understand requirements	✅
+Dynamic AI planning	✅
+Search web	✅
+Scrape web	✅
+Browser interaction	✅
+Multiple sources	✅
+Parallel subagents	✅
+Structured JSON	✅
+Schema-based extraction	✅
+Pagination	✅
+Source URLs	✅
+Streaming execution	✅
+Reusable workflows/skills	✅
+Data processing	✅
+User-facing chat UI	✅
+
+Firecrawl's structured-extraction skill specifically handles structured schemas, arrays, pagination and validation, and instructs the agent to retain source URLs and check for duplicate entries.
+
+Its research skills also support multi-source research and source recording.
+
+So this is already very close to the AI engine described in PS2.
+
+What Firecrawl DOES NOT fully provide
+
+This is where your actual project begins.
+
+A. Dataset Management
+
+PS says:
+
+"present the results through a centralized dashboard"
+
+Firecrawl's open-source agent provides a chat-oriented Next.js template, but it is not already your finished business data intelligence dashboard.
+
+You need:
+
+Dataset
+ ├── Name
+ ├── Description
+ ├── Created by
+ ├── Created date
+ ├── Status
+ ├── Number of records
+ ├── Source count
+ └── Last updated
+
+And individual rows:
+
+Company
+Website
+Founder
+Industry
+Email
+Location
+Source URL
+Confidence
+Collected At
+B. Search + Filter dataset
+
+PS specifically asks users to:
+
+search, filter
+
+This needs to be built.
+
+For example:
+
+Search: "AI startups"
+
+Filters:
+Industry = AI
+Country = India
+Funding > ₹10 Cr
+Founded after = 2020
+Has email = Yes
+
+Firecrawl's structured output gives you the data; your application should turn it into a proper dataset explorer.
+
+C. Export
+
+PS explicitly asks:
+
+export datasets
+
+Your product needs:
+
+Export
+ ├── CSV
+ ├── JSON
+ └── Excel
+
+and preferably:
+
+Export filtered results
+Export entire dataset
+
+This is one of the things you should implement yourself.
+
+D. Persistent Workflow History
+
+This is a major missing product feature.
+
+Imagine:
+
+My Workflows
+
+1. Find AI startups in India
+   Completed
+   423 records
+   17 sources
+
+2. Find SaaS companies in Europe
+   Running
+   61%
+
+3. Find college sponsorship opportunities
+   Failed
+   Retry
+
+The agent itself executes workflows, but you need your own persistent database around that.
+
+I'd create:
+
+users
+workflows
+workflow_steps
+workflow_runs
+datasets
+dataset_rows
+sources
+exports
+E. Task Monitoring
+
+PS says:
+
+"monitor their progress"
+
+This should be a first-class UI.
+
+For example:
+
+WORKFLOW RUNNING
+
+Understanding request       ✓
+Finding sources             ✓
+Scraping 37/50 sources     ███████░░░ 74%
+Extracting records          ██████░░░░ 61%
+Cleaning                    ████░░░░░░ 40%
+Deduplicating               ██░░░░░░░░ 20%
+
+Records found: 1,842
+Valid records: 1,513
+Duplicates removed: 329
+
+Firecrawl provides streaming/execution capabilities, but your application should persist these events and turn them into a workflow monitoring experience.
+
+F. Data cleaning/validation needs to become a real pipeline
+
+Firecrawl already has structured extraction and validation concepts.
+
+But your PS wants a proper dataset-processing layer:
+
+Raw extraction
+     ↓
+Normalize
+     ↓
+Type validation
+     ↓
+Missing-value handling
+     ↓
+Email validation
+     ↓
+URL validation
+     ↓
+Duplicate detection
+     ↓
+Entity resolution
+     ↓
+Final dataset
+
+For example:
+
+"Open AI"
+"OpenAI"
+"OPENAI INC."
+
+should potentially become one company.
+
+That's your product's data intelligence layer, not merely scraping.
+
+2. Web Research Agent — what we can borrow
+
+Repository:
+
+Web Research Agent GitHub
+
+This project is much smaller, but several ideas are useful.
+
+It already implements:
+
+Query analysis
+ ↓
+Google search
+ ↓
+Embedding-based URL selection
+ ↓
+robots.txt checking
+ ↓
+Scraping
+ ↓
+Relevant-content extraction
+ ↓
+Result aggregation
+ ↓
+Sources
+
+and includes retry/error handling and conflict handling.
+
+Useful things to take conceptually
+
+Source verification
+
+Source
+ ├── URL
+ ├── Title
+ ├── Retrieved at
+ ├── Content
+ └── Evidence
+
+robots.txt checking
+
+The repository explicitly checks robots.txt before scraping.
+
+Retries
+
+Useful for unreliable websites.
+
+Relevance ranking
+
+Its embedding-based URL selection is useful for deciding which sources deserve deeper extraction.
+
+But I would not make this your primary repository. Firecrawl already provides a much more developed agent architecture.
+
+3. Agentic Browser — useful, but DON'T make it the core
+
+Repository:
+
+Agentic Browser GitHub
+
+This project has a nice architecture:
+
+              USER PROMPT
+                   ↓
+             Planner Agent
+                   ↓
+            Browser Agent
+                   ↓
+            Critique Agent
+                   ↓
+          Continue / Correct
+
+The planner creates steps, the browser executes them, and the critique agent evaluates whether each step succeeded. It uses Playwright/browser interaction and supports natural-language research and extraction.
+
+That's an excellent architectural idea for your workflow engine.
+
+But there is a significant licensing consideration: its current license is the TheAgentic Community License Agreement, which restricts use for an online service that competes with TheAgentic products/services.
+
+So for your hackathon, I'd study its architecture rather than directly merging its code unless your team has reviewed and accepts that license.
+
+4. AnakinScraper — VERY useful for the missing platform layer
+
+This is the additional repository I'd seriously study.
+
+AnakinScraper OSS GitHub
+
+It gives you things Firecrawl Web Agent doesn't focus on as much:
+
+Scraping jobs
+        ↓
+Worker pool
+        ↓
+Persistent PostgreSQL
+        ↓
+Job history
+        ↓
+Dashboard
+        ↓
+Status tracking
+
+It has a React dashboard with:
+
+Dashboard
+Scrape
+Jobs
+Job history
+Status filtering
+Domain configurations
+Proxy monitoring
+
+and optional PostgreSQL persistence.
+
+It also has:
+
+asynchronous jobs
+batch scraping
+structured JSON extraction
+retries/failure detection
+domain-specific configuration
+browser fallback
+job storage
+This fills a major gap.
+
+However, its current license is AGPL-3.0, so you should not blindly copy its code into your project without considering the license obligations.
+
+For your hackathon, I'd primarily take architecture/UI ideas, or use components only after checking compatibility with your intended distribution.
+
+So here's the combination I recommend
+CORE
+firecrawl/web-agent
+
+Keep:
+
+AI Planner
+Agent Loop
+Subagents
+Search
+Scrape
+Interact
+Structured Extraction
+Skills
+Streaming
+RESEARCH / SOURCE QUALITY
+devcodes9/web-research-agent
+
+Use concepts/code where license-compatible for:
+
+Source ranking
+robots.txt handling
+Retry logic
+Relevance filtering
+Evidence/source representation
+Conflict handling
+
+Because this project is MIT-licensed.
+
+BROWSER FALLBACK / AGENT ARCHITECTURE
+TheAgenticBrowser
+
+Study:
+
+Planner → Browser → Critique
+
+But I would not merge its code into the final product without reviewing its Community License.
+
+JOB/DASHBOARD IDEAS
+AnakinScraper
+
+Study/use where license-compatible:
+
+Job queue
+Async scraping
+Job tracking
+Dashboard design
+Persistence
+Worker architecture
+Domain configuration
+
+But remember its AGPL-3.0 license.
+
+Now the important part: percentage
+
+I don't want to give you a fake number like "93.7%", because repository similarity isn't objectively measurable.
+
+So I broke PS2 into its actual functional requirements and estimated how much is already implemented.
+
+Firecrawl alone
+Requirement	Approx. existing coverage
+Natural-language requirements	100%
+Multi-source collection	90%
+Source-backed results	90%
+Dynamic workflow generation	95%
+Structured extraction	95%
+Cleaning/validation/dedup concepts	75–85%
+Dashboard	30–40%
+Search/filter datasets	20–30%
+Export datasets	20–30%
+Task management	40–50%
+Persistent workflow history	20–30%
+Overall functional coverage
+
+I'd put Firecrawl Web Agent at roughly 65–75% of PS2, depending on how strictly you interpret the dashboard/data-management requirements.
+
+The AI/data-collection engine is much closer than the product layer.
+
+After combining the useful pieces
+
+With:
+
+Firecrawl
++
+Web Research Agent concepts
++
+Anakin-style job/dashboard architecture
++
+Your own database/product layer
+
+you could reasonably target around:
+
+85–95% functional coverage
+
+of what the PS describes.
+
+Not because the repositories magically provide 95% of a finished application, but because almost every underlying technical primitive already exists.
+
+The remaining work is where you create your actual hackathon product.
+
+What WE still need to build
+
+This is the part I would make unique to your project.
+
+1. Prompt → Data Schema Generator
+
+User says:
+
+"Find Indian AI startups founded after 2020 with their founder, website, funding and LinkedIn."
+
+AI converts that into:
+
+{
+  "entity": "startup",
+  "fields": [
+    "company_name",
+    "founder",
+    "website",
+    "funding",
+    "linkedin"
+  ],
+  "filters": {
+    "country": "India",
+    "founded_after": 2020
+  }
+}
+
+This becomes the dataset contract.
+
+2. AI Workflow Generator
+
+Then generate:
+
+1. Discover sources
+2. Search startup directories
+3. Search company websites
+4. Search funding sources
+5. Extract startup information
+6. Cross-check
+7. Normalize
+8. Deduplicate
+9. Validate
+10. Save dataset
+
+This is the heart of your "dynamic workflow" claim.
+
+3. Source Policy Engine
+
+Your system should explicitly maintain:
+
+PERMITTED
+    ↓
+Domain allowed?
+robots.txt?
+Rate limit?
+Source reliability?
+    ↓
+YES → collect
+NO  → skip
+
+That makes the "permitted sources" requirement visible instead of just being a statement.
+
+4. Dataset Intelligence Engine
+
+After scraping:
+
+Raw Data
+   ↓
+Normalization
+   ↓
+Validation
+   ↓
+Deduplication
+   ↓
+Entity Resolution
+   ↓
+Confidence Score
+   ↓
+Final Dataset
+
+This is one of the strongest places to make your project look like a data intelligence platform, rather than an AI scraper.
+
+5. Source-backed rows
+
+Every important row should have evidence.
+
+For example:
+
+OpenAI
+Industry: AI
+Founder: ...
+Website: ...
+Funding: ...
+
+Sources:
+✓ https://...
+✓ https://...
+✓ https://...
+
+Clicking a row should show:
+
+Why did the system put this information here?
+
+This gives you excellent traceability.
+
+6. Workflow Dashboard
+
+I'd make the UI like this:
+
+┌─────────────────────────────────────────────────────────┐
+│  DATA INTELLIGENCE                                      │
+├──────────────┬──────────────────────────────────────────┤
+│              │                                          │
+│  New Task    │  What data do you need?                 │
+│              │                                          │
+│  Workflows   │  "Find 500 Indian AI startups..."       │
+│              │                                          │
+│  Datasets    │                         [Run Research]   │
+│              │                                          │
+│  Sources     │                                          │
+│              ├──────────────────────────────────────────┤
+│  Activity    │  LIVE WORKFLOW                           │
+│              │                                          │
+│  Settings    │  Planning             ✓                 │
+│              │  Source discovery     ✓                 │
+│              │  Extraction           ● 72%             │
+│              │  Validation           ○                 │
+│              │  Deduplication        ○                 │
+│              │                                          │
+└──────────────┴──────────────────────────────────────────┘
+
+Then the dataset page:
+
+┌─────────────────────────────────────────────────────────────┐
+│ AI STARTUPS INDIA                         1,284 records     │
+├─────────────────────────────────────────────────────────────┤
+│ Search...       Industry ▼   Funding ▼   Location ▼        │
+├─────────────────────────────────────────────────────────────┤
+│ Company     Founder      Funding     Website      Source    │
+│-------------------------------------------------------------│
+│ Company A   Person A     ₹25 Cr      company.in   3 sources │
+│ Company B   Person B     ₹12 Cr      company.in   2 sources │
+│ Company C   Person C     ₹90 Cr      company.in   4 sources │
+├─────────────────────────────────────────────────────────────┤
+│                    [CSV] [JSON] [Excel]                     │
+└─────────────────────────────────────────────────────────────┘
+Final architecture I'd use
+                         USER
+                           │
+                           ▼
+                NATURAL LANGUAGE PROMPT
+                           │
+                           ▼
+                 ┌───────────────────┐
+                 │   AI REQUIREMENT  │
+                 │      PARSER       │
+                 └─────────┬─────────┘
+                           │
+                           ▼
+                 ┌───────────────────┐
+                 │ WORKFLOW PLANNER  │
+                 │  Firecrawl Agent  │
+                 └─────────┬─────────┘
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+          Web Search    Scraper      Browser
+              │            │            │
+              └────────────┼────────────┘
+                           ▼
+                  STRUCTURED EXTRACTION
+                           │
+                           ▼
+                 ┌───────────────────┐
+                 │ DATA INTELLIGENCE │
+                 │      ENGINE       │
+                 ├───────────────────┤
+                 │ Cleaning          │
+                 │ Validation        │
+                 │ Deduplication     │
+                 │ Entity Resolution │
+                 │ Confidence        │
+                 └─────────┬─────────┘
+                           │
+                           ▼
+                 ┌───────────────────┐
+                 │    POSTGRESQL     │
+                 ├───────────────────┤
+                 │ Workflows         │
+                 │ Runs              │
+                 │ Datasets          │
+                 │ Rows              │
+                 │ Sources           │
+                 │ Activity          │
+                 └─────────┬─────────┘
+                           │
+                           ▼
+                  ┌─────────────────┐
+                  │ REACT / NEXT.JS │
+                  │    DASHBOARD    │
+                  ├─────────────────┤
+                  │ Tasks           │
+                  │ Live progress   │
+                  │ Datasets        │
+                  │ Sources         │
+                  │ History         │
+                  │ Export          │
+                  └─────────────────┘
+What I would actually take from each repo
+Repository	Use as	Keep / Build
+Firecrawl Web Agent	CORE	Agent + planner + search + scrape + structured extraction
+Web Research Agent	Supporting reference	Source ranking, robots, retries, evidence concepts
+Agentic Browser	Architecture reference	Planner → Browser → Critique idea
+AnakinScraper	Platform reference	Jobs, worker model, persistence, dashboard concepts
+Your code	Most important	Dataset engine + workflow DB + task manager + source graph + dashboard + exports
+
+Firecrawl itself is MIT-licensed, as is the Web Research Agent. The other two have more restrictive licenses that need to be respected before code is incorporated.
+
+The biggest thing I would NOT do
+
+Don't create this:
+
+User prompt
+   ↓
+Firecrawl
+   ↓
+Answer
+
+That would basically be a research agent.
+
+Build this instead:
+
+User prompt
+      ↓
+AI understands DATA REQUIREMENT
+      ↓
+AI creates WORKFLOW
+      ↓
+Workflow executes
+      ↓
+DATASET CREATED
+      ↓
+DATASET CLEANED
+      ↓
+DATASET VALIDATED
+      ↓
+DATASET DEDUPLICATED
+      ↓
+SOURCES ATTACHED
+      ↓
+DATABASE
+      ↓
+DASHBOARD
+      ↓
+SEARCH / FILTER / EXPORT
+      ↓
+WORKFLOW HISTORY
+
+That transformation is what turns the existing open-source pieces into the AI-Powered Data Intelligence Platform described in PS2.
+
+My exact starting choice
+
+Fork firecrawl/web-agent → use its Next.js template → keep its Agent Core → create our own PostgreSQL data model + workflow manager + dataset pipeline + dashboard.
+
+Then selectively port MIT-compatible ideas/code from devcodes9/web-research-agent. I would not make the project dependent on Agentic Browser or Anakin code because of their current license restrictions.

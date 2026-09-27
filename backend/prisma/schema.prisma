@@ -1,0 +1,12 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Product models will be introduced in their owning feature phases after the
+// workflow and evidence requirements are designed. This phase establishes the
+// Prisma/MySQL connection without inventing domain tables prematurely.

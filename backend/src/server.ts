@@ -1,0 +1,47 @@
+import "dotenv/config";
+import { createServer } from "node:http";
+import { createApp } from "./app.js";
+import { loadEnvConfig } from "./config/env.js";
+import { createPrismaClient } from "./db/prisma.js";
+import { createLogger } from "./logger.js";
+import { createRedisConnection } from "./queue/connection.js";
+import { createWorkflowQueue } from "./queue/workflowQueue.js";
+
+const config = loadEnvConfig();
+process.env.DATABASE_URL = config.DATABASE_URL;
+
+const logger = createLogger(config.LOG_LEVEL, config.APP_ENV);
+const prisma = createPrismaClient();
+const redis = createRedisConnection(config.REDIS_URL);
+const workflowQueue = createWorkflowQueue(redis);
+const app = createApp({
+  config,
+  logger,
+  readiness: {
+    mysql: () => prisma.$queryRaw`SELECT 1`,
+    redis: () => redis.ping(),
+  },
+});
+
+const server = createServer(app);
+server.listen(config.PORT, () => {
+  logger.info({ port: config.PORT, environment: config.APP_ENV }, "Backend API listening");
+});
+
+let isShuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  logger.info({ signal }, "Shutting down backend");
+  const forceExit = setTimeout(() => process.exit(1), 10_000);
+  forceExit.unref();
+  server.close(async (error) => {
+    if (error) logger.error({ err: error }, "HTTP server close failed");
+    await Promise.allSettled([workflowQueue.close(), redis.quit(), prisma.$disconnect()]);
+    clearTimeout(forceExit);
+    process.exit(error ? 1 : 0);
+  });
+}
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
