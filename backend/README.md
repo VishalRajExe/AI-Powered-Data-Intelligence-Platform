@@ -7,6 +7,8 @@ Copy-Item .env.example .env
 docker compose up -d
 npm install
 npm run db:generate
+npm run db:migrate --workspace @aidp/backend -- --name init
+npm run db:seed
 npm run dev
 ```
 
@@ -24,6 +26,22 @@ npm test
 npm run build
 ```
 
-The database schema intentionally has no product tables yet. Later feature phases
-will add domain models after their workflow, ownership, and evidence relationships
-are specified.
+The Prisma schema stores users, workspace memberships, versioned workflows and plans,
+workflow runs and steps, datasets and dynamic columns/rows, sources and field evidence,
+validation issues, deduplication decisions, export jobs, and activity events. Dataset
+row values and versioned plans are JSON because their shapes vary by workflow; raw page
+bodies are not stored. Tenant-scoped compound foreign keys and indexes support
+workspace isolation and keyset-friendly dataset pagination.
+
+`npm run db:seed` is development-only and refuses to run with `APP_ENV=production`.
+It creates an example user and workspace without a password or login credentials.
+
+Database integration checks use the configured `DATABASE_URL` and a migrated,
+disposable development database:
+
+```powershell
+$env:RUN_DATABASE_TESTS = "true"
+npm run test:db
+```
+
+Use `npm run db:deploy` to apply checked-in migrations in deployed environments.

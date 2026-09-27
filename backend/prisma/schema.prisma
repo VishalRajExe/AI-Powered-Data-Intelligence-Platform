@@ -7,6 +7,512 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Product models will be introduced in their owning feature phases after the
-// workflow and evidence requirements are designed. This phase establishes the
-// Prisma/MySQL connection without inventing domain tables prematurely.
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum WorkspaceStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum MembershipStatus {
+  ACTIVE
+  REMOVED
+}
+
+enum WorkflowStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum WorkflowRunStatus {
+  PENDING
+  PLANNING
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CANCELLED
+}
+
+enum WorkflowStepType {
+  PLAN
+  SEARCH
+  SCRAPE
+  INTERACT
+  EXTRACT
+  TRANSFORM
+  VALIDATE
+  DEDUPLICATE
+  MERGE
+  SAVE
+  EXPORT
+}
+
+enum WorkflowStepStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+  BLOCKED
+  CANCELLED
+}
+
+enum DatasetStatus {
+  BUILDING
+  READY
+  PARTIAL
+  FAILED
+  ARCHIVED
+}
+
+enum DatasetColumnType {
+  STRING
+  NUMBER
+  BOOLEAN
+  DATE
+  DATETIME
+  URL
+  EMAIL
+  CURRENCY
+  JSON
+}
+
+enum SourceStatus {
+  DISCOVERED
+  FETCHED
+  BLOCKED
+  SKIPPED
+  FAILED
+}
+
+enum ValidationSeverity {
+  INFO
+  WARNING
+  ERROR
+}
+
+enum DeduplicationDecision {
+  LINKED
+  MERGED
+  KEPT_SEPARATE
+  REVIEW_REQUIRED
+}
+
+enum ExportFormat {
+  CSV
+  JSON
+  XLSX
+}
+
+enum ExportJobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  EXPIRED
+}
+
+model User {
+  id           String     @id @default(uuid()) @db.Char(36)
+  email        String     @unique(map: "users_email_uq") @db.VarChar(254)
+  passwordHash String?    @map("password_hash") @db.VarChar(255)
+  name         String?    @db.VarChar(160)
+  status       UserStatus @default(ACTIVE)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt    DateTime   @updatedAt @map("updated_at") @db.DateTime(3)
+
+  createdWorkspaces Workspace[]       @relation("WorkspaceCreator")
+  memberships       WorkspaceMember[]
+  workflows         Workflow[]        @relation("WorkflowCreator")
+  datasets          Dataset[]         @relation("DatasetCreator")
+  exports           ExportJob[]       @relation("ExportRequester")
+  activityEvents    ActivityEvent[]   @relation("ActivityActor")
+
+  @@map("users")
+}
+
+model Workspace {
+  id          String          @id @default(uuid()) @db.Char(36)
+  name        String          @db.VarChar(160)
+  slug        String          @unique(map: "workspaces_slug_uq") @db.VarChar(100)
+  createdById String          @map("created_by_id") @db.Char(36)
+  status      WorkspaceStatus @default(ACTIVE)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime        @updatedAt @map("updated_at") @db.DateTime(3)
+
+  createdBy   User              @relation("WorkspaceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  memberships WorkspaceMember[]
+  workflows   Workflow[]
+  datasets    Dataset[]
+  sources     Source[]
+  exports     ExportJob[]
+  activities  ActivityEvent[]
+
+  @@index([createdById, createdAt], map: "workspaces_creator_created_idx")
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  workspaceId String           @map("workspace_id") @db.Char(36)
+  userId      String           @map("user_id") @db.Char(36)
+  role        WorkspaceRole    @default(MEMBER)
+  status      MembershipStatus @default(ACTIVE)
+  createdAt   DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime         @default(now()) @updatedAt @map("updated_at") @db.DateTime(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([workspaceId, userId])
+  @@index([userId, createdAt], map: "workspace_members_user_created_idx")
+  @@map("workspace_members")
+}
+
+model Workflow {
+  id          String         @id @default(uuid()) @db.Char(36)
+  workspaceId String         @map("workspace_id") @db.Char(36)
+  createdById String         @map("created_by_id") @db.Char(36)
+  name        String         @db.VarChar(200)
+  requirement String         @db.Text
+  status      WorkflowStatus @default(DRAFT)
+  createdAt   DateTime       @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
+
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User           @relation("WorkflowCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  plans     WorkflowPlan[]
+  runs      WorkflowRun[]
+
+  @@unique([workspaceId, id], map: "workflows_workspace_id_uq")
+  @@index([workspaceId, status, updatedAt, id], map: "workflows_workspace_status_updated_idx")
+  @@index([createdById, createdAt], map: "workflows_creator_created_idx")
+  @@map("workflows")
+}
+
+model WorkflowPlan {
+  id                  String   @id @default(uuid()) @db.Char(36)
+  workspaceId         String   @map("workspace_id") @db.Char(36)
+  workflowId          String   @map("workflow_id") @db.Char(36)
+  version             Int
+  objective           String   @db.Text
+  constraints         Json?
+  sourcePolicy        Json
+  searchStrategy      Json
+  extractionSchema    Json
+  steps               Json
+  transformations     Json?
+  validationRules     Json?
+  deduplicationRules  Json?
+  outputConfiguration Json?
+  planHash            String   @map("plan_hash") @db.Char(64)
+  createdAt           DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  workflow Workflow      @relation(fields: [workspaceId, workflowId], references: [workspaceId, id], onDelete: Cascade)
+  runs     WorkflowRun[]
+
+  @@unique([workflowId, version], map: "workflow_plans_workflow_version_uq")
+  @@unique([workspaceId, workflowId, id], map: "workflow_plans_workspace_workflow_id_uq")
+  @@index([workspaceId, workflowId, createdAt], map: "workflow_plans_workspace_workflow_created_idx")
+  @@map("workflow_plans")
+}
+
+model WorkflowRun {
+  id               String            @id @default(uuid()) @db.Char(36)
+  workspaceId      String            @map("workspace_id") @db.Char(36)
+  workflowId       String            @map("workflow_id") @db.Char(36)
+  workflowPlanId   String            @map("workflow_plan_id") @db.Char(36)
+  status           WorkflowRunStatus @default(PENDING)
+  attempt          Int               @default(0)
+  progress         Int               @default(0) @db.UnsignedInt
+  recordsFound     Int               @default(0) @map("records_found") @db.UnsignedInt
+  recordsValid     Int               @default(0) @map("records_valid") @db.UnsignedInt
+  duplicateCount   Int               @default(0) @map("duplicate_count") @db.UnsignedInt
+  sourcesProcessed Int               @default(0) @map("sources_processed") @db.UnsignedInt
+  sourcesFailed    Int               @default(0) @map("sources_failed") @db.UnsignedInt
+  errorCode        String?           @map("error_code") @db.VarChar(100)
+  errorMessage     String?           @map("error_message") @db.Text
+  startedAt        DateTime?         @map("started_at") @db.DateTime(3)
+  finishedAt       DateTime?         @map("finished_at") @db.DateTime(3)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.DateTime(3)
+
+  workflow            Workflow             @relation(fields: [workspaceId, workflowId], references: [workspaceId, id], onDelete: Cascade)
+  plan                WorkflowPlan         @relation(fields: [workspaceId, workflowId, workflowPlanId], references: [workspaceId, workflowId, id], onDelete: Restrict)
+  steps               WorkflowStep[]
+  sources             Source[]
+  dataset             Dataset?
+  deduplicationEvents DeduplicationEvent[]
+
+  @@unique([workspaceId, id], map: "workflow_runs_workspace_id_uq")
+  @@index([workspaceId, status, createdAt, id], map: "workflow_runs_workspace_status_created_idx")
+  @@index([workflowId, createdAt, id], map: "workflow_runs_workflow_created_idx")
+  @@map("workflow_runs")
+}
+
+model WorkflowStep {
+  id            String             @id @default(uuid()) @db.Char(36)
+  workspaceId   String             @map("workspace_id") @db.Char(36)
+  workflowRunId String             @map("workflow_run_id") @db.Char(36)
+  sequence      Int                @db.UnsignedInt
+  type          WorkflowStepType
+  status        WorkflowStepStatus @default(PENDING)
+  attempt       Int                @default(0)
+  input         Json?
+  outputSummary Json?
+  errorCode     String?            @map("error_code") @db.VarChar(100)
+  errorMessage  String?            @map("error_message") @db.Text
+  startedAt     DateTime?          @map("started_at") @db.DateTime(3)
+  finishedAt    DateTime?          @map("finished_at") @db.DateTime(3)
+  createdAt     DateTime           @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime           @updatedAt @map("updated_at") @db.DateTime(3)
+
+  run WorkflowRun @relation(fields: [workspaceId, workflowRunId], references: [workspaceId, id], onDelete: Cascade)
+
+  @@unique([workflowRunId, sequence], map: "workflow_steps_run_sequence_uq")
+  @@index([workspaceId, status, createdAt], map: "workflow_steps_workspace_status_created_idx")
+  @@map("workflow_steps")
+}
+
+model Dataset {
+  id             String        @id @default(uuid()) @db.Char(36)
+  workspaceId    String        @map("workspace_id") @db.Char(36)
+  workflowRunId  String        @unique(map: "datasets_workflow_run_uq") @map("workflow_run_id") @db.Char(36)
+  createdById    String        @map("created_by_id") @db.Char(36)
+  name           String        @db.VarChar(200)
+  description    String?       @db.Text
+  status         DatasetStatus @default(BUILDING)
+  recordCount    Int           @default(0) @map("record_count") @db.UnsignedInt
+  validCount     Int           @default(0) @map("valid_count") @db.UnsignedInt
+  duplicateCount Int           @default(0) @map("duplicate_count") @db.UnsignedInt
+  sourceCount    Int           @default(0) @map("source_count") @db.UnsignedInt
+  createdAt      DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.DateTime(3)
+
+  workspace           Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  creator             User                 @relation("DatasetCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  run                 WorkflowRun          @relation(fields: [workspaceId, workflowRunId], references: [workspaceId, id], onDelete: Cascade)
+  columns             DatasetColumn[]
+  rows                DatasetRow[]
+  sources             Source[]
+  sourceEvidence      SourceEvidence[]
+  validationIssues    ValidationIssue[]
+  deduplicationEvents DeduplicationEvent[]
+  exports             ExportJob[]
+
+  @@unique([workspaceId, id], map: "datasets_workspace_id_uq")
+  @@unique([workspaceId, id, workflowRunId], map: "datasets_workspace_id_run_uq")
+  @@unique([workspaceId, workflowRunId], map: "datasets_workspace_run_uq")
+  @@index([workspaceId, status, updatedAt, id], map: "datasets_workspace_status_updated_idx")
+  @@index([createdById, createdAt], map: "datasets_creator_created_idx")
+  @@map("datasets")
+}
+
+model DatasetColumn {
+  id          String            @id @default(uuid()) @db.Char(36)
+  workspaceId String            @map("workspace_id") @db.Char(36)
+  datasetId   String            @map("dataset_id") @db.Char(36)
+  key         String            @db.VarChar(128)
+  label       String            @db.VarChar(160)
+  type        DatasetColumnType
+  position    Int               @db.UnsignedInt
+  required    Boolean           @default(false)
+  filterable  Boolean           @default(true)
+  sortable    Boolean           @default(true)
+  config      Json?
+  createdAt   DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.DateTime(3)
+
+  dataset  Dataset          @relation(fields: [workspaceId, datasetId], references: [workspaceId, id], onDelete: Cascade)
+  evidence SourceEvidence[]
+
+  @@unique([datasetId, key], map: "dataset_columns_dataset_key_uq")
+  @@unique([datasetId, position], map: "dataset_columns_dataset_position_uq")
+  @@unique([workspaceId, datasetId, id], map: "dataset_columns_workspace_dataset_id_uq")
+  @@index([workspaceId, datasetId, filterable, position], map: "dataset_columns_filterable_idx")
+  @@map("dataset_columns")
+}
+
+model DatasetRow {
+  id            String   @id @default(uuid()) @db.Char(36)
+  workspaceId   String   @map("workspace_id") @db.Char(36)
+  datasetId     String   @map("dataset_id") @db.Char(36)
+  values        Json     @map("values")
+  confidence    Decimal? @db.Decimal(5, 4)
+  isValid       Boolean  @default(true) @map("is_valid")
+  duplicateOfId String?  @map("duplicate_of_id") @db.Char(36)
+  collectedAt   DateTime @default(now()) @map("collected_at") @db.DateTime(3)
+  createdAt     DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  dataset          Dataset              @relation(fields: [workspaceId, datasetId], references: [workspaceId, id], onDelete: Cascade)
+  duplicateOf      DatasetRow?          @relation("DatasetRowDuplicate", fields: [workspaceId, datasetId, duplicateOfId], references: [workspaceId, datasetId, id], onDelete: Restrict)
+  duplicates       DatasetRow[]         @relation("DatasetRowDuplicate")
+  sourceEvidence   SourceEvidence[]
+  validationIssues ValidationIssue[]
+  canonicalEvents  DeduplicationEvent[] @relation("DedupCanonicalRow")
+  duplicateEvents  DeduplicationEvent[] @relation("DedupDuplicateRow")
+
+  @@unique([workspaceId, datasetId, id], map: "dataset_rows_workspace_dataset_id_uq")
+  @@index([datasetId, createdAt, id], map: "dataset_rows_dataset_created_idx")
+  @@index([datasetId, isValid, createdAt, id], map: "dataset_rows_dataset_valid_created_idx")
+  @@index([datasetId, duplicateOfId], map: "dataset_rows_dataset_duplicate_idx")
+  @@map("dataset_rows")
+}
+
+model Source {
+  id               String       @id @default(uuid()) @db.Char(36)
+  workspaceId      String       @map("workspace_id") @db.Char(36)
+  workflowRunId    String       @map("workflow_run_id") @db.Char(36)
+  datasetId        String?      @map("dataset_id") @db.Char(36)
+  url              String       @db.Text
+  canonicalUrl     String       @map("canonical_url") @db.Text
+  canonicalUrlHash String       @map("canonical_url_hash") @db.Char(64)
+  domain           String       @db.VarChar(255)
+  title            String?      @db.VarChar(512)
+  status           SourceStatus @default(DISCOVERED)
+  retrievedAt      DateTime?    @map("retrieved_at") @db.DateTime(3)
+  contentHash      String?      @map("content_hash") @db.Char(64)
+  errorCode        String?      @map("error_code") @db.VarChar(100)
+  errorMessage     String?      @map("error_message") @db.Text
+  createdAt        DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt        DateTime     @updatedAt @map("updated_at") @db.DateTime(3)
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  run       WorkflowRun      @relation(fields: [workspaceId, workflowRunId], references: [workspaceId, id], onDelete: Cascade)
+  dataset   Dataset?         @relation(fields: [workspaceId, datasetId, workflowRunId], references: [workspaceId, id, workflowRunId], onDelete: Restrict)
+  evidence  SourceEvidence[]
+
+  @@unique([workflowRunId, canonicalUrlHash], map: "sources_run_url_hash_uq")
+  @@unique([workspaceId, id], map: "sources_workspace_id_uq")
+  @@index([workspaceId, domain, createdAt], map: "sources_workspace_domain_created_idx")
+  @@index([datasetId, retrievedAt], map: "sources_dataset_retrieved_idx")
+  @@map("sources")
+}
+
+model SourceEvidence {
+  id              String   @id @default(uuid()) @db.Char(36)
+  workspaceId     String   @map("workspace_id") @db.Char(36)
+  datasetId       String   @map("dataset_id") @db.Char(36)
+  datasetRowId    String   @map("dataset_row_id") @db.Char(36)
+  sourceId        String   @map("source_id") @db.Char(36)
+  datasetColumnId String?  @map("dataset_column_id") @db.Char(36)
+  fieldKey        String?  @map("field_key") @db.VarChar(128)
+  evidenceType    String   @default("EXTRACTED") @map("evidence_type") @db.VarChar(40)
+  snippet         String?  @db.VarChar(2000)
+  valueHash       String?  @map("value_hash") @db.Char(64)
+  confidence      Decimal? @db.Decimal(5, 4)
+  retrievedAt     DateTime @map("retrieved_at") @db.DateTime(3)
+  createdAt       DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  dataset Dataset        @relation(fields: [workspaceId, datasetId], references: [workspaceId, id], onDelete: Cascade)
+  row     DatasetRow     @relation(fields: [workspaceId, datasetId, datasetRowId], references: [workspaceId, datasetId, id], onDelete: Cascade)
+  source  Source         @relation(fields: [workspaceId, sourceId], references: [workspaceId, id], onDelete: Cascade)
+  column  DatasetColumn? @relation(fields: [workspaceId, datasetId, datasetColumnId], references: [workspaceId, datasetId, id], onDelete: Restrict)
+
+  @@index([datasetRowId, datasetColumnId], map: "source_evidence_row_column_idx")
+  @@index([sourceId, datasetRowId], map: "source_evidence_source_row_idx")
+  @@index([workspaceId, datasetId, createdAt], map: "source_evidence_workspace_dataset_created_idx")
+  @@map("source_evidence")
+}
+
+model ValidationIssue {
+  id           String             @id @default(uuid()) @db.Char(36)
+  workspaceId  String             @map("workspace_id") @db.Char(36)
+  datasetId    String             @map("dataset_id") @db.Char(36)
+  datasetRowId String             @map("dataset_row_id") @db.Char(36)
+  fieldKey     String?            @map("field_key") @db.VarChar(128)
+  ruleCode     String             @map("rule_code") @db.VarChar(100)
+  severity     ValidationSeverity @default(ERROR)
+  message      String             @db.VarChar(1000)
+  expected     Json?
+  actual       Json?
+  createdAt    DateTime           @default(now()) @map("created_at") @db.DateTime(3)
+
+  dataset Dataset    @relation(fields: [workspaceId, datasetId], references: [workspaceId, id], onDelete: Cascade)
+  row     DatasetRow @relation(fields: [workspaceId, datasetId, datasetRowId], references: [workspaceId, datasetId, id], onDelete: Cascade)
+
+  @@index([datasetRowId, severity], map: "validation_issues_row_severity_idx")
+  @@index([workspaceId, datasetId, createdAt], map: "validation_issues_workspace_dataset_created_idx")
+  @@map("validation_issues")
+}
+
+model DeduplicationEvent {
+  id             String                @id @default(uuid()) @db.Char(36)
+  workspaceId    String                @map("workspace_id") @db.Char(36)
+  datasetId      String                @map("dataset_id") @db.Char(36)
+  workflowRunId  String                @map("workflow_run_id") @db.Char(36)
+  canonicalRowId String                @map("canonical_row_id") @db.Char(36)
+  duplicateRowId String                @map("duplicate_row_id") @db.Char(36)
+  decision       DeduplicationDecision
+  confidence     Decimal?              @db.Decimal(5, 4)
+  matchedFields  Json?                 @map("matched_fields")
+  reason         String?               @db.VarChar(1000)
+  createdAt      DateTime              @default(now()) @map("created_at") @db.DateTime(3)
+
+  dataset      Dataset     @relation(fields: [workspaceId, datasetId], references: [workspaceId, id], onDelete: Cascade)
+  run          WorkflowRun @relation(fields: [workspaceId, workflowRunId], references: [workspaceId, id], onDelete: Cascade)
+  canonicalRow DatasetRow  @relation("DedupCanonicalRow", fields: [workspaceId, datasetId, canonicalRowId], references: [workspaceId, datasetId, id], onDelete: Cascade)
+  duplicateRow DatasetRow  @relation("DedupDuplicateRow", fields: [workspaceId, datasetId, duplicateRowId], references: [workspaceId, datasetId, id], onDelete: Cascade)
+
+  @@unique([workflowRunId, duplicateRowId], map: "dedup_events_run_duplicate_uq")
+  @@index([workspaceId, datasetId, createdAt], map: "dedup_events_workspace_dataset_created_idx")
+  @@map("deduplication_events")
+}
+
+model ExportJob {
+  id            String          @id @default(uuid()) @db.Char(36)
+  workspaceId   String          @map("workspace_id") @db.Char(36)
+  datasetId     String          @map("dataset_id") @db.Char(36)
+  requestedById String          @map("requested_by_id") @db.Char(36)
+  format        ExportFormat
+  status        ExportJobStatus @default(PENDING)
+  filters       Json?
+  sort          Json?
+  fileKey       String?         @map("file_key") @db.VarChar(1024)
+  expiresAt     DateTime?       @map("expires_at") @db.DateTime(3)
+  errorCode     String?         @map("error_code") @db.VarChar(100)
+  errorMessage  String?         @map("error_message") @db.Text
+  startedAt     DateTime?       @map("started_at") @db.DateTime(3)
+  finishedAt    DateTime?       @map("finished_at") @db.DateTime(3)
+  createdAt     DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime        @updatedAt @map("updated_at") @db.DateTime(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  dataset   Dataset   @relation(fields: [workspaceId, datasetId], references: [workspaceId, id], onDelete: Cascade)
+  requester User      @relation("ExportRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+
+  @@index([workspaceId, status, createdAt, id], map: "export_jobs_workspace_status_created_idx")
+  @@index([datasetId, createdAt], map: "export_jobs_dataset_created_idx")
+  @@map("export_jobs")
+}
+
+model ActivityEvent {
+  id          String   @id @default(uuid()) @db.Char(36)
+  workspaceId String   @map("workspace_id") @db.Char(36)
+  actorId     String?  @map("actor_id") @db.Char(36)
+  action      String   @db.VarChar(120)
+  entityType  String   @map("entity_type") @db.VarChar(80)
+  entityId    String   @map("entity_id") @db.Char(36)
+  details     Json?
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor     User?     @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt, id], map: "activity_workspace_created_idx")
+  @@index([workspaceId, entityType, entityId, createdAt], map: "activity_workspace_entity_created_idx")
+  @@index([actorId, createdAt], map: "activity_actor_created_idx")
+  @@map("activity_events")
+}

@@ -12,7 +12,11 @@
     "lint": "eslint src tests",
     "test": "vitest run",
     "db:generate": "prisma generate",
-    "db:validate": "prisma validate"
+    "db:validate": "prisma validate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed",
+    "test:db": "vitest run tests/database.integration.test.ts"
   },
   "dependencies": {
     "@aidp/firecrawl-agent-core": "0.1.0-vendor.1",
@@ -46,5 +50,8 @@
     "typescript": "5.9.3",
     "vite": "6.4.3",
     "vitest": "^4.1.11"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }
