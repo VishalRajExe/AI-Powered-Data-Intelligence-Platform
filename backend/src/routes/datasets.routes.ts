@@ -164,6 +164,19 @@ export function createDatasetsRouter(repository: DatasetQueryRepository): Router
     },
   );
 
+  // DELETE /datasets/:id
+  router.delete(
+    "/datasets/:id",
+    validateRequest({ params: UUIDParam, query: DatasetAccessQuery }),
+    async (_req, res) => {
+      const { params, query } = res.locals.validated as {
+        params: z.infer<typeof UUIDParam>;
+        query: z.infer<typeof DatasetAccessQuery>;
+      };
+      res.json(await repository.deleteDataset(query.workspaceId, params.id, query.userId));
+    },
+  );
+
   // GET /datasets/:id/schema
   router.get(
     "/datasets/:id/schema",

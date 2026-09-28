@@ -282,6 +282,56 @@ export class WorkflowHistoryRepository {
   }
 
   /**
+   * Deletes a workflow and all associated runs, plans, steps, datasets, and evidence.
+   */
+  async deleteWorkflow(
+    workspaceId: string,
+    workflowId: string,
+    userId: string,
+  ): Promise<{ success: boolean; id: string }> {
+    await this.assertAccess(workspaceId, userId);
+
+    const wf = await this.prisma.workflow.findFirst({
+      where: { workspaceId, id: workflowId },
+      include: {
+        runs: {
+          select: { id: true, dataset: { select: { id: true } } },
+        },
+      },
+    });
+
+    if (!wf) throw new AppError("Workflow was not found", 404, "WORKFLOW_NOT_FOUND");
+
+    const datasetIds = wf.runs.map((r) => r.dataset?.id).filter(Boolean) as string[];
+    const runIds = wf.runs.map((r) => r.id);
+
+    await this.prisma.$transaction(async (tx) => {
+      if (datasetIds.length > 0) {
+        await tx.sourceEvidence.deleteMany({ where: { datasetId: { in: datasetIds } } });
+        await tx.validationIssue.deleteMany({ where: { datasetId: { in: datasetIds } } });
+        await tx.deduplicationEvent.deleteMany({ where: { datasetId: { in: datasetIds } } });
+        await tx.dataQualityReport.deleteMany({ where: { datasetId: { in: datasetIds } } });
+        await tx.exportJob.deleteMany({ where: { datasetId: { in: datasetIds } } });
+        await tx.datasetRow.deleteMany({ where: { datasetId: { in: datasetIds } } });
+        await tx.datasetColumn.deleteMany({ where: { datasetId: { in: datasetIds } } });
+        await tx.source.deleteMany({ where: { datasetId: { in: datasetIds } } });
+        await tx.dataset.deleteMany({ where: { id: { in: datasetIds } } });
+      }
+
+      if (runIds.length > 0) {
+        await tx.source.deleteMany({ where: { workflowRunId: { in: runIds } } });
+        await tx.workflowStep.deleteMany({ where: { workflowRunId: { in: runIds } } });
+        await tx.workflowRun.deleteMany({ where: { id: { in: runIds } } });
+      }
+
+      await tx.workflowPlan.deleteMany({ where: { workflowId } });
+      await tx.workflow.delete({ where: { id: workflowId } });
+    });
+
+    return { success: true, id: workflowId };
+  }
+
+  /**
    * Lists runs for a specific workflow.
    */
   async getWorkflowRuns(

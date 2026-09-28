@@ -270,6 +270,33 @@ export class DatasetQueryRepository {
     };
   }
 
+  // ── DELETE /datasets/:id ──────────────────────────────────────────────────
+
+  async deleteDataset(workspaceId: string, datasetId: string, userId: string): Promise<{ success: boolean; id: string }> {
+    await this.assertAccess(workspaceId, userId);
+
+    const ds = await this.prisma.dataset.findFirst({
+      where: { workspaceId, id: datasetId },
+      select: { id: true },
+    });
+
+    if (!ds) throw new AppError("Dataset not found", 404, "DATASET_NOT_FOUND");
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.sourceEvidence.deleteMany({ where: { datasetId } });
+      await tx.validationIssue.deleteMany({ where: { datasetId } });
+      await tx.deduplicationEvent.deleteMany({ where: { datasetId } });
+      await tx.dataQualityReport.deleteMany({ where: { datasetId } });
+      await tx.exportJob.deleteMany({ where: { datasetId } });
+      await tx.source.deleteMany({ where: { datasetId } });
+      await tx.datasetRow.deleteMany({ where: { datasetId } });
+      await tx.datasetColumn.deleteMany({ where: { datasetId } });
+      await tx.dataset.delete({ where: { id: datasetId } });
+    });
+
+    return { success: true, id: datasetId };
+  }
+
   // ── GET /datasets/:id/schema ──────────────────────────────────────────────
 
   async getDatasetSchema(workspaceId: string, datasetId: string, userId: string): Promise<object> {

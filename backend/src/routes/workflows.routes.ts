@@ -143,5 +143,21 @@ export function createWorkflowsRouter(
     },
   );
 
+  // DELETE /workflows/:id — Delete workflow and associated runs/datasets
+  router.delete(
+    "/workflows/:id",
+    validateRequest({ params: UUIDParam, query: WorkflowAccessQuerySchema }),
+    async (_request, response) => {
+      if (!historyRepository) {
+        throw new AppError("Workflow history is unavailable.", 503, "HISTORY_UNAVAILABLE");
+      }
+      const { params, query } = response.locals.validated as {
+        params: z.infer<typeof UUIDParam>;
+        query: z.infer<typeof WorkflowAccessQuerySchema>;
+      };
+      response.json(await historyRepository.deleteWorkflow(query.workspaceId, params.id, query.userId));
+    },
+  );
+
   return router;
 }

@@ -8,6 +8,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Separator } from "@/components/ui/separator";
 import { EmptyState } from "@/components/common/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Pagination } from "@/components/common/pagination";
 import { useAuth } from "@/lib/auth";
 import { useApi } from "@/hooks/use-api";
 import { api } from "@/lib/api";
@@ -34,6 +35,7 @@ interface DatasetListResponse {
 export default function SourcesPage() {
   const { user } = useAuth();
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
   const [active, setActive] = useState<SourceRecord | null>(null);
   const [open, setOpen] = useState(false);
   const [allSources, setAllSources] = useState<SourceRecord[]>([]);
@@ -81,6 +83,11 @@ export default function SourcesPage() {
       (s.title ?? "").toLowerCase().includes(query.toLowerCase()),
   );
 
+  const pageSize = 10;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const paginatedSources = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
   function openSource(s: SourceRecord) {
     setActive(s);
     setOpen(true);
@@ -108,7 +115,10 @@ export default function SourcesPage() {
           <SpyglassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setPage(1);
+            }}
             placeholder="Search sources…"
             className="h-8 pl-8 text-[13px] bg-card border-border/80"
           />
@@ -128,48 +138,59 @@ export default function SourcesPage() {
           description="Try a different search term or check mission parameters."
         />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-card shadow-subtle">
-          <table className="w-full text-left text-[13px]">
-            <thead className="bg-surface/90 border-b border-border">
-              <tr>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Source</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Type</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Records</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Reliability</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Last visited</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50">
-              {filtered.map((s) => {
-                const reliability = (s.reliability ?? "medium") as keyof typeof RELIABILITY_ICON;
-                const RelIcon = RELIABILITY_ICON[reliability] ?? ShieldAlert;
-                return (
-                  <tr
-                    key={s.id}
-                    onClick={() => openSource(s)}
-                    className="cursor-pointer transition-colors hover:bg-surface/60"
-                  >
-                    <td className="px-3.5 py-3">
-                      <p className="max-w-[260px] truncate font-semibold text-foreground">{s.title}</p>
-                      <p className="max-w-[260px] truncate text-[12px] text-muted-foreground">{s.domain}</p>
-                    </td>
-                    <td className="px-3.5 py-3 text-muted-foreground">{s.type}</td>
-                    <td className="px-3.5 py-3 font-medium text-foreground">{s.recordsContributed ?? 0}</td>
-                    <td className="px-3.5 py-3">
-                      <Badge variant={s.status === "accepted" ? "success" : "default"}>
-                        {s.status === "accepted" ? "Accepted" : "Skipped"}
-                      </Badge>
-                    </td>
-                    <td className="px-3.5 py-3">
-                      <RelIcon className={`h-4 w-4 ${RELIABILITY_TONE[reliability] ?? "text-warning"}`} />
-                    </td>
-                    <td className="px-3.5 py-3 text-muted-foreground">{s.retrievedAt ? formatRelativeTime(s.retrievedAt) : "—"}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-lg border border-border bg-card shadow-subtle">
+            <table className="w-full text-left text-[13px]">
+              <thead className="bg-surface/90 border-b border-border">
+                <tr>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Source</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Type</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Records</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Reliability</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Last visited</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/50">
+                {paginatedSources.map((s) => {
+                  const reliability = (s.reliability ?? "medium") as keyof typeof RELIABILITY_ICON;
+                  const RelIcon = RELIABILITY_ICON[reliability] ?? ShieldAlert;
+                  return (
+                    <tr
+                      key={s.id}
+                      onClick={() => openSource(s)}
+                      className="cursor-pointer transition-colors hover:bg-surface/60"
+                    >
+                      <td className="px-3.5 py-3">
+                        <p className="max-w-[260px] truncate font-semibold text-foreground">{s.title}</p>
+                        <p className="max-w-[260px] truncate text-[12px] text-muted-foreground">{s.domain}</p>
+                      </td>
+                      <td className="px-3.5 py-3 text-muted-foreground">{s.type}</td>
+                      <td className="px-3.5 py-3 font-medium text-foreground">{s.recordsContributed ?? 0}</td>
+                      <td className="px-3.5 py-3">
+                        <Badge variant={s.status === "accepted" ? "success" : "default"}>
+                          {s.status === "accepted" ? "Accepted" : "Skipped"}
+                        </Badge>
+                      </td>
+                      <td className="px-3.5 py-3">
+                        <RelIcon className={`h-4 w-4 ${RELIABILITY_TONE[reliability] ?? "text-warning"}`} />
+                      </td>
+                      <td className="px-3.5 py-3 text-muted-foreground">{s.retrievedAt ? formatRelativeTime(s.retrievedAt) : "—"}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <Pagination
+            currentPage={safePage}
+            totalPages={totalPages}
+            totalItems={filtered.length}
+            pageSize={pageSize}
+            itemLabel="sources"
+            onPageChange={(p) => setPage(p)}
+          />
         </div>
       )}
 

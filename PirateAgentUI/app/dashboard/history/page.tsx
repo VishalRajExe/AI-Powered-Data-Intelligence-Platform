@@ -1,13 +1,16 @@
 "use client";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, RotateCcw } from "lucide-react";
+import { Eye, RotateCcw, Trash2 } from "lucide-react";
 import { HistoryScrollIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/common/status-badge";
 import { EmptyState } from "@/components/common/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Pagination } from "@/components/common/pagination";
 import { useAuth } from "@/lib/auth";
 import { useApi } from "@/hooks/use-api";
+import { api } from "@/lib/api";
 import { formatDate, formatNumber } from "@/lib/utils";
 import type { WorkflowStatus } from "@/lib/types";
 
@@ -38,10 +41,13 @@ interface WorkflowListResponse {
 export default function HistoryPage() {
   const router = useRouter();
   const { user } = useAuth();
+  const [page, setPage] = useState(1);
+  const [deletedIds, setDeletedIds] = useState<string[]>([]);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const { data, loading } = useApi<WorkflowListResponse>(
     user ? "/workflows" : null,
-    { workspaceId: user?.workspaceId ?? "", userId: user?.id ?? "", limit: 50 },
+    { workspaceId: user?.workspaceId ?? "", userId: user?.id ?? "", limit: 100 },
     { skip: !user },
   );
 
@@ -55,15 +61,42 @@ export default function HistoryPage() {
   }));
 
   const past = workflows.filter((w) => {
+    if (deletedIds.includes(w.id)) return false;
     const runStatus = w.lastRun?.status;
     return runStatus === "COMPLETED" || runStatus === "PARTIAL" || runStatus === "FAILED" || w.status === "ARCHIVED" || !runStatus;
   });
+
+  const pageSize = 8;
+  const totalPages = Math.max(1, Math.ceil(past.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const paginatedPast = past.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   function mapStatus(w: WorkflowItem): WorkflowStatus {
     const rs = w.lastRun?.status;
     if (rs === "COMPLETED" || rs === "PARTIAL") return "completed";
     if (rs === "FAILED") return "failed";
     return "completed";
+  }
+
+  async function handleDelete(e: React.MouseEvent, id: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm("Are you sure you want to delete this voyage from history? This will delete the workflow run and associated data.")) {
+      return;
+    }
+
+    setDeletingId(id);
+    try {
+      await api.delete(`/workflows/${id}`, {
+        workspaceId: user?.workspaceId ?? "",
+        userId: user?.id ?? "",
+      });
+      setDeletedIds((prev) => [...prev, id]);
+    } catch (err: any) {
+      alert(err?.message || "Failed to delete workflow from history");
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   return (
@@ -96,61 +129,84 @@ export default function HistoryPage() {
           description="Completed and archived research voyages will appear here."
         />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border bg-card shadow-subtle">
-          <table className="w-full text-left text-[13px]">
-            <thead className="bg-surface/90 border-b border-border">
-              <tr>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Workflow</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Records</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Sources</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Duration</th>
-                <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Date</th>
-                <th className="px-3.5 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50">
-              {past.map((w) => (
-                <tr key={w.id} className="transition-colors hover:bg-surface/60">
-                  <td className="px-3.5 py-3">
-                    <p className="max-w-[240px] truncate font-semibold text-foreground">{w.name}</p>
-                    <p className="max-w-[240px] truncate text-[12px] text-muted-foreground">{w.prompt}</p>
-                  </td>
-                  <td className="px-3.5 py-3">
-                    <StatusBadge status={mapStatus(w)} />
-                  </td>
-                  <td className="px-3.5 py-3 font-medium text-foreground">{formatNumber(w.validRecords ?? 0)}</td>
-                  <td className="px-3.5 py-3 text-muted-foreground">{w.lastRun?.sourcesProcessed ?? w.sourcesProcessed ?? 0}</td>
-                  <td className="px-3.5 py-3 text-muted-foreground">
-                    {w.lastRun?.durationMs
-                      ? formatDuration(Math.round(w.lastRun.durationMs / 1000))
-                      : formatDuration(w.durationSec)}
-                  </td>
-                  <td className="px-3.5 py-3 text-muted-foreground">{formatDate(w.createdAt)}</td>
-                  <td className="px-3.5 py-3">
-                    <div className="flex justify-end gap-1.5">
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="h-7 w-7 bg-card border-border/80"
-                        onClick={() => router.push(`/dashboard/workflows/${w.id}`)}
-                      >
-                        <Eye className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        className="h-7 w-7 bg-card border-border/80"
-                        onClick={() => router.push(`/dashboard/research/new?prompt=${encodeURIComponent(w.prompt)}`)}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </td>
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-lg border border-border bg-card shadow-subtle">
+            <table className="w-full text-left text-[13px]">
+              <thead className="bg-surface/90 border-b border-border">
+                <tr>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Workflow</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Records</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Sources</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Duration</th>
+                  <th className="px-3.5 py-3 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground">Date</th>
+                  <th className="px-3.5 py-3" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-border/50">
+                {paginatedPast.map((w) => (
+                  <tr key={w.id} className="transition-colors hover:bg-surface/60">
+                    <td className="px-3.5 py-3">
+                      <p className="max-w-[240px] truncate font-semibold text-foreground">{w.name}</p>
+                      <p className="max-w-[240px] truncate text-[12px] text-muted-foreground">{w.prompt}</p>
+                    </td>
+                    <td className="px-3.5 py-3">
+                      <StatusBadge status={mapStatus(w)} />
+                    </td>
+                    <td className="px-3.5 py-3 font-medium text-foreground">{formatNumber(w.validRecords ?? 0)}</td>
+                    <td className="px-3.5 py-3 text-muted-foreground">{w.lastRun?.sourcesProcessed ?? w.sourcesProcessed ?? 0}</td>
+                    <td className="px-3.5 py-3 text-muted-foreground">
+                      {w.lastRun?.durationMs
+                        ? formatDuration(Math.round(w.lastRun.durationMs / 1000))
+                        : formatDuration(w.durationSec)}
+                    </td>
+                    <td className="px-3.5 py-3 text-muted-foreground">{formatDate(w.createdAt)}</td>
+                    <td className="px-3.5 py-3">
+                      <div className="flex justify-end gap-1.5">
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7 bg-card border-border/80"
+                          onClick={() => router.push(`/dashboard/workflows/${w.id}`)}
+                          title="View workflow details"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7 bg-card border-border/80"
+                          onClick={() => router.push(`/dashboard/research/new?prompt=${encodeURIComponent(w.prompt)}`)}
+                          title="Rerun research voyage"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7 bg-card border-border/80 text-muted-foreground hover:text-destructive hover:bg-destructive/10 hover:border-destructive/40"
+                          title="Delete voyage from history"
+                          disabled={deletingId === w.id}
+                          onClick={(e) => handleDelete(e, w.id)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <Pagination
+            currentPage={safePage}
+            totalPages={totalPages}
+            totalItems={past.length}
+            pageSize={pageSize}
+            itemLabel="voyages"
+            onPageChange={(p) => setPage(p)}
+          />
         </div>
       )}
     </div>
