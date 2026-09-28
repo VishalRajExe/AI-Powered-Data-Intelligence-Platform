@@ -4,9 +4,9 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 12 — Data Export complete.
+- **Current Phase:** Phase 13 — Authentication and Authorization complete.
 - **Last updated:** 2026-09-28.
-- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, Source and Evidence Explorer APIs, persistent Workflow and Run history views, SSE live monitoring, and Dataset Export APIs (`POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, `GET /api/v1/exports/:id/download`) for CSV, JSON, and XLSX with chunked streaming and workspace authorization are wired and verified.
+- **App runnable end-to-end:** Full multi-user authentication and authorization layer is implemented and verified. Users can register with bcrypt password hashing, login with secure credentials, acquire short-lived JWT access tokens (15m) and cryptographically tracked refresh tokens (7d) with Redis/memory revocation, query `/api/v1/auth/me` for profile and workspace memberships, and rotate/revoke tokens via `/api/v1/auth/refresh` and `/api/v1/auth/logout`. Password hashes are strictly omitted from all outputs. Workspace isolation and client-supplied identity protection middleware prevent ID tampering and cross-tenant access. Prompt parsing, plan generation/persistence, BullMQ run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, Source and Evidence Explorer APIs, persistent Workflow and Run history views, SSE live monitoring, and Dataset Export APIs are fully functional and protected.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
@@ -24,6 +24,7 @@
 - [x] Phase 10 — Source and Evidence Explorer: Explainable and source-backed provenance at row and field granularity. Implemented domain models (`SourceDetail`, `SourceEvidence`, `DatasetRowSource`, `FieldEvidence`, `RowEvidenceExplorerResponse`) and `ProvenanceService`. Preserves URL, domain, page title, `retrievedAt`, `sourceType`, workflow run, extraction step, evidence snippet, and source status. Implemented `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, and `GET /api/v1/rows/:id/evidence` (with alias `/api/v1/datasets/:id/rows/:rowId/evidence`). Supports multi-source row provenance (e.g., Company from Source A, Website from Source B), prevents claiming a source verifies a value if the snippet contains unrelated content (`isVerified: false`), and preserves conflict history where different sources disagree.
 - [x] Phase 11 — Workflow History and Live Monitoring: Persistent workflow and run history views and real-time live monitoring. Implemented `WorkflowHistoryRepository` exposing Workflow view (name, prompt, created time, last run summary, status, dataset summary, runs count) and WorkflowRun view (started, completed, duration, records found, records accepted, duplicates, failures, source count, dataset summary, steps). Standardized canonical activity actions (`PLANNING_STARTED`, `PLAN_CREATED`, `SOURCE_DISCOVERY_STARTED`, `SOURCE_DISCOVERED`, `SCRAPE_STARTED`, `SCRAPE_COMPLETED`, `EXTRACTION_STARTED`, `RECORDS_EXTRACTED`, `VALIDATION_COMPLETED`, `DEDUPLICATION_COMPLETED`, `DATASET_CREATED`, `RUN_COMPLETED`, `RUN_FAILED`). Implemented `WorkflowEventBroadcaster` with durable MySQL `ActivityEvent` persistence before Redis Pub/Sub and in-process broadcasting (no history kept only in memory). Implemented SSE endpoint `GET /api/v1/runs/:id/events` for frontend `EventSource` consumption with historical replay, Redis cross-process event distribution, and 15s keepalive heartbeats.
 - [x] Phase 12 — Data Export: Dataset exports in CSV, JSON, and XLSX with chunked streaming to prevent memory exhaustion. Supports complete datasets, filtered datasets (search, validOnly, duplicatesOnly, verificationStatus, confidence, fieldFilters, sort), and selected columns subset. Implemented `ExportRepository` and `ExportService` managing asynchronous `ExportJob` models with status tracking, RFC 4180 CSV escaping, valid JSON streaming arrays, and valid OpenXML spreadsheets via ExcelJS. Exposed `POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, and `GET /api/v1/exports/:id/download` with strict workspace access control.
+- [x] Phase 13 — Authentication and Authorization: Multi-user security layer with bcrypt password hashing (10 salt rounds), environment-based JWT secrets (`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, min 32 chars), short-lived access tokens (15m), rotating refresh tokens with unique UUID `jti` (7d), and Redis/memory token revocation. Default workspace and OWNER membership provisioned upon registration. Implemented routes: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`. Authorization middleware enforces active workspace membership (`requireWorkspaceAccess`), role hierarchy (`OWNER` > `ADMIN` > `MEMBER`), and client-supplied identity protection (`enforceClientIdentity`), rejecting user impersonation with 403 `FORBIDDEN_USER_MISMATCH`. Password hashes are strictly omitted from all models and responses.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -57,6 +58,9 @@
 | 2026-09-28 | Implement live run monitoring via Server-Sent Events (`GET /api/v1/runs/:id/events`) using standard EventSource format with Redis Pub/Sub cross-process distribution and event deduplication. | Replays historical activity on connection, receives live events across multiple API/worker nodes via Redis channel `aidp:run:${runId}:events`, deduplicates via bounded set, and maintains keepalive comments every 15s. |
 | 2026-09-28 | Stream dataset exports in configurable chunks (default 500 rows) directly to disk using RFC 4180 CSV serializer, JSON array streamer, and ExcelJS streaming WorkbookWriter. | Prevents heap exhaustion on large datasets by avoiding loading all rows into Node.js memory simultaneously. |
 | 2026-09-28 | Model export lifecycle via `ExportJob` with states (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`) and persist `fileMetadata` (size, rowCount, columnCount, contentType, SHA256 checksum). | Enables asynchronous background export jobs, decoupled polling, verifiable downloads, and workspace-scoped ownership checks. |
+| 2026-09-28 | Secure password hashing using `bcryptjs` with 10 salt rounds; omit password hashes from all domain models and API responses. | Protects credentials against rainbow tables and timing attacks; guarantees password hashes never leak into logs, serialization, or client views. |
+| 2026-09-28 | Dual-token authentication with short-lived JWT access tokens (15m), rotating refresh tokens with unique UUID `jti` (7d), and Redis/memory revocation. | Minimizes exposure window if access token is intercepted; refresh tokens with unique UUID `jti` allow instant revocation on logout across distributed instances. |
+| 2026-09-28 | Client identity anti-spoofing via `enforceClientIdentity` middleware and workspace isolation via `requireWorkspaceAccess`. | Prohibits client-supplied `userId`/`createdById`/`requestedById` overriding authenticated identity (403 `FORBIDDEN_USER_MISMATCH`); guarantees tenants cannot access foreign workspaces, workflows, datasets, sources, or exports. |
 
 ## 4. Database / Schema Changes
 
@@ -97,7 +101,7 @@
 - Cancellation persists immediately and prevents later steps. An active Agent Core operation cannot be force-aborted through the current public `RunParams`; it finishes under source request timeout/retry controls before the worker records cancellation.
 - Robots policy is preflighted by this service before Scrape/Interact. Site terms are still policy instructions and are not automatically parsed from legal pages. Search provider calls themselves are not rate-limited per result domain; the per-domain limit gates actual Scrape/Interact attempts.
 - Request timeouts bound how long the application waits and abort the provided signal; whether the upstream Firecrawl SDK cancels an already-running remote request depends on SDK support. Rate limiting requires Redis and fails closed if Redis is unavailable.
-- Authentication remains inactive; execution caller supplies `createdById`, which is checked for active workspace membership. Bind it to the authenticated principal when auth is implemented.
+- Authentication and authorization are fully active as of Phase 13. Passwords are encrypted with bcrypt, access and refresh tokens are managed with JWT and Redis revocation, and client identity anti-spoofing is enforced across all routes.
 - No `.env` file exists. `.env.example` contains placeholders.
 - The requested remote is configured as `origin`; no credential values are stored in project files.
 
@@ -125,8 +129,8 @@
 
 ## 7. Pending Work / Next Steps
 
-- Phase 12 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
-- Authentication is not implemented. For now `createdById` and `requestedById` are supplied by the caller and checked against active workspace membership; a future auth phase must bind them to an authenticated principal.
+- Phase 13 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
+- Multi-user authentication and authorization with bcrypt password hashing, JWT access/refresh token rotation, Redis token revocation, and workspace isolation are active.
 - `Phases.md` uses older phase numbering; follow the user's current phase prompts and do not build its later planner phase early.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
 
@@ -137,8 +141,8 @@
 - **Migration deploy:** `npm run db:deploy`.
 - **Checks:** `npm run typecheck`; `npm run lint`; `npm test`; `npm run test:db` with `RUN_DATABASE_TESTS=true` and `DATABASE_URL`; `npm run build`; `npm audit`.
 - **Schema validation:** `npm run db:validate`.
-- **Environment variables:** `APP_ENV`, `PORT`, `FRONTEND_ORIGIN`, `LOG_LEVEL`, `REQUEST_BODY_LIMIT`, `SOURCE_ROBOTS_USER_AGENT`, `SOURCE_ROBOTS_TIMEOUT_MS`, `DATABASE_URL` or `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE`, `REDIS_URL`, `FIRECRAWL_API_KEY`, `FIRECRAWL_BASE_URL`, `LLM_PROVIDER`, `LLM_MODEL_ID`, provider credentials, and paired `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` when auth is introduced.
-- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/workflows`, `GET /api/v1/workflows/:id`, `GET /api/v1/workflows/:id/runs`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/steps`, `GET /api/v1/runs/:id/activity`, `GET /api/v1/runs/:id/events`, `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, `GET /api/v1/datasets/:id/rows/:rowId/evidence`, `POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, and `GET /api/v1/exports/:id/download`. Long runs and exports are queued/asynchronous; datasets and rows are persisted through `DatasetRepository`. Export streaming supports CSV, JSON, and XLSX. Auth is not active.
+- **Environment variables:** `APP_ENV`, `PORT`, `FRONTEND_ORIGIN`, `LOG_LEVEL`, `REQUEST_BODY_LIMIT`, `SOURCE_ROBOTS_USER_AGENT`, `SOURCE_ROBOTS_TIMEOUT_MS`, `DATABASE_URL` or `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE`, `REDIS_URL`, `FIRECRAWL_API_KEY`, `FIRECRAWL_BASE_URL`, `LLM_PROVIDER`, `LLM_MODEL_ID`, provider credentials, `JWT_ACCESS_SECRET` (min 32 chars), and `JWT_REFRESH_SECRET` (min 32 chars).
+- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/workflows`, `GET /api/v1/workflows/:id`, `GET /api/v1/workflows/:id/runs`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/steps`, `GET /api/v1/runs/:id/activity`, `GET /api/v1/runs/:id/events`, `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, `GET /api/v1/datasets/:id/rows/:rowId/evidence`, `POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, and `GET /api/v1/exports/:id/download`. Multi-user authentication, JWT Bearer tokens, and workspace isolation are active across all endpoints.
 - **Data services:** `docker-compose.yml` defines local MySQL 8.4 and Redis 7.
 
 ## 9. Notes for the Next AI Session
@@ -150,25 +154,29 @@
 
 ## 10. Last Session Summary
 
-Phase 12 (Data Export) completed. Implemented asynchronous streaming dataset exports in CSV, JSON, and XLSX:
-- Defined domain types and models in `backend/src/modules/export/export.types.ts` (`ExportFormat`, `ExportJobStatus`, `ExportFilterDefinition`, `ExportFileMetadata`, `ExportJobView`, `CreateExportInput`).
-- Implemented memory-efficient chunked streaming format writers in `backend/src/modules/export/format-writers.ts`:
-  - `writeCsvStream`: RFC 4180 compliant CSV stream writer with proper quote doubling, newline preservation, and comma escaping via `escapeCsvCell`.
-  - `writeJsonStream`: Valid streaming JSON array writer (`[\n  {...}\n]`) without loading entire dataset into memory.
-  - `writeXlsxStream`: OpenXML spreadsheet writer powered by `ExcelJS.stream.xlsx.WorkbookWriter` with immediate row commits to prevent heap exhaustion.
-- Implemented `ExportRepository` (`backend/src/db/repositories/export.repository.ts`):
-  - Manages `ExportJob` database records with workspace-scoped access control.
-  - Supports status lifecycle transitions: `PENDING` -> `RUNNING` -> `COMPLETED` / `FAILED`.
-  - Tracks file metadata: filename, file size, row count, column count, content type, and SHA256 checksums.
-  - Resolves file keys and enforces that only `COMPLETED` jobs can be downloaded.
-- Implemented `ExportService` (`backend/src/modules/export/export.service.ts`):
-  - Integrates with `DatasetQueryRepository` to fetch rows in bounded chunks (default 500 rows).
-  - Honors all filter criteria: full-text search, `validOnly`, `duplicatesOnly`, `verificationStatus`, confidence thresholds, `sourceId`, custom field filters, and sorting.
-  - Supports exporting a selected subset of columns or the full dataset column set.
-  - Cleans up partial files on failure and marks the job as `FAILED` with sanitized error details.
-- Implemented Express routes in `backend/src/routes/exports.routes.ts`:
-  - `POST /api/v1/datasets/:id/exports`: Accepts export request, verifies active workspace membership and dataset existence, starts asynchronous export job, and returns 202 Accepted with `ExportJobView`.
-  - `GET /api/v1/exports/:id`: Retrieves export job status, execution timestamps, error details, and file metadata.
-  - `GET /api/v1/exports/:id/download`: Streams the completed export file to the client with appropriate `Content-Type`, `Content-Disposition: attachment`, and `Content-Length` headers; returns 400 if export is not completed.
-- Added database migration `20260928180000_phase12_data_export` for `file_metadata` column on `export_jobs`.
-- Verification passed: 138 automated tests passing across 13 test suites (including 12 dedicated tests in `backend/tests/exports.test.ts` verifying file generation, RFC 4180 escaping, JSON parsing, ExcelJS XLSX reading, filters, column selection, and API authorization), 0 ESLint errors, clean typecheck, and successful production build.
+Phase 13 (Authentication and Authorization) completed. Implemented multi-user security foundation and workspace isolation:
+- Defined domain types and models in `backend/src/modules/auth/auth.types.ts` (`UserView`, `WorkspaceSummary`, `AuthTokens`, `AuthResponse`, `AccessTokenPayload`, `RefreshTokenPayload`, `AuthenticatedUser`, `RegisterInput`, `LoginInput`).
+- Implemented secure password hashing in `backend/src/modules/auth/password.ts` using `bcryptjs` (10 salt rounds) with constant-time comparison; password hashes are strictly omitted from all client-facing models.
+- Implemented token management in `backend/src/modules/auth/token.service.ts`:
+  - Issues signed JWT access tokens (15m TTL) with environment-based `JWT_ACCESS_SECRET`.
+  - Issues signed JWT refresh tokens (7d TTL) with unique UUID `jti` and environment-based `JWT_REFRESH_SECRET`.
+  - Supports token revocation via Redis key `aidp:revoked_token:${jti}` with in-memory fallback.
+  - Maps JWT errors to standard `TOKEN_EXPIRED`, `INVALID_TOKEN`, and `TOKEN_REVOKED` AppErrors.
+- Implemented `AuthService` (`backend/src/modules/auth/auth.service.ts`):
+  - `register`: Validates password length (>= 8 chars), rejects duplicate emails (409 `EMAIL_ALREADY_EXISTS`), atomically provisions User, default Workspace, and OWNER `WorkspaceMember` inside a transaction, and returns tokens and sanitized user profile without password hash.
+  - `login`: Verifies credentials via bcrypt, checks account `ACTIVE` status, and issues fresh token pair and workspace summaries.
+  - `refreshToken`: Validates refresh token signature and revocation state, rotates token pair, and ensures user remains active.
+  - `logout`: Revokes refresh token `jti` in Redis / in-memory revocation store.
+  - `getCurrentUser`: Fetches sanitized user profile and active workspace memberships.
+- Implemented Authorization Middleware (`backend/src/modules/auth/auth.middleware.ts`):
+  - `authenticate`: Enforces valid Bearer JWT on protected endpoints, setting `res.locals.user`.
+  - `optionalAuthenticate`: Gracefully attaches `res.locals.user` if Bearer header is present.
+  - `requireWorkspaceAccess`: Enforces active membership in target workspace (`res.locals.workspaceId`) and validates hierarchical roles (`OWNER` > `ADMIN` > `MEMBER`).
+  - `enforceClientIdentity`: Prohibits client-supplied `userId`, `createdById`, or `requestedById` that does not match authenticated identity, rejecting spoofing with 403 `FORBIDDEN_USER_MISMATCH`.
+- Exposed Express routes in `backend/src/routes/auth.routes.ts`:
+  - `POST /api/v1/auth/register`: Account creation with default workspace.
+  - `POST /api/v1/auth/login`: Credential verification and token issuance.
+  - `POST /api/v1/auth/refresh`: Token rotation.
+  - `POST /api/v1/auth/logout`: Refresh token revocation.
+  - `GET /api/v1/auth/me`: Authenticated profile and workspace list.
+- Verification passed: 151 automated tests passing across 14 test suites (including 13 dedicated tests in `backend/tests/auth.test.ts` covering unauthenticated, authenticated, wrong user, workspace isolation, expired token, invalid token, duplicate email, and password omission), 0 ESLint errors, clean typecheck, and successful production build.

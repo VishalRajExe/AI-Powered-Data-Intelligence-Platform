@@ -23,6 +23,8 @@ import { WorkflowHistoryRepository } from "./db/repositories/workflow-history.re
 import { WorkflowEventBroadcaster } from "./modules/monitoring/event-broadcaster.js";
 import { ExportRepository } from "./db/repositories/export.repository.js";
 import { ExportService } from "./modules/export/export.service.js";
+import { TokenService } from "./modules/auth/token.service.js";
+import { AuthService } from "./modules/auth/auth.service.js";
 
 const config = loadEnvConfig();
 process.env.DATABASE_URL = config.DATABASE_URL;
@@ -64,6 +66,18 @@ const workflowWorker = createWorkflowWorker<{ runId: string }>(redis, async (job
 workflowWorker.on("failed", (job, error) => logger.error({ runId: job?.data.runId, errorName: error.name }, "Workflow queue job failed"));
 const exportRepository = new ExportRepository(prisma);
 const exportService = new ExportService(exportRepository, datasetQueryRepository, { logger });
+const jwtAccessSecret =
+  config.JWT_ACCESS_SECRET || "default_development_jwt_access_secret_min_32_chars!";
+const jwtRefreshSecret =
+  config.JWT_REFRESH_SECRET || "default_development_jwt_refresh_secret_min_32_chars!";
+
+const tokenService = new TokenService({
+  accessSecret: jwtAccessSecret,
+  refreshSecret: jwtRefreshSecret,
+  redis,
+});
+const authService = new AuthService(prisma, tokenService);
+
 const app = createApp({
   config,
   logger,
@@ -76,6 +90,8 @@ const app = createApp({
   datasetQueryRepository,
   exportRepository,
   exportService,
+  authService,
+  tokenService,
   agentAdapter,
   readiness: {
     mysql: () => prisma.$queryRaw`SELECT 1`,

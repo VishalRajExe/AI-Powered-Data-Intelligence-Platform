@@ -22,6 +22,10 @@ import type { DatasetQueryRepository } from "./db/repositories/dataset-query.rep
 import { createExportsRouter } from "./routes/exports.routes.js";
 import type { ExportRepository } from "./db/repositories/export.repository.js";
 import type { ExportService } from "./modules/export/export.service.js";
+import { createAuthRouter } from "./routes/auth.routes.js";
+import type { AuthService } from "./modules/auth/auth.service.js";
+import type { TokenService } from "./modules/auth/token.service.js";
+import { optionalAuthenticate, enforceClientIdentity } from "./modules/auth/auth.middleware.js";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -36,7 +40,10 @@ export interface AppDependencies {
   datasetQueryRepository?: DatasetQueryRepository;
   exportRepository?: ExportRepository;
   exportService?: ExportService;
+  authService?: AuthService;
+  tokenService?: TokenService;
   agentAdapter: AgentAdapter;
+  customRoutes?: Array<{ path: string; router: express.Router | express.RequestHandler }>;
 }
 
 export function createApp(dependencies: AppDependencies): express.Express {
@@ -47,7 +54,7 @@ export function createApp(dependencies: AppDependencies): express.Express {
     origin: (origin, callback) => callback(null, !origin || origin.replace(/\/$/, "") === dependencies.config.FRONTEND_ORIGIN),
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "Last-Event-ID"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "Last-Event-ID", "X-Workspace-ID"],
   }));
   app.use(requestIdMiddleware);
   app.use(pinoHttp({
@@ -59,7 +66,14 @@ export function createApp(dependencies: AppDependencies): express.Express {
     },
   }));
   app.use(express.json({ limit: dependencies.config.REQUEST_BODY_LIMIT }));
+  if (dependencies.tokenService) {
+    app.use(optionalAuthenticate(dependencies.tokenService));
+    app.use(enforceClientIdentity());
+  }
   app.use(createHealthRouter(dependencies.readiness, () => dependencies.agentAdapter.checkConfiguration()));
+  if (dependencies.authService && dependencies.tokenService) {
+    app.use("/api/v1", createAuthRouter(dependencies.authService, dependencies.tokenService));
+  }
   app.use("/api/v1", createRequirementsRouter(dependencies.requirementParser));
   app.use(
     "/api/v1",
@@ -82,6 +96,11 @@ export function createApp(dependencies: AppDependencies): express.Express {
   if (dependencies.datasetQueryRepository) app.use("/api/v1", createDatasetsRouter(dependencies.datasetQueryRepository));
   if (dependencies.exportRepository && dependencies.exportService) {
     app.use("/api/v1", createExportsRouter(dependencies.exportRepository, dependencies.exportService));
+  }
+  if (dependencies.customRoutes) {
+    for (const route of dependencies.customRoutes) {
+      app.use(route.path, route.router);
+    }
   }
   app.use(notFoundHandler());
   app.use(createErrorHandler(dependencies.logger));
