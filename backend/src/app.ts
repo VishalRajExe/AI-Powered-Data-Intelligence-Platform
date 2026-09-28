@@ -15,6 +15,8 @@ import type { AgentAdapter } from "./agent/types.js";
 import type { WorkflowExecutionServiceContract } from "./modules/workflows/workflow-execution.service.js";
 import { createRunsRouter } from "./routes/runs.routes.js";
 import type { WorkflowExecutionRepository } from "./db/repositories/workflow-execution.repository.js";
+import { createDatasetsRouter } from "./routes/datasets.routes.js";
+import type { DatasetQueryRepository } from "./db/repositories/dataset-query.repository.js";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -24,6 +26,7 @@ export interface AppDependencies {
   workflowPlanner: WorkflowPlanner;
   workflowExecution: WorkflowExecutionServiceContract;
   workflowRunRepository?: WorkflowExecutionRepository;
+  datasetQueryRepository?: DatasetQueryRepository;
   agentAdapter: AgentAdapter;
 }
 
@@ -51,6 +54,7 @@ export function createApp(dependencies: AppDependencies): express.Express {
   app.use("/api/v1", createRequirementsRouter(dependencies.requirementParser));
   app.use("/api/v1", createWorkflowsRouter(dependencies.workflowPlanner, dependencies.workflowExecution));
   if (dependencies.workflowRunRepository) app.use("/api/v1", createRunsRouter(dependencies.workflowRunRepository));
+  if (dependencies.datasetQueryRepository) app.use("/api/v1", createDatasetsRouter(dependencies.datasetQueryRepository));
   app.use(notFoundHandler());
   app.use(createErrorHandler(dependencies.logger));
   return app;

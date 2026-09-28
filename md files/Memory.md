@@ -4,9 +4,9 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 8 — Reference-repository integration and data-intelligence pipeline complete; Phase 9 not started.
+- **Current Phase:** Phase 9 — Dataset Management complete; Phase 10 not started.
 - **Last updated:** 2026-09-28.
-- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, step/event persistence, and evidence-backed dataset saving are wired. Live provider verification is opt-in.
+- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, and complete Dataset Management query APIs (`/api/v1/datasets`, `/schema`, `/rows`, `/evidence`, `/sources`, `/sources/:id`) are wired and verified.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
@@ -19,7 +19,8 @@
 - [x] Phase 5 — `FirecrawlAgentAdapter`, `MockAgentAdapter`, event/result normalization, Firecrawl configuration health check, `POST /api/v1/workflows/execute`, workflow run persistence, and prompt-to-agent end-to-end mock coverage.
 - [x] Phase 6 — Plan allow/deny domain rules, URL normalization/validation, robots policy checks, Redis sliding-window rate limits, bounded request timeout/retry, source lifecycle/reason persistence, and safe alternative-source continuation.
 - [x] Phase 7 — BullMQ workflow runs, dependency-ordered safe step runner, per-step status/retry/timing/source references, cancellation requests, activity events, evidence-backed dataset persistence, run/step APIs, worker error handling, and runner tests.
-- [x] Phase 8 — Integrated relevant Web Research Agent URL relevance concepts in native TypeScript around Firecrawl Search; added normalization, field-aware validation, conservative deduplication/entity resolution, conflict handling, provenance quality metrics, MySQL persistence, and integration tests. Firecrawl remains the primary collection engine. See the exact component report below.
+- [x] Phase 8 — Integrated relevant Web Research Agent URL relevance concepts in native TypeScript around Firecrawl Search; added normalization, field-aware validation, conservative deduplication/entity resolution, conflict handling, provenance quality metrics, MySQL persistence, and integration tests. Firecrawl remains the primary collection engine.
+- [x] Phase 9 — Dataset Management: Full business data layer. Implemented `DatasetQueryRepository` and Express routes for `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId` (and `/evidence` alias), `GET /api/v1/datasets/:id/sources`, and `GET /api/v1/sources/:id`. Coexists dynamic JSON rows with indexed relational columns, prevents SQL/JSON injection via schema-aware validation, supports pagination, text search, dynamic field filters, valid-only, duplicates-only, sorting, and full source/evidence lineage.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -45,8 +46,8 @@
 | 2026-09-28 | Persist row-level source evidence rather than inventing field-level citations. | Agent results provide source URLs per record, not independently verified per-field source mappings. |
 | 2026-09-28 | Keep Firecrawl Agent Core as the only directly vendored reference implementation; use Web Research Agent and Anakin as behavior/design references, and do not copy TheAgentic Browser code without legal review. | Firecrawl and Web Research Agent are MIT; Anakin is AGPL-3.0; TheAgentic Community License excludes competing online services. Current backend imports no code from the latter three repositories. |
 | 2026-09-28 | Port the Web Research Agent's relevance-selection idea to `RelevantSourceSelector` in TypeScript and run it on Firecrawl Search results before they reach the agent. | Keeps Firecrawl Search primary, applies the plan's queries/domain preferences/source limit, removes normalized duplicates, and avoids adding Python services or embedding dependencies. Robots/retry and source-policy logic already exist in the app and remain authoritative. |
-| 2026-09-28 | Run the Phase 8 quality pipeline at `SAVE` regardless of which optional quality steps appear in a generated plan. | Guarantees normalize → validate → deduplicate → resolve → assess before dataset persistence, while keeping the validated step vocabulary and worker execution model. |
 | 2026-09-28 | Preserve duplicate rows and link them to canonical rows; merge only exact/high-confidence keys or entities sharing a stable identifier, and retain conflicts with review decisions. | Keeps the extracted/source evidence trail intact and prevents uncertain name similarity from silently combining records. |
+| 2026-09-28 | Combine relational indexed columns with safe parameterised MySQL queries for dynamic JSON fields and full-text search. | Column keys are pre-validated against registered `DatasetColumn` schema to prevent SQL/JSON path injection; keyword `values` is escaped with backticks in raw queries; search uses escaped LIKE parameter binding. |
 
 ## 4. Database / Schema Changes
 
@@ -139,4 +140,4 @@
 
 ## 10. Last Session Summary
 
-Phase 8 integrated `RelevantSourceSelector` (TypeScript adaptation of Web Research Agent relevance ranking) into Firecrawl Search result handling and completed the data-quality pipeline and persistence. Firecrawl remains the only directly vendored reference implementation. TheAgentic Browser and Anakin remain reference-only because of license/runtime fit; their useful architecture patterns are already covered by the platform planner/Firecrawl loop and BullMQ worker. Added migration `20260928160000_phase8_data_quality`. Verification passed: `npm test` (66 passed, 8 skipped), MySQL integration suite (7 passed), typecheck, lint and build. Migration was deployed to local `aidp_dev` MySQL. Redis and live Firecrawl provider calls were not verified. Phase 9 was not started.
+Phase 9 (Dataset Management) completed. Implemented the complete business data layer: `DatasetQueryRepository` and Express routes under `/api/v1/datasets` and `/api/v1/sources`. Coexists dynamic JSON rows with indexed relational columns, prevents SQL/JSON injection via schema-aware validation against registered `DatasetColumn`s, supports pagination, free-text search across JSON values, dynamic field filters, valid-only, duplicates-only, confidence range, multi-field sorting, and full source/evidence lineage. Verification passed: all 106 automated tests passing (8 skipped for live MySQL/Firecrawl), 0 ESLint errors, clean typecheck, and successful production build.

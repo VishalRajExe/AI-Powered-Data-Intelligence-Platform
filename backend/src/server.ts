@@ -18,6 +18,7 @@ import { RobotsPolicyService } from "./modules/sources/RobotsPolicyService.js";
 import { RateLimitService } from "./modules/sources/RateLimitService.js";
 import { RetryPolicy } from "./modules/sources/RetryPolicy.js";
 import { WorkflowSourceRepository } from "./db/repositories/workflow-source.repository.js";
+import { DatasetQueryRepository } from "./db/repositories/dataset-query.repository.js";
 
 const config = loadEnvConfig();
 process.env.DATABASE_URL = config.DATABASE_URL;
@@ -38,6 +39,7 @@ const sourcePolicy = new SourcePolicyService(
 );
 const agentAdapter = new FirecrawlAgentAdapter(config, logger, undefined, undefined, sourcePolicy);
 const workflowRepository = new WorkflowExecutionRepository(prisma);
+const datasetQueryRepository = new DatasetQueryRepository(prisma);
 const workflowRunner = new WorkflowRunner(workflowRepository, agentAdapter, logger);
 const workflowWorker = createWorkflowWorker<{ runId: string }>(redis, async (job) => {
   try {
@@ -56,6 +58,7 @@ const app = createApp({
   workflowPlanner,
   workflowExecution: new WorkflowExecutionService(requirementParser, workflowPlanner, workflowRepository, workflowQueue),
   workflowRunRepository: workflowRepository,
+  datasetQueryRepository,
   agentAdapter,
   readiness: {
     mysql: () => prisma.$queryRaw`SELECT 1`,
