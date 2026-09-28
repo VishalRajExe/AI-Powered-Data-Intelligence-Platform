@@ -16,6 +16,8 @@ const environmentSchema = z.object({
     .transform((value) => new URL(value).origin),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
   REQUEST_BODY_LIMIT: z.string().regex(/^\d+(?:b|kb|mb|gb)$/i).default("1mb"),
+  SOURCE_ROBOTS_USER_AGENT: z.string().regex(/^[A-Za-z0-9._-]{1,100}$/).default("ScoutlyBot"),
+  SOURCE_ROBOTS_TIMEOUT_MS: z.coerce.number().int().min(250).max(30_000).default(5_000),
   DATABASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   MYSQL_HOST: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   MYSQL_PORT: z.preprocess(emptyToUndefined, z.coerce.number().int().min(1).max(65_535).optional()),

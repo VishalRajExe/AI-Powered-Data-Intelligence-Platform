@@ -38,7 +38,7 @@ function makePlan(): WorkflowPlan {
     objective: requirement.objective!,
     constraints: [],
     sourcePolicy: {
-      permittedSourceTypes: ["official_website"], preferredDomains: [], blockedDomains: ["blocked.example"],
+      permittedSourceTypes: ["official_website"], allowedDomains: [], preferredDomains: [], blockedDomains: ["blocked.example"],
       respectRobotsTxt: true, respectSiteTerms: true, allowAuthentication: false, allowCaptchaBypass: false,
       maxRequestsPerDomainPerMinute: 5, policyRationale: "Only use public official sources.",
     },

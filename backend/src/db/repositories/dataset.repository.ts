@@ -43,7 +43,7 @@ export class DatasetRepository {
           id: { in: sourceIds },
           workspaceId: input.workspaceId,
           workflowRunId: dataset.workflowRunId,
-          status: SourceStatus.FETCHED,
+          status: { in: [SourceStatus.FETCHED, SourceStatus.COLLECTED] },
         },
         select: { id: true },
       });

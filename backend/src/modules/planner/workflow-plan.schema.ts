@@ -54,6 +54,7 @@ export const ExtractionSchema = z.object({
 
 const SourcePolicySchema = z.object({
   permittedSourceTypes: z.array(z.enum(["official_website", "job_board", "business_directory", "news", "research", "government", "marketplace", "other"])).min(1).max(8),
+  allowedDomains: z.array(z.string().trim().min(1).max(255)).max(50).default([]),
   preferredDomains: z.array(z.string().trim().min(1).max(255)).max(50),
   blockedDomains: z.array(z.string().trim().min(1).max(255)).max(50),
   respectRobotsTxt: z.literal(true),

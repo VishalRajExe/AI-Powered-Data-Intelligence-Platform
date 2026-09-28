@@ -98,6 +98,10 @@ enum DatasetColumnType {
 
 enum SourceStatus {
   DISCOVERED
+  ALLOWED
+  QUEUED
+  PROCESSING
+  COLLECTED
   FETCHED
   BLOCKED
   SKIPPED
@@ -394,6 +398,12 @@ model Source {
   domain           String       @db.VarChar(255)
   title            String?      @db.VarChar(512)
   status           SourceStatus @default(DISCOVERED)
+  policyReason     String?      @map("policy_reason") @db.VarChar(1000)
+  robotsStatus     String?      @map("robots_status") @db.VarChar(40)
+  robotsCheckedAt  DateTime?    @map("robots_checked_at") @db.DateTime(3)
+  attemptCount     Int          @default(0) @map("attempt_count")
+  lastAttemptAt    DateTime?    @map("last_attempt_at") @db.DateTime(3)
+  sourceMetadata   Json?        @map("source_metadata")
   retrievedAt      DateTime?    @map("retrieved_at") @db.DateTime(3)
   contentHash      String?      @map("content_hash") @db.Char(64)
   errorCode        String?      @map("error_code") @db.VarChar(100)

@@ -3,6 +3,7 @@ import { PrismaClient, SourceStatus, type WorkflowPlan } from "@prisma/client";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { DatasetRepository } from "../src/db/repositories/dataset.repository.js";
 import { WorkflowExecutionRepository } from "../src/db/repositories/workflow-execution.repository.js";
+import { WorkflowSourceRepository } from "../src/db/repositories/workflow-source.repository.js";
 
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true" && Boolean(process.env.DATABASE_URL);
 const prisma = new PrismaClient();
@@ -46,10 +47,10 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
     const applied = await prisma.$queryRaw<Array<{ migration_name: string }>>`
       SELECT migration_name
       FROM _prisma_migrations
-      WHERE (migration_name LIKE '%_phase2_domain_model' OR migration_name LIKE '%_workspace_membership_state' OR migration_name LIKE '%_workflow_planning_state')
+      WHERE (migration_name LIKE '%_phase2_domain_model' OR migration_name LIKE '%_workspace_membership_state' OR migration_name LIKE '%_workflow_planning_state' OR migration_name LIKE '%_source_governance')
         AND finished_at IS NOT NULL
     `;
-    expect(applied).toHaveLength(3);
+    expect(applied).toHaveLength(4);
   });
 
   it("persists workflows, plans, runs, rows, validation and field-level source provenance", async () => {
@@ -167,6 +168,52 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
     expect(completed.recordsFound).toBe(1);
     expect(completed.sourcesProcessed).toBe(1);
     expect(completed.finishedAt).toBeInstanceOf(Date);
+  });
+
+  it("persists source lifecycle, policy reason, robots result, retries, and deduplicated provenance", async () => {
+    const fixture = await createFixture("source-governance");
+    const sources = new WorkflowSourceRepository(prisma);
+    const input = {
+      workspaceId: fixture.workspace.id,
+      workflowRunId: fixture.run.id,
+      url: fixture.source.url,
+      canonicalUrl: fixture.source.canonicalUrl,
+      canonicalUrlHash: fixture.source.canonicalUrlHash,
+      domain: fixture.source.domain,
+      title: "Robots-blocked source",
+      metadata: { sourceType: "search", snippet: "Search listing excerpt" },
+    };
+    const first = await sources.upsertDiscovered(input);
+    const duplicate = await sources.upsertDiscovered(input);
+    expect(duplicate.id).toBe(first.id);
+
+    await sources.updateLifecycle(fixture.workspace.id, fixture.run.id, fixture.source.canonicalUrlHash, {
+      status: "BLOCKED",
+      code: "ROBOTS_DISALLOW",
+      reason: "robots.txt disallows this path.",
+      robotsStatus: "DISALLOWED",
+      robotsCheckedAt: new Date(),
+      attemptCount: 0,
+    });
+    const persisted = await prisma.source.findUniqueOrThrow({ where: { id: first.id } });
+    expect(persisted).toMatchObject({
+      status: "BLOCKED", errorCode: "ROBOTS_DISALLOW", policyReason: "robots.txt disallows this path.",
+      robotsStatus: "DISALLOWED", attemptCount: 0,
+    });
+    expect(persisted.sourceMetadata).toEqual({ sourceType: "search", snippet: "Search listing excerpt" });
+    expect(persisted.robotsCheckedAt).toBeInstanceOf(Date);
+  });
+
+  it("allows collected sources to back dataset evidence", async () => {
+    const fixture = await createFixture("collected-evidence");
+    await prisma.source.update({ where: { id: fixture.source.id }, data: { status: SourceStatus.COLLECTED } });
+    const row = await repository.insertRowWithEvidence({
+      workspaceId: fixture.workspace.id,
+      datasetId: fixture.dataset.id,
+      values: { company: "Collected Source Fixture" },
+      evidence: [{ sourceId: fixture.source.id, fieldKey: "company", retrievedAt: fixture.source.retrievedAt! }],
+    });
+    expect(row.sourceEvidence[0]?.source.status).toBe(SourceStatus.COLLECTED);
   });
 
   it("enforces version and column uniqueness plus workspace boundaries", async () => {

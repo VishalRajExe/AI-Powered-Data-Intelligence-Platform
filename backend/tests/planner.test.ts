@@ -34,7 +34,7 @@ function makePlan(entity = "job posting"): WorkflowPlanDraft {
     objective: `Collect ${entity} records`,
     constraints: ["Collect only from public sources"],
     sourcePolicy: {
-      permittedSourceTypes: ["job_board", "official_website"], preferredDomains: [], blockedDomains: [],
+      permittedSourceTypes: ["job_board", "official_website"], allowedDomains: [], preferredDomains: [], blockedDomains: [],
       respectRobotsTxt: true, respectSiteTerms: true, allowAuthentication: false, allowCaptchaBypass: false,
       maxRequestsPerDomainPerMinute: 10, policyRationale: "Use public job board pages within site policies.",
     },

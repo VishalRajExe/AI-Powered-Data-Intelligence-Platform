@@ -51,6 +51,7 @@ export class WorkflowExecutionService implements WorkflowExecutionServiceContrac
       result = await this.agentAdapter.execute({
         prompt: input.prompt,
         plan: planned.plan,
+        workspaceId: input.workspaceId,
         runId: run.id,
         ...(input.onEvent ? { onEvent: input.onEvent } : {}),
       });

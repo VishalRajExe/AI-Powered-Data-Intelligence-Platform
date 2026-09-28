@@ -7,6 +7,8 @@ import type { WorkflowPlan } from "../modules/planner/workflow-plan.schema.js";
 import { AgentEventMapper } from "./AgentEventMapper.js";
 import { AgentResultNormalizer } from "./AgentResultNormalizer.js";
 import type { AgentAdapter, AgentConfigurationHealth, AgentExecutionEvent, AgentExecutionInput, AgentResult } from "./types.js";
+import type { SourcePolicyService } from "../modules/sources/SourcePolicyService.js";
+import type { SourceExecutionPolicy, SourcePolicyContext } from "../modules/sources/source-governance.types.js";
 
 interface StreamableFirecrawlAgent {
   stream(params: RunParams): AsyncGenerator<AgentEvent>;
@@ -22,6 +24,7 @@ export class FirecrawlAgentAdapter implements AgentAdapter {
     private readonly logger: Logger,
     private readonly agentFactory: FirecrawlAgentFactory = createAgent,
     private readonly eventMapper = new AgentEventMapper(),
+    private readonly sourcePolicy?: SourcePolicyService,
   ) {}
 
   checkConfiguration(): AgentConfigurationHealth {
@@ -77,7 +80,7 @@ export class FirecrawlAgentAdapter implements AgentAdapter {
       interactTimeoutMs: stepTimeout(input.plan, "INTERACT", 60_000),
     };
     const baseToolkit = buildFirecrawlToolkit(firecrawlApiKey, firecrawlOptions);
-    const toolkit = gateToolkit(baseToolkit, input.plan, this.logger);
+    const toolkit = gateToolkit(baseToolkit, input.plan, this.logger, this.sourcePolicy, input);
     const options: CreateAgentOptions = {
       firecrawlApiKey,
       firecrawlOptions,
@@ -204,7 +207,7 @@ function buildAgentPrompt(prompt: string, plan: WorkflowPlan): string {
   });
   return [
     "Execute the supplied, already-validated workflow plan using only its enabled Firecrawl tools and approved public sources.",
-    "Do not add steps, visit blocked domains, log in, bypass authentication or CAPTCHAs, or ignore robots.txt/site terms. Do not claim data is verified unless it came from tool results.",
+    "Do not add steps, visit blocked domains, log in, bypass authentication or CAPTCHAs, or ignore robots.txt/site terms. When a source is blocked, inaccessible, rate-limited, or fails, record/use the reason and continue with other allowed sources when available. Do not claim data is verified unless it came from tool results.",
     `User request: ${prompt}`,
     `Objective: ${plan.objective}`,
     `Required fields: ${plan.requirement.requiredFields.join(", ") || "none"}`,
@@ -216,6 +219,7 @@ function buildAgentPrompt(prompt: string, plan: WorkflowPlan): string {
     "Approved search queries:",
     ...(queries.length ? queries : ["- Search is not part of this plan; do not use search."]),
     `Preferred domains: ${plan.sourcePolicy.preferredDomains.join(", ") || "none"}`,
+    `Allowed domains: ${plan.sourcePolicy.allowedDomains.join(", ") || "any public domain not blocked by policy"}`,
     `Blocked domains: ${plan.sourcePolicy.blockedDomains.join(", ") || "none"}`,
     `Completion criteria: ${plan.completionCriteria.completionDescription}`,
     "Return JSON exactly as {records:[{values:<extraction schema object>,sourceUrls:[<URLs actually used>]}]}. Every record must cite at least one URL observed in an enabled Firecrawl tool result. Return an empty records array if sources contain no matching data; never fabricate values or sources.",
@@ -232,12 +236,25 @@ function buildExecutionPolicy(plan: WorkflowPlan, enabled: Set<string>): string 
   ].join("\n");
 }
 
-function gateToolkit(base: Toolkit, plan: WorkflowPlan, logger: Logger): Toolkit {
+function gateToolkit(base: Toolkit, plan: WorkflowPlan, logger: Logger, sourcePolicy?: SourcePolicyService, execution?: AgentExecutionInput): Toolkit {
   const recentRequests = new Map<string, number[]>();
   const blocked = plan.sourcePolicy.blockedDomains.map((domain) => domain.toLowerCase().replace(/^\*\./, ""));
   const maxPerMinute = plan.sourcePolicy.maxRequestsPerDomainPerMinute;
   const wrapToolset = (tools: Toolkit["tools"]): Toolkit["tools"] => {
     const wrapped = { ...tools } as Record<string, unknown>;
+    const search = wrapped.search as { execute?: (input: unknown, options?: unknown) => Promise<unknown> } | undefined;
+    if (search?.execute && sourcePolicy && execution?.workspaceId && execution.runId) {
+      const execute = search.execute.bind(search);
+      wrapped.search = {
+        ...search,
+        execute: async (input: unknown, options?: unknown) => {
+          const result = await execute(input, options);
+          return registerAndFilterSearchResults(result, sourcePolicy, {
+            workspaceId: execution.workspaceId!, workflowRunId: execution.runId!, plan,
+          });
+        },
+      };
+    }
     for (const toolName of ["scrape", "interact"]) {
       const tool = wrapped[toolName] as { execute?: (input: unknown, options?: unknown) => Promise<unknown> } | undefined;
       if (!tool?.execute) continue;
@@ -247,6 +264,20 @@ function gateToolkit(base: Toolkit, plan: WorkflowPlan, logger: Logger): Toolkit
         execute: async (input: unknown, options?: unknown) => {
           const rawUrl = asRecord(input).url;
           const url = typeof rawUrl === "string" ? rawUrl : "";
+          if (sourcePolicy && execution?.workspaceId && execution.runId) {
+            const stepType = toolName === "scrape" ? "SCRAPE" : "INTERACT";
+            const step = plan.steps.find(({ type }) => type === stepType);
+            const runParams = options && typeof options === "object" ? options as { abortSignal?: AbortSignal } : {};
+            return sourcePolicy.execute({
+              url,
+              sourceType: toolName as "scrape" | "interact",
+              context: { workspaceId: execution.workspaceId, workflowRunId: execution.runId, plan },
+              timeoutMs: step?.timeoutMs ?? 60_000,
+              retryPolicy: retryPolicy(step?.retryPolicy),
+              operation: (signal) => execute(input, { ...runParams, abortSignal: signal }),
+              ...(runParams.abortSignal ? { signal: runParams.abortSignal } : {}),
+            });
+          }
           const host = publicDomain(url);
           if (!host) return { error: "SOURCE_BLOCKED_BY_POLICY: only public HTTP(S) URLs are allowed" };
           if (blocked.some((domain) => host === domain || host.endsWith(`.${domain}`))) {
@@ -268,6 +299,41 @@ function gateToolkit(base: Toolkit, plan: WorkflowPlan, logger: Logger): Toolkit
     tools: wrapToolset(base.tools),
     ...(base.systemPrompt ? { systemPrompt: base.systemPrompt } : {}),
     ...(base.createFiltered ? { createFiltered: (names?: string[]) => wrapToolset(base.createFiltered!(names)) } : {}),
+  };
+}
+
+async function registerAndFilterSearchResults(result: unknown, sourcePolicy: SourcePolicyService, context: SourcePolicyContext): Promise<unknown> {
+  const process = async (value: unknown): Promise<unknown> => {
+    if (Array.isArray(value)) {
+      const output: unknown[] = [];
+      for (const item of value) {
+        if (isSearchResult(item)) {
+          const decision = await sourcePolicy.discover(item.url ?? item.link!, context, {
+            ...(typeof item.title === "string" ? { title: item.title } : {}),
+            ...(typeof item.description === "string" ? { snippet: item.description } : typeof item.snippet === "string" ? { snippet: item.snippet } : {}),
+          });
+          if (!decision.allowed) continue;
+        }
+        output.push(await process(item));
+      }
+      return output;
+    }
+    if (!value || typeof value !== "object") return value;
+    const output: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value)) output[key] = await process(nested);
+    return output;
+  };
+  return process(result);
+}
+
+function isSearchResult(value: unknown): value is { url?: string; link?: string; title?: string; description?: string; snippet?: string } {
+  const record = asRecord(value);
+  return typeof record.url === "string" || typeof record.link === "string";
+}
+
+function retryPolicy(input: WorkflowPlan["steps"][number]["retryPolicy"] | undefined): SourceExecutionPolicy {
+  return input ?? {
+    maxAttempts: 1, backoff: "none", initialDelayMs: 0, multiplier: 1, maxDelayMs: 0, retryableErrors: [],
   };
 }
 

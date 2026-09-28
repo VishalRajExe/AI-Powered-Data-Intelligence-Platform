@@ -11,6 +11,12 @@ import { createWorkflowPlanner } from "./modules/planner/index.js";
 import { FirecrawlAgentAdapter } from "./agent/FirecrawlAgentAdapter.js";
 import { WorkflowExecutionRepository } from "./db/repositories/workflow-execution.repository.js";
 import { WorkflowExecutionService } from "./modules/workflows/workflow-execution.service.js";
+import { SourcePolicyService } from "./modules/sources/SourcePolicyService.js";
+import { SourceValidator } from "./modules/sources/SourceValidator.js";
+import { RobotsPolicyService } from "./modules/sources/RobotsPolicyService.js";
+import { RateLimitService } from "./modules/sources/RateLimitService.js";
+import { RetryPolicy } from "./modules/sources/RetryPolicy.js";
+import { WorkflowSourceRepository } from "./db/repositories/workflow-source.repository.js";
 
 const config = loadEnvConfig();
 process.env.DATABASE_URL = config.DATABASE_URL;
@@ -21,7 +27,15 @@ const redis = createRedisConnection(config.REDIS_URL);
 const workflowQueue = createWorkflowQueue(redis);
 const requirementParser = createRequirementParser(config, logger);
 const workflowPlanner = createWorkflowPlanner(config, logger, prisma);
-const agentAdapter = new FirecrawlAgentAdapter(config, logger);
+const sourcePolicy = new SourcePolicyService(
+  new SourceValidator(),
+  new RobotsPolicyService({ userAgent: config.SOURCE_ROBOTS_USER_AGENT, timeoutMs: config.SOURCE_ROBOTS_TIMEOUT_MS }),
+  new RateLimitService({ eval: (script, numberOfKeys, ...args) => redis.eval(script, numberOfKeys, ...args.map(String)) }),
+  new RetryPolicy(),
+  new WorkflowSourceRepository(prisma),
+  logger,
+);
+const agentAdapter = new FirecrawlAgentAdapter(config, logger, undefined, undefined, sourcePolicy);
 const app = createApp({
   config,
   logger,

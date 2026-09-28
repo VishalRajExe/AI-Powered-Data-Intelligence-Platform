@@ -104,6 +104,25 @@ real Search/agent request and may incur provider usage. The execution endpoint
 currently waits for the agent in the HTTP request; durable queue execution,
 SSE delivery, persisted per-step events, cancellation, and dataset-row writes
 remain later workflow phases. `respectRobotsTxt` and site terms are passed as
-execution instructions; this adapter does not yet fetch and enforce robots.txt
-rules itself. Authentication remains inactive, so `createdById` is caller
+execution instructions; the source-governance layer below checks robots.txt
+before each Scrape/Interact request. Authentication remains inactive, so `createdById` is caller
 supplied and must be bound to an authenticated identity before production use.
+
+## Source governance
+
+Workflow plans support optional `sourcePolicy.allowedDomains` as an allowlist;
+`blockedDomains` always takes precedence. Exact domains and their subdomains are
+matched. Search results outside the plan's domain policy are persisted with a
+reason and removed from the agent-visible results. Before each Scrape/Interact
+request, the backend validates the public URL, checks and caches the origin's
+`robots.txt`, applies any `Crawl-delay`, and obtains a Redis-backed per-domain
+rate-limit permit. Robots retrieval failures fail closed. A source is persisted
+through `DISCOVERED`, `ALLOWED`, `QUEUED`, `PROCESSING`, and `COLLECTED`, or
+ends as `BLOCKED`, `SKIPPED`, or `FAILED` with a policy/error reason. Duplicate
+normalized URLs within a run share one source record. Search title/snippet,
+robots status/check time, attempts, and decision reasons are stored without
+storing full page bodies. `SOURCE_ROBOTS_USER_AGENT` and
+`SOURCE_ROBOTS_TIMEOUT_MS` configure robots checks. Failed or excluded sources
+are reported to the agent so it can continue with other permitted candidates;
+the policy layer does not attempt authentication, CAPTCHA/paywall access, or
+anti-bot evasion.

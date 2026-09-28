@@ -70,6 +70,7 @@ export interface AgentConfigurationHealth {
 export interface AgentExecutionInput {
   prompt: string;
   plan: WorkflowPlan;
+  workspaceId?: string;
   runId?: string;
   onEvent?: (event: AgentExecutionEvent) => void;
 }
