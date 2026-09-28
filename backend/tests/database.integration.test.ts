@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { PrismaClient, SourceStatus, type WorkflowPlan } from "@prisma/client";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { DatasetRepository } from "../src/db/repositories/dataset.repository.js";
+import { WorkflowExecutionRepository } from "../src/db/repositories/workflow-execution.repository.js";
 
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true" && Boolean(process.env.DATABASE_URL);
 const prisma = new PrismaClient();
@@ -125,6 +126,47 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
       take: 20,
     });
     expect(page.map(({ id }) => id)).toContain(inserted.id);
+  });
+
+  it("creates and finalizes an execution run from a persisted workflow plan", async () => {
+    const fixture = await createFixture("execution");
+    const executions = new WorkflowExecutionRepository(prisma);
+    const created = await executions.createRun({
+      workspaceId: fixture.workspace.id,
+      createdById: fixture.user.id,
+      workflowId: fixture.workflow.id,
+      planVersion: fixture.plan.version,
+    });
+    const running = await prisma.workflowRun.findUniqueOrThrow({ where: { id: created.id } });
+    expect(running.status).toBe("RUNNING");
+    expect(running.workflowPlanId).toBe(fixture.plan.id);
+
+    await executions.completeRun(created.id, {
+      status: "COMPLETED",
+      data: { records: [{ values: { company: "Execution Fixture" } }] },
+      records: [{ values: { company: "Execution Fixture" }, sourceUrls: [fixture.source.canonicalUrl] }],
+      sources: [{
+        url: fixture.source.canonicalUrl,
+        canonicalUrl: fixture.source.canonicalUrl,
+        domain: fixture.source.domain,
+        title: fixture.source.title ?? "Integration source",
+        sourceType: "scrape",
+        retrievedAt: fixture.source.retrievedAt!.toISOString(),
+        verifiedByTool: true,
+      }],
+      execution: {
+        provider: "mock", model: "mock-agent", startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(), durationMs: 10, inputTokens: 0,
+        outputTokens: 0, totalTokens: 0, toolCallCount: 1, toolsUsed: ["scrape"],
+      },
+      events: [], errors: [],
+    });
+    const completed = await prisma.workflowRun.findUniqueOrThrow({ where: { id: created.id } });
+    expect(completed.status).toBe("COMPLETED");
+    expect(completed.progress).toBe(100);
+    expect(completed.recordsFound).toBe(1);
+    expect(completed.sourcesProcessed).toBe(1);
+    expect(completed.finishedAt).toBeInstanceOf(Date);
   });
 
   it("enforces version and column uniqueness plus workspace boundaries", async () => {

@@ -8,6 +8,9 @@ import { createRedisConnection } from "./queue/connection.js";
 import { createWorkflowQueue } from "./queue/workflowQueue.js";
 import { createRequirementParser } from "./modules/requirements/index.js";
 import { createWorkflowPlanner } from "./modules/planner/index.js";
+import { FirecrawlAgentAdapter } from "./agent/FirecrawlAgentAdapter.js";
+import { WorkflowExecutionRepository } from "./db/repositories/workflow-execution.repository.js";
+import { WorkflowExecutionService } from "./modules/workflows/workflow-execution.service.js";
 
 const config = loadEnvConfig();
 process.env.DATABASE_URL = config.DATABASE_URL;
@@ -16,11 +19,16 @@ const logger = createLogger(config.LOG_LEVEL, config.APP_ENV);
 const prisma = createPrismaClient();
 const redis = createRedisConnection(config.REDIS_URL);
 const workflowQueue = createWorkflowQueue(redis);
+const requirementParser = createRequirementParser(config, logger);
+const workflowPlanner = createWorkflowPlanner(config, logger, prisma);
+const agentAdapter = new FirecrawlAgentAdapter(config, logger);
 const app = createApp({
   config,
   logger,
-  requirementParser: createRequirementParser(config, logger),
-  workflowPlanner: createWorkflowPlanner(config, logger, prisma),
+  requirementParser,
+  workflowPlanner,
+  workflowExecution: new WorkflowExecutionService(requirementParser, workflowPlanner, agentAdapter, new WorkflowExecutionRepository(prisma)),
+  agentAdapter,
   readiness: {
     mysql: () => prisma.$queryRaw`SELECT 1`,
     redis: () => redis.ping(),

@@ -117,6 +117,8 @@ export interface AgentConfig {
 // --- Agent Core public API types ---
 
 export interface FirecrawlToolsConfig {
+  /** Firecrawl API base URL; forwarded to firecrawl-aisdk when configured. */
+  apiUrl?: string;
   /** Defaults for search, or false to disable */
   search?: Record<string, unknown> | false;
   /** Defaults for scrape, or false to disable */

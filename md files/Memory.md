@@ -4,9 +4,9 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 4 — Dynamic workflow planner complete.
-- **Last updated:** 2026-09-27.
-- **App runnable end-to-end:** Backend, requirement parsing, and persisted workflow planning are implemented. Collection execution remains out of scope until a later phase.
+- **Current Phase:** Phase 5 — Firecrawl Agent Core integration complete.
+- **Last updated:** 2026-09-28.
+- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, Firecrawl Agent Core execution, result normalization, and run status persistence are wired. Live provider verification is opt-in.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
@@ -16,6 +16,7 @@
 - [x] Phase 2 — Workspace-scoped domain schema, two Prisma migrations, development seed, dataset row/provenance repository, and MySQL integration tests.
 - [x] Phase 3 — Strict requirement schemas, configurable structured-output provider, prompt template, ambiguity/validation result, and `POST /api/v1/requirements/parse`.
 - [x] Phase 4 — Strict versioned workflow plan schema, configurable LLM planner with one validation-correction attempt, workspace membership check, planning lifecycle persistence, and `POST /api/v1/workflows/plan`. No collection steps are executed.
+- [x] Phase 5 — `FirecrawlAgentAdapter`, `MockAgentAdapter`, event/result normalization, Firecrawl configuration health check, `POST /api/v1/workflows/execute`, workflow run persistence, and prompt-to-agent end-to-end mock coverage.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -32,6 +33,8 @@
 | 2026-09-27 | Return `needs_clarification` for unresolved entity, objective, fields, or explicit ambiguity; fail closed on malformed model output or provider errors. | Prevents invented requirements and ensures this stage cannot silently perform web collection. |
 | 2026-09-27 | Add a separate workflow-planning service that uses the same Agent Core model resolver, only accepts the fixed step vocabulary, validates generated JSON with Zod, retries one invalid plan with issue feedback, and saves only validated versioned plans. | Keeps requirement understanding separate from planning, prohibits untrusted tool names, and makes the generated workflow inspectable before any execution phase. |
 | 2026-09-27 | Persist workflow planning lifecycle (`NOT_STARTED`, `PLANNING`, `PLANNED`, `FAILED`) and sanitized failure details on Workflow; save the structured requirement and completion criteria in each WorkflowPlan. | Makes planning failures durable and allows plan versions to retain a complete input/output audit record. |
+| 2026-09-28 | Use Firecrawl Agent Core via a typed adapter and derive Search/Scrape/Interact availability from the validated workflow plan. | Retains Firecrawl's agent loop, provider selection, structured output, skills, subagents and stream while keeping business workflow policy in this platform. Map/crawl remain disabled; no large Agent Core implementation was copied. |
+| 2026-09-28 | Keep routine tests provider-independent and add a separately gated live Agent Core test. | `MockAgentAdapter` exercises the whole parse → plan → run → normalized response contract without paid calls. |
 
 ## 4. Database / Schema Changes
 
@@ -43,20 +46,27 @@
 - Database tests run against local `aidp_dev` MySQL using credentials supplied transiently to the shell; credentials are not stored in source, `.env`, or this file.
 - Requirement schema, provider, service, prompt, and route are under `backend/src/modules/requirements/` and `backend/src/routes/requirements.routes.ts`. API path is `POST /api/v1/requirements/parse`.
 - Planner schema/provider/service/prompt are under `backend/src/modules/planner/`; persistence is in `backend/src/db/repositories/workflow-planner.repository.ts`, and the endpoint is in `backend/src/routes/workflows.routes.ts`.
+- Agent contract/adapters/normalizer/event mapper are in `backend/src/agent/`. Firecrawl execution consumes only tools represented by the persisted validated plan. The platform wrapper constrains explicit blocked domains, public HTTP(S) targets, and per-domain Scrape/Interact request ceilings. Existing core supplies `structured-extraction`; Firecrawl tool parsing reuses the core's `parseToolResult` utility.
+- `backend/src/modules/workflows/workflow-execution.service.ts` connects requirement parsing → planning → persisted run → agent → result normalization. `WorkflowExecutionRepository` validates active workspace membership and persists final status, counts, error summary, and timestamps. No schema migration was needed.
+- API additions: `GET /health/firecrawl` checks configuration only; `POST /api/v1/workflows/execute` performs the integrated flow. Result records preserve structured values and tool-observed source URLs/metadata; execution details include provider/model, timing, usage, tools, events, and sanitized errors.
+- Added a gated live test at `backend/tests/agent.integration.test.ts` (`RUN_FIRECRAWL_INTEGRATION_TESTS=true`) and a regular mocked end-to-end test. Firecrawl Agent Core vendored type gained `apiUrl` pass-through for configured Firecrawl base URL.
 
 ## 5. Known Bugs / Issues / Verification Limits
 
 - The live integration tests ran successfully against the installed MySQL 9.6 service. MySQL 8.4 remains the version in `docker-compose.yml`; Docker is unavailable here, so that exact service version was not started.
 - Redis is not running locally; readiness was not rechecked in this phase. Phase 1 records that `/ready` returns 503 when required services are unavailable.
 - Integration tests require `RUN_DATABASE_TESTS=true` and a migrated disposable database. The normal `npm test` run skips these integration checks when that flag is absent.
-- No live LLM request was made because no provider credentials are configured in this workspace. Parser and planner behavior/failures are covered with injected provider fixtures; live model behavior remains unverified.
+- No live Firecrawl/LLM request was run during Phase 5; the regular suite uses mocks. Live provider behavior remains unverified until the gated test is deliberately enabled with valid keys. Secrets supplied in chat were not written to files, logs, or this memory; rotate them before ongoing use.
+- Workflow execution currently runs synchronously in the HTTP request. BullMQ-backed execution, SSE, cancellation, persisted per-step progress, and writing normalized records/evidence into Dataset/DatasetRow are future work.
+- `respectRobotsTxt` and site terms are included in the execution instructions but are not independently fetched/enforced by the adapter yet. Search excludes blocked domains through Firecrawl Search; Scrape/Interact enforce blocked domains, public URL checks, and the configured request ceiling.
+- Authentication remains inactive; execution caller supplies `createdById`, which is checked for active workspace membership. Bind it to the authenticated principal when auth is implemented.
 - No `.env` file exists. `.env.example` contains placeholders.
 - The requested remote is configured as `origin`; no credential values are stored in project files.
 
 ## 6. Pending Work / Next Steps
 
-- Stop after Phase 4 as requested; wait for the next phase prompt.
-- The planner endpoint creates and persists an inspectable workflow plan but does not enqueue a job, invoke Firecrawl, or scrape.
+- Stop after Phase 5 as requested; wait for the next phase prompt.
+- Next appropriate work phase should address background execution/status streaming, dataset row/evidence persistence and the remaining collection lifecycle, following the phase prompt rather than implementing ahead.
 - Authentication is not implemented. For now `createdById` is supplied by the caller and checked against active workspace membership; a future auth phase must bind it to an authenticated principal.
 - `Phases.md` uses older phase numbering; follow the user's current phase prompts and do not build its later planner phase early.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
@@ -69,7 +79,7 @@
 - **Checks:** `npm run typecheck`; `npm run lint`; `npm test`; `npm run test:db` with `RUN_DATABASE_TESTS=true` and `DATABASE_URL`; `npm run build`; `npm audit`.
 - **Schema validation:** `npm run db:validate`.
 - **Environment variables:** `APP_ENV`, `PORT`, `FRONTEND_ORIGIN`, `LOG_LEVEL`, `REQUEST_BODY_LIMIT`, `DATABASE_URL` or `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE`, `REDIS_URL`, `FIRECRAWL_API_KEY`, `FIRECRAWL_BASE_URL`, `LLM_PROVIDER`, `LLM_MODEL_ID`, provider credentials, and paired `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` when auth is introduced.
-- **API:** `GET /health`, `GET /ready`, `POST /api/v1/requirements/parse`, and `POST /api/v1/workflows/plan`. Both AI routes require configured `LLM_PROVIDER`, `LLM_MODEL_ID`, and provider credential. Planning requires active workspace membership, returns a persisted plan, and does not execute collection. Authentication and collection execution are not active.
+- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, and `POST /api/v1/workflows/execute`. Execution requires Firecrawl and selected-provider credentials, plans and runs synchronously, and persists workflow-run outcome metadata. Auth is not active; datasets/rows/evidence are not written by execution yet.
 - **Data services:** `docker-compose.yml` defines local MySQL 8.4 and Redis 7.
 
 ## 8. Notes for the Next AI Session
@@ -81,4 +91,4 @@
 
 ## 9. Last Session Summary
 
-Completed Phase 4. Added a strict typed plan contract with safe step vocabulary, bounded retry/timeouts, source policy, extraction/transform/validation/deduplication schemas, and completion criteria. The planner uses the configured Agent Core model resolver and structured output, validates against Zod, provides one correction attempt, and persists version 1 plus success/failure lifecycle details in MySQL. Added `POST /api/v1/workflows/plan`; it does not execute web collection. Tests cover valid and requirement-specific plans, malformed and unsupported output, absent extraction/completion contracts, retry validation, ambiguity, API validation, and MySQL plan persistence. Typecheck, lint, 33 unit tests, 3 MySQL integration tests, and build passed. No live LLM call was possible without provider credentials; MySQL verification used the local MySQL 9.6 service. No `.env` was created. Stop and wait for the next phase.
+Completed Phase 5. Added `FirecrawlAgentAdapter`, plan-driven Search/Scrape/Interact tool gating, structured output, structured-extraction skill, streamed event mapping, source/result normalization, safe error translation, provider configuration health, mock adapter, and integrated execution API. Prompt → requirement parser → planner → validated persisted plan → run → agent → normalized result is covered with a deterministic full-flow test. Added optional paid live integration coverage and MySQL run lifecycle persistence coverage. Final verification: typecheck, lint, build passed; regular tests: 41 passed and 5 skipped; MySQL tests: 4 passed. No live provider call was made. Robots enforcement, queue/SSE/cancellation, per-step event persistence, and dataset row/evidence writes remain future work. Do not store or echo credentials shared in the conversation. Stop and wait for the next phase.

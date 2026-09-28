@@ -76,3 +76,34 @@ bounded retries/timeouts, permitted-source policy, extraction schema, typed
 transform/validation/deduplication rules, and measurable completion criteria.
 Unsupported step types, missing fields, missing extraction schema, and missing
 completion criteria are rejected before persistence.
+
+## Workflow execution and Firecrawl Agent Core
+
+`POST /api/v1/workflows/execute` accepts `{ "prompt": "...", "workspaceId": "...", "createdById": "..." }`.
+It runs requirement analysis, stops with `422` when clarification is needed,
+generates and persists a validated workflow plan, creates a workspace-checked
+workflow run, executes the plan through `FirecrawlAgentAdapter`, normalizes the
+Agent Core result, and persists the run status/counts. The response includes the
+workflow and run IDs, parsed requirement, validated plan, structured records,
+tool-observed sources, execution metadata, events, and sanitized errors.
+
+The adapter uses the vendored MIT Firecrawl Agent Core for Search, Scrape,
+Interact, structured output, skills, and streamed events. It enables only the
+Search/Scrape/Interact tools present in the validated plan; map and crawl are
+disabled. The `structured-extraction` skill is supplied to the core. The adapter
+also blocks explicitly excluded domains and non-public/local URL targets, and
+applies the plan's per-domain request ceiling to Scrape and Interact calls.
+`GET /health/firecrawl` reports whether the Firecrawl and selected LLM provider
+configuration is present; it does not make a paid external request. Normal unit
+tests use `MockAgentAdapter` and do not call either provider.
+
+For a deliberate live smoke test, configure `FIRECRAWL_API_KEY`,
+`LLM_PROVIDER`, `LLM_MODEL_ID`, and that provider's key, then set
+`RUN_FIRECRAWL_INTEGRATION_TESTS=true` and run `npm test`. This test makes a
+real Search/agent request and may incur provider usage. The execution endpoint
+currently waits for the agent in the HTTP request; durable queue execution,
+SSE delivery, persisted per-step events, cancellation, and dataset-row writes
+remain later workflow phases. `respectRobotsTxt` and site terms are passed as
+execution instructions; this adapter does not yet fetch and enforce robots.txt
+rules itself. Authentication remains inactive, so `createdById` is caller
+supplied and must be bound to an authenticated identity before production use.

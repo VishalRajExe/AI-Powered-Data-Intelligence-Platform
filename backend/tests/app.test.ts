@@ -26,6 +26,8 @@ function makeApp(mysql: () => Promise<unknown> = async () => 1, redis: () => Pro
     logger: pino({ enabled: false }),
     requirementParser: { parse: async () => { throw new Error("Requirement parser not used in this test"); } },
     workflowPlanner: { plan: async () => { throw new Error("Workflow planner not used in this test"); } },
+    workflowExecution: { execute: async () => { throw new Error("Workflow execution not used in this test"); } },
+    agentAdapter: { checkConfiguration: () => ({ configured: false, provider: "google", model: null, missing: ["FIRECRAWL_API_KEY"] }), execute: async () => { throw new Error("Agent not used in this test"); } },
     readiness: { mysql, redis },
   });
 }
@@ -43,6 +45,15 @@ describe("foundation API", () => {
     const response = await request(app).get("/ready");
     expect(response.status).toBe(503);
     expect(response.body.dependencies).toEqual({ mysql: "unavailable", redis: "ok" });
+  });
+
+  it("reports Firecrawl configuration separately from core service readiness", async () => {
+    const app = makeApp();
+    const response = await request(app).get("/health/firecrawl");
+    expect(response.status).toBe(503);
+    expect(response.body.status).toBe("not_configured");
+    expect(response.body.missing).toContain("FIRECRAWL_API_KEY");
+    expect(response.text).not.toContain("test-key");
   });
 
   it("returns request IDs and does not expose exception details", async () => {

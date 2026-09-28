@@ -150,6 +150,8 @@ describe("workflow planning", () => {
     const config = loadEnvConfig({ APP_ENV: "test", MYSQL_HOST: "localhost", MYSQL_PORT: "3306", MYSQL_USER: "aidp", MYSQL_PASSWORD: "", MYSQL_DATABASE: "aidp_test" });
     const app = createApp({
       config, logger: pino({ enabled: false }), workflowPlanner: service,
+      workflowExecution: { execute: async () => { throw new Error("Workflow execution not used in this test"); } },
+      agentAdapter: { checkConfiguration: () => ({ configured: true, provider: "mock", model: "mock", missing: [] }), execute: async () => { throw new Error("Agent not used in this test"); } },
       requirementParser: { parse: async () => { throw new Error("not used"); } },
       readiness: { mysql: async () => 1, redis: async () => "PONG" },
     });

@@ -1,15 +1,27 @@
 import { Router } from "express";
+import type { AgentConfigurationHealth } from "../agent/types.js";
 
 export interface ReadinessProbes {
   mysql: () => Promise<unknown>;
   redis: () => Promise<unknown>;
 }
 
-export function createHealthRouter(probes: ReadinessProbes): Router {
+export function createHealthRouter(probes: ReadinessProbes, checkAgent: () => AgentConfigurationHealth): Router {
   const router = Router();
 
   router.get("/health", (_request, response) => {
     response.status(200).json({ status: "ok", service: "api", timestamp: new Date().toISOString() });
+  });
+
+  router.get("/health/firecrawl", (_request, response) => {
+    const configuration = checkAgent();
+    response.status(configuration.configured ? 200 : 503).json({
+      status: configuration.configured ? "configured" : "not_configured",
+      provider: configuration.provider,
+      model: configuration.model,
+      missing: configuration.missing,
+      timestamp: new Date().toISOString(),
+    });
   });
 
   router.get("/ready", async (_request, response) => {

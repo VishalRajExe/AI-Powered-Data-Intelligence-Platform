@@ -11,6 +11,8 @@ import { createRequirementsRouter } from "./routes/requirements.routes.js";
 import type { RequirementParser } from "./modules/requirements/parser.service.js";
 import { createWorkflowsRouter } from "./routes/workflows.routes.js";
 import type { WorkflowPlanner } from "./modules/planner/planner.service.js";
+import type { AgentAdapter } from "./agent/types.js";
+import type { WorkflowExecutionServiceContract } from "./modules/workflows/workflow-execution.service.js";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -18,6 +20,8 @@ export interface AppDependencies {
   readiness: ReadinessProbes;
   requirementParser: RequirementParser;
   workflowPlanner: WorkflowPlanner;
+  workflowExecution: WorkflowExecutionServiceContract;
+  agentAdapter: AgentAdapter;
 }
 
 export function createApp(dependencies: AppDependencies): express.Express {
@@ -40,9 +44,9 @@ export function createApp(dependencies: AppDependencies): express.Express {
     },
   }));
   app.use(express.json({ limit: dependencies.config.REQUEST_BODY_LIMIT }));
-  app.use(createHealthRouter(dependencies.readiness));
+  app.use(createHealthRouter(dependencies.readiness, () => dependencies.agentAdapter.checkConfiguration()));
   app.use("/api/v1", createRequirementsRouter(dependencies.requirementParser));
-  app.use("/api/v1", createWorkflowsRouter(dependencies.workflowPlanner));
+  app.use("/api/v1", createWorkflowsRouter(dependencies.workflowPlanner, dependencies.workflowExecution));
   app.use(notFoundHandler());
   app.use(createErrorHandler(dependencies.logger));
   return app;

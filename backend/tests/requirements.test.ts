@@ -232,6 +232,8 @@ describe("natural-language requirement parsing", () => {
       logger: pino({ enabled: false }),
       requirementParser: parser,
       workflowPlanner: { plan: async () => { throw new Error("Workflow planner not used in this test"); } },
+      workflowExecution: { execute: async () => { throw new Error("Workflow execution not used in this test"); } },
+      agentAdapter: { checkConfiguration: () => ({ configured: false, provider: "google", model: null, missing: ["FIRECRAWL_API_KEY"] }), execute: async () => { throw new Error("Agent not used in this test"); } },
       readiness: { mysql: async () => 1, redis: async () => "PONG" },
     });
 
