@@ -19,6 +19,8 @@ import { RateLimitService } from "./modules/sources/RateLimitService.js";
 import { RetryPolicy } from "./modules/sources/RetryPolicy.js";
 import { WorkflowSourceRepository } from "./db/repositories/workflow-source.repository.js";
 import { DatasetQueryRepository } from "./db/repositories/dataset-query.repository.js";
+import { WorkflowHistoryRepository } from "./db/repositories/workflow-history.repository.js";
+import { WorkflowEventBroadcaster } from "./modules/monitoring/event-broadcaster.js";
 
 const config = loadEnvConfig();
 process.env.DATABASE_URL = config.DATABASE_URL;
@@ -26,6 +28,13 @@ process.env.DATABASE_URL = config.DATABASE_URL;
 const logger = createLogger(config.LOG_LEVEL, config.APP_ENV);
 const prisma = createPrismaClient();
 const redis = createRedisConnection(config.REDIS_URL);
+const redisSubscriber = redis.duplicate();
+const eventBroadcaster = new WorkflowEventBroadcaster(prisma, {
+  redisPublisher: redis,
+  redisSubscriber,
+  logger,
+});
+const workflowHistoryRepository = new WorkflowHistoryRepository(prisma);
 const workflowQueue = createWorkflowQueue(redis);
 const requirementParser = createRequirementParser(config, logger);
 const workflowPlanner = createWorkflowPlanner(config, logger, prisma);
@@ -38,7 +47,7 @@ const sourcePolicy = new SourcePolicyService(
   logger,
 );
 const agentAdapter = new FirecrawlAgentAdapter(config, logger, undefined, undefined, sourcePolicy);
-const workflowRepository = new WorkflowExecutionRepository(prisma);
+const workflowRepository = new WorkflowExecutionRepository(prisma, eventBroadcaster);
 const datasetQueryRepository = new DatasetQueryRepository(prisma);
 const workflowRunner = new WorkflowRunner(workflowRepository, agentAdapter, logger);
 const workflowWorker = createWorkflowWorker<{ runId: string }>(redis, async (job) => {
@@ -58,6 +67,8 @@ const app = createApp({
   workflowPlanner,
   workflowExecution: new WorkflowExecutionService(requirementParser, workflowPlanner, workflowRepository, workflowQueue),
   workflowRunRepository: workflowRepository,
+  workflowHistoryRepository,
+  eventBroadcaster,
   datasetQueryRepository,
   agentAdapter,
   readiness: {
@@ -80,7 +91,7 @@ async function shutdown(signal: string): Promise<void> {
   forceExit.unref();
   server.close(async (error) => {
     if (error) logger.error({ err: error }, "HTTP server close failed");
-    await Promise.allSettled([workflowWorker.close(), workflowQueue.close(), redis.quit(), prisma.$disconnect()]);
+    await Promise.allSettled([workflowWorker.close(), workflowQueue.close(), redis.quit(), redisSubscriber.quit(), prisma.$disconnect()]);
     clearTimeout(forceExit);
     process.exit(error ? 1 : 0);
   });

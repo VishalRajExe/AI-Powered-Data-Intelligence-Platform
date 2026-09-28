@@ -4,9 +4,9 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 10 — Source and Evidence Explorer complete.
+- **Current Phase:** Phase 11 — Workflow History and Live Monitoring complete.
 - **Last updated:** 2026-09-28.
-- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, and Source and Evidence Explorer APIs (`GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, and nested `/api/v1/datasets/:id/rows/:rowId/evidence`) are wired and verified.
+- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, Source and Evidence Explorer APIs, persistent Workflow and Run history views, and Server-Sent Events (SSE) live progress monitoring with Redis Pub/Sub cross-process event propagation (`GET /api/v1/runs/:id/events`, `GET /api/v1/runs/:id/activity`, `GET /api/v1/workflows`, `GET /api/v1/workflows/:id`, `GET /api/v1/workflows/:id/runs`) are wired and verified.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
@@ -22,6 +22,7 @@
 - [x] Phase 8 — Integrated relevant Web Research Agent URL relevance concepts in native TypeScript around Firecrawl Search; added normalization, field-aware validation, conservative deduplication/entity resolution, conflict handling, provenance quality metrics, MySQL persistence, and integration tests. Firecrawl remains the primary collection engine.
 - [x] Phase 9 — Dataset Management: Full business data layer. Implemented `DatasetQueryRepository` and Express routes for `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, and `GET /api/v1/sources/:id`. Coexists dynamic JSON rows with indexed relational columns, prevents SQL/JSON injection via schema-aware validation, supports pagination, text search, dynamic field filters, valid-only, duplicates-only, sorting, and full source/evidence lineage.
 - [x] Phase 10 — Source and Evidence Explorer: Explainable and source-backed provenance at row and field granularity. Implemented domain models (`SourceDetail`, `SourceEvidence`, `DatasetRowSource`, `FieldEvidence`, `RowEvidenceExplorerResponse`) and `ProvenanceService`. Preserves URL, domain, page title, `retrievedAt`, `sourceType`, workflow run, extraction step, evidence snippet, and source status. Implemented `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, and `GET /api/v1/rows/:id/evidence` (with alias `/api/v1/datasets/:id/rows/:rowId/evidence`). Supports multi-source row provenance (e.g., Company from Source A, Website from Source B), prevents claiming a source verifies a value if the snippet contains unrelated content (`isVerified: false`), and preserves conflict history where different sources disagree.
+- [x] Phase 11 — Workflow History and Live Monitoring: Persistent workflow and run history views and real-time live monitoring. Implemented `WorkflowHistoryRepository` exposing Workflow view (name, prompt, created time, last run summary, status, dataset summary, runs count) and WorkflowRun view (started, completed, duration, records found, records accepted, duplicates, failures, source count, dataset summary, steps). Standardized canonical activity actions (`PLANNING_STARTED`, `PLAN_CREATED`, `SOURCE_DISCOVERY_STARTED`, `SOURCE_DISCOVERED`, `SCRAPE_STARTED`, `SCRAPE_COMPLETED`, `EXTRACTION_STARTED`, `RECORDS_EXTRACTED`, `VALIDATION_COMPLETED`, `DEDUPLICATION_COMPLETED`, `DATASET_CREATED`, `RUN_COMPLETED`, `RUN_FAILED`). Implemented `WorkflowEventBroadcaster` with durable MySQL `ActivityEvent` persistence before Redis Pub/Sub and in-process broadcasting (no history kept only in memory). Implemented SSE endpoint `GET /api/v1/runs/:id/events` for frontend `EventSource` consumption with historical replay, Redis cross-process event distribution, and 15s keepalive heartbeats.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -51,6 +52,8 @@
 | 2026-09-28 | Combine relational indexed columns with safe parameterised MySQL queries for dynamic JSON fields and full-text search. | Column keys are pre-validated against registered `DatasetColumn` schema to prevent SQL/JSON path injection; keyword `values` is escaped with backticks in raw queries; search uses escaped LIKE parameter binding. |
 | 2026-09-28 | Field-level explainability via `ProvenanceService.buildRowEvidenceExplorer`. | Maps extracted row fields to supporting sources and citations, evaluates token containment to prevent false verification claims (`isVerified: false`), and surfaces quality/schema conflict history. |
 | 2026-09-28 | Expose top-level `GET /api/v1/rows/:id/evidence` with nested `GET /api/v1/datasets/:id/rows/:rowId/evidence` alias. | Conforms to Phase 10 specification while preserving backward compatibility with dataset-scoped paths. |
+| 2026-09-28 | Persist all workflow activity events durably in MySQL `activity_events` before publishing to pub/sub. | Guarantees auditability and replayability; prevents losing run events or keeping workflow history only in volatile memory across worker/server restarts. |
+| 2026-09-28 | Implement live run monitoring via Server-Sent Events (`GET /api/v1/runs/:id/events`) using standard EventSource format with Redis Pub/Sub cross-process distribution and event deduplication. | Replays historical activity on connection, receives live events across multiple API/worker nodes via Redis channel `aidp:run:${runId}:events`, deduplicates via bounded set, and maintains keepalive comments every 15s. |
 
 ## 4. Database / Schema Changes
 
@@ -118,7 +121,7 @@
 
 ## 7. Pending Work / Next Steps
 
-- Phase 10 implementation is complete. Stop here; do not start Phase 11 until explicitly requested.
+- Phase 11 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
 - Authentication is not implemented. For now `createdById` is supplied by the caller and checked against active workspace membership; a future auth phase must bind it to an authenticated principal.
 - `Phases.md` uses older phase numbering; follow the user's current phase prompts and do not build its later planner phase early.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
@@ -131,7 +134,7 @@
 - **Checks:** `npm run typecheck`; `npm run lint`; `npm test`; `npm run test:db` with `RUN_DATABASE_TESTS=true` and `DATABASE_URL`; `npm run build`; `npm audit`.
 - **Schema validation:** `npm run db:validate`.
 - **Environment variables:** `APP_ENV`, `PORT`, `FRONTEND_ORIGIN`, `LOG_LEVEL`, `REQUEST_BODY_LIMIT`, `SOURCE_ROBOTS_USER_AGENT`, `SOURCE_ROBOTS_TIMEOUT_MS`, `DATABASE_URL` or `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE`, `REDIS_URL`, `FIRECRAWL_API_KEY`, `FIRECRAWL_BASE_URL`, `LLM_PROVIDER`, `LLM_MODEL_ID`, provider credentials, and paired `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` when auth is introduced.
-- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/steps`, `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, and `GET /api/v1/datasets/:id/rows/:rowId/evidence`. Long runs are queued; `SAVE` persists datasets, rows, and row-level evidence through `DatasetRepository`. Auth is not active.
+- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/workflows`, `GET /api/v1/workflows/:id`, `GET /api/v1/workflows/:id/runs`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/steps`, `GET /api/v1/runs/:id/activity`, `GET /api/v1/runs/:id/events`, `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, and `GET /api/v1/datasets/:id/rows/:rowId/evidence`. Long runs are queued; `SAVE` persists datasets, rows, and row-level evidence through `DatasetRepository`. Live monitoring connects via EventSource SSE. Auth is not active.
 - **Data services:** `docker-compose.yml` defines local MySQL 8.4 and Redis 7.
 
 ## 9. Notes for the Next AI Session
@@ -143,15 +146,27 @@
 
 ## 10. Last Session Summary
 
-Phase 10 (Source and Evidence Explorer) completed. Implemented the complete explainability layer answering "Where did this data come from?" at dataset, row, and field granularities:
-- Domain models and types in `backend/src/modules/evidence/` (`SourceDetail`, `SourceEvidence`, `DatasetRowSource`, `FieldEvidence`, `RowEvidenceExplorerResponse`).
-- Field-level citation aggregation and conflict tracking via `ProvenanceService.buildRowEvidenceExplorer`.
-- Verified snippet checking via `isSnippetVerifyingValue` ensuring sources without matching content are not marked as verifying values (`isVerified: false`).
-- Preservation of conflicting values and citations where multiple sources disagree.
-- Preserved metadata: URL, domain, page title, `retrievedAt`, `sourceType`, workflow run ID, extraction step, evidence snippet, and source status.
-- Endpoints wired and verified:
-  - `GET /api/v1/datasets/:id/sources` (paginated dataset sources with title, domain, snippet, count)
-  - `GET /api/v1/sources/:id` (full source details with associated evidence records)
-  - `GET /api/v1/rows/:id/evidence` (complete row evidence explorer with field-by-field citations, snippet verification, and conflict detection)
-  - `GET /api/v1/datasets/:id/rows/:rowId/evidence` (nested alias)
-- Verification passed: 117 automated tests passing across 11 test suites (including 11 dedicated Phase 10 source/evidence explorer tests), 0 ESLint errors, clean typecheck, and successful production build.
+Phase 11 (Workflow History and Live Monitoring) completed. Built the persistent workflow lifecycle monitoring infrastructure and live SSE streaming:
+- Defined domain models and types in `backend/src/modules/monitoring/` (`ActivityActions`, `RunActivityEvent`, `WorkflowListItem`, `WorkflowDetail`, `WorkflowLastRunSummary`, `WorkflowDatasetSummary`, `WorkflowRunView`, `WorkflowRunStepView`).
+- Standardized canonical activity actions: `PLANNING_STARTED`, `PLAN_CREATED`, `SOURCE_DISCOVERY_STARTED`, `SOURCE_DISCOVERED`, `SCRAPE_STARTED`, `SCRAPE_COMPLETED`, `EXTRACTION_STARTED`, `RECORDS_EXTRACTED`, `VALIDATION_COMPLETED`, `DEDUPLICATION_COMPLETED`, `DATASET_CREATED`, `RUN_COMPLETED`, `RUN_FAILED`.
+- Implemented `WorkflowEventBroadcaster`: records all activity events durably in MySQL `activity_events` first (never in-memory only), then distributes them over Redis Pub/Sub (`aidp:run:${runId}:events`) and in-memory event emitters with ID deduplication.
+- Implemented `WorkflowHistoryRepository`:
+  - Workflows: `listWorkflows`, `getWorkflow`, and `getWorkflowRuns` providing name, original prompt, created time, last run summary, status, dataset summary, and run count.
+  - WorkflowRuns: `getRun` and `getRunActivity` providing start/complete timestamps, duration in ms, records found, records accepted, duplicates, failures, source counts, dataset summary, and step breakdown.
+- Emitted activity events throughout execution lifecycle:
+  - Planner: `PLANNING_STARTED`, `PLAN_CREATED` (and `PLANNING_FAILED`).
+  - Worker/Execution repository: `SOURCE_DISCOVERY_STARTED`, `SOURCE_DISCOVERED`, `SCRAPE_STARTED`, `SCRAPE_COMPLETED`, `EXTRACTION_STARTED`, `RECORDS_EXTRACTED`, `VALIDATION_COMPLETED`, `DEDUPLICATION_COMPLETED`, `DATASET_CREATED`, `RUN_COMPLETED`, `RUN_FAILED`.
+- Implemented SSE live progress endpoint:
+  - `GET /api/v1/runs/:id/events` for frontend `EventSource` connections with `Content-Type: text/event-stream`.
+  - Replays historical activity events from MySQL upon client connect.
+  - Subscribes dynamically to Redis Pub/Sub and Node EventEmitter for real-time progress events.
+  - Emits 15-second heartbeat comments to keep connections alive through proxies and firewalls.
+  - Cleans up subscriptions and timers on client disconnect.
+- Exposed new API endpoints:
+  - `GET /api/v1/workflows` (workflow list with summary metrics)
+  - `GET /api/v1/workflows/:id` (detailed workflow view with last run & dataset info)
+  - `GET /api/v1/workflows/:id/runs` (paginated run history for a workflow)
+  - `GET /api/v1/runs/:id` (rich workflow run view with records found/accepted/duplicates/failures)
+  - `GET /api/v1/runs/:id/activity` (chronological activity event history for a run)
+  - `GET /api/v1/runs/:id/events` (EventSource SSE live event stream)
+- Verification passed: 126 automated tests passing across 12 test suites (including 9 dedicated Phase 11 history & monitoring tests), 0 ESLint errors, clean typecheck, and successful production build.

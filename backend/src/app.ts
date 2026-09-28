@@ -15,6 +15,8 @@ import type { AgentAdapter } from "./agent/types.js";
 import type { WorkflowExecutionServiceContract } from "./modules/workflows/workflow-execution.service.js";
 import { createRunsRouter } from "./routes/runs.routes.js";
 import type { WorkflowExecutionRepository } from "./db/repositories/workflow-execution.repository.js";
+import type { WorkflowHistoryRepository } from "./db/repositories/workflow-history.repository.js";
+import type { WorkflowEventBroadcaster } from "./modules/monitoring/event-broadcaster.js";
 import { createDatasetsRouter } from "./routes/datasets.routes.js";
 import type { DatasetQueryRepository } from "./db/repositories/dataset-query.repository.js";
 
@@ -26,6 +28,8 @@ export interface AppDependencies {
   workflowPlanner: WorkflowPlanner;
   workflowExecution: WorkflowExecutionServiceContract;
   workflowRunRepository?: WorkflowExecutionRepository;
+  workflowHistoryRepository?: WorkflowHistoryRepository;
+  eventBroadcaster?: WorkflowEventBroadcaster;
   datasetQueryRepository?: DatasetQueryRepository;
   agentAdapter: AgentAdapter;
 }
@@ -52,8 +56,24 @@ export function createApp(dependencies: AppDependencies): express.Express {
   app.use(express.json({ limit: dependencies.config.REQUEST_BODY_LIMIT }));
   app.use(createHealthRouter(dependencies.readiness, () => dependencies.agentAdapter.checkConfiguration()));
   app.use("/api/v1", createRequirementsRouter(dependencies.requirementParser));
-  app.use("/api/v1", createWorkflowsRouter(dependencies.workflowPlanner, dependencies.workflowExecution));
-  if (dependencies.workflowRunRepository) app.use("/api/v1", createRunsRouter(dependencies.workflowRunRepository));
+  app.use(
+    "/api/v1",
+    createWorkflowsRouter(
+      dependencies.workflowPlanner,
+      dependencies.workflowExecution,
+      dependencies.workflowHistoryRepository,
+    ),
+  );
+  if (dependencies.workflowRunRepository) {
+    app.use(
+      "/api/v1",
+      createRunsRouter(
+        dependencies.workflowRunRepository,
+        dependencies.workflowHistoryRepository,
+        dependencies.eventBroadcaster,
+      ),
+    );
+  }
   if (dependencies.datasetQueryRepository) app.use("/api/v1", createDatasetsRouter(dependencies.datasetQueryRepository));
   app.use(notFoundHandler());
   app.use(createErrorHandler(dependencies.logger));

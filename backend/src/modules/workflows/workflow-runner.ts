@@ -3,6 +3,7 @@ import type { AgentAdapter, AgentResult } from "../../agent/types.js";
 import type { ExecutionRunContext } from "../../db/repositories/workflow-execution.repository.js";
 import type { WorkflowStep } from "../planner/workflow-plan.schema.js";
 import { DataQualityService } from "../data-intelligence/DataQualityService.js";
+import { ActivityActions } from "../monitoring/monitoring.types.js";
 
 export interface WorkflowRunnerStore {
   getExecutionContext(runId: string): Promise<ExecutionRunContext>;
@@ -15,6 +16,7 @@ export interface WorkflowRunnerStore {
   getStepsBySequence(runId: string, sequence: number): Promise<string>;
   resolveSourceIds(runId: string, sourceUrls: string[]): Promise<string[]>;
   persistDataset(context: ExecutionRunContext, result: AgentResult): Promise<{ datasetId: string; recordCount: number; sourceCount: number }>;
+  emitRunEvent?(runId: string, action: string, details?: Record<string, unknown>): Promise<void>;
 }
 
 type StepStatus = "COMPLETED" | "FAILED" | "SKIPPED" | "BLOCKED" | "CANCELLED";
@@ -71,16 +73,21 @@ export class WorkflowRunner {
     if (cancelled || await this.store.isCancellationRequested(runId)) {
       await this.cancelRemaining(context, completed);
       await this.store.finishRun(runId, "CANCELLED", undefined, { records: finalResult?.records.length ?? 0, sources: finalResult?.sources.length ?? 0 });
+      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_CANCELLED, { status: "CANCELLED" });
     } else if (failed) {
       const partial = (finalResult?.records.length ?? 0) > 0;
       await this.store.finishRun(runId, partial ? "PARTIAL" : "FAILED", { code: "WORKFLOW_STEP_FAILED", message: "One or more workflow steps failed; inspect step errors for details." }, runCounts(finalResult));
+      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_FAILED, { status: partial ? "PARTIAL" : "FAILED", errorCode: "WORKFLOW_STEP_FAILED" });
     } else if (skipped) {
       await this.store.finishRun(runId, "PARTIAL", { code: "WORKFLOW_STEPS_SKIPPED", message: "One or more planned steps were skipped; inspect step details for reasons." }, runCounts(finalResult));
+      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_COMPLETED, { status: "PARTIAL", ...runCounts(finalResult) });
     } else if (partialResult) {
       const firstError = finalResult?.errors[0];
       await this.store.finishRun(runId, "PARTIAL", firstError ? { code: firstError.code, message: firstError.message } : { code: "AGENT_PARTIAL_RESULT", message: "The agent returned incomplete results; inspect source and step details." }, runCounts(finalResult));
+      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_COMPLETED, { status: "PARTIAL", ...runCounts(finalResult) });
     } else {
       await this.store.finishRun(runId, "COMPLETED", undefined, runCounts(finalResult));
+      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_COMPLETED, { status: "COMPLETED", ...runCounts(finalResult) });
     }
   }
 
@@ -96,6 +103,13 @@ export class WorkflowRunner {
       }
       const startedAt = new Date();
       await this.store.startStep(runId, stepRowId, retryCount);
+      if (step.type === "SEARCH") {
+        await this.store.emitRunEvent?.(runId, ActivityActions.SOURCE_DISCOVERY_STARTED, { stepId: step.id, stepType: step.type });
+      } else if (step.type === "SCRAPE") {
+        await this.store.emitRunEvent?.(runId, ActivityActions.SCRAPE_STARTED, { stepId: step.id, stepType: step.type });
+      } else if (step.type === "EXTRACT") {
+        await this.store.emitRunEvent?.(runId, ActivityActions.EXTRACTION_STARTED, { stepId: step.id, stepType: step.type });
+      }
       try {
         let output: unknown = { accepted: true, stepType: step.type };
         let agentResult: AgentResult | undefined;
@@ -131,6 +145,39 @@ export class WorkflowRunner {
         } else if (step.type === "EXPORT") {
           await this.store.finishStep(runId, stepRowId, { status: "SKIPPED", startedAt, retryCount, errorCode: "EXPORT_NOT_IN_PHASE", errorMessage: "Export execution is provided by the exports phase." });
           return { status: "SKIPPED" };
+        }
+        if (step.type === "SEARCH") {
+          await this.store.emitRunEvent?.(runId, ActivityActions.SOURCE_DISCOVERED, {
+            stepId: step.id,
+            sourceCount: agentResult?.sources.length ?? 0,
+            sources: agentResult?.sources.map((s) => s.url) ?? [],
+          });
+        } else if (step.type === "SCRAPE") {
+          await this.store.emitRunEvent?.(runId, ActivityActions.SCRAPE_COMPLETED, {
+            stepId: step.id,
+            sourceCount: agentResult?.sources.length ?? 0,
+            recordCount: agentResult?.records.length ?? 0,
+          });
+        } else if (step.type === "EXTRACT") {
+          await this.store.emitRunEvent?.(runId, ActivityActions.RECORDS_EXTRACTED, {
+            stepId: step.id,
+            recordCount: agentResult?.records.length ?? 0,
+          });
+        } else if (step.type === "VALIDATE") {
+          await this.store.emitRunEvent?.(runId, ActivityActions.VALIDATION_COMPLETED, {
+            stepId: step.id,
+            ...(typeof output === "object" && output !== null ? output as Record<string, unknown> : {}),
+          });
+        } else if (step.type === "DEDUPLICATE") {
+          await this.store.emitRunEvent?.(runId, ActivityActions.DEDUPLICATION_COMPLETED, {
+            stepId: step.id,
+            ...(typeof output === "object" && output !== null ? output as Record<string, unknown> : {}),
+          });
+        } else if (step.type === "SAVE") {
+          await this.store.emitRunEvent?.(runId, ActivityActions.DATASET_CREATED, {
+            stepId: step.id,
+            ...(typeof output === "object" && output !== null ? output as Record<string, unknown> : {}),
+          });
         }
         const sourceIds = agentResult ? await this.store.resolveSourceIds(runId, agentResult.sources.map((source) => source.canonicalUrl)) : [];
         await this.store.finishStep(runId, stepRowId, { status: "COMPLETED", startedAt, output, retryCount, ...(agentResult ? { sourceIds } : {}) });

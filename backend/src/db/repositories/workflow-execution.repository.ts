@@ -6,6 +6,7 @@ import type { AgentResult } from "../../agent/types.js";
 import { SourceValidator } from "../../modules/sources/SourceValidator.js";
 import { DataQualityService } from "../../modules/data-intelligence/DataQualityService.js";
 import { DatasetRepository } from "./dataset.repository.js";
+import { ActivityActions, type WorkflowEventBroadcaster } from "../../modules/monitoring/index.js";
 
 export interface WorkflowExecutionStore {
   createRun(input: { workspaceId: string; createdById: string; workflowId: string; planVersion?: number }): Promise<{ id: string }>;
@@ -26,7 +27,12 @@ export class WorkflowExecutionRepository implements WorkflowExecutionStore {
   private readonly sourceValidator = new SourceValidator();
   private readonly datasetRepository: DatasetRepository;
   private readonly dataQualityService = new DataQualityService();
-  constructor(private readonly prisma: PrismaClient) { this.datasetRepository = new DatasetRepository(prisma); }
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly broadcaster?: WorkflowEventBroadcaster,
+  ) {
+    this.datasetRepository = new DatasetRepository(prisma);
+  }
 
   async createRun(input: { workspaceId: string; createdById: string; workflowId: string; planVersion?: number }): Promise<{ id: string }> {
     const membership = await this.prisma.workspaceMember.findUnique({
@@ -134,7 +140,11 @@ export class WorkflowExecutionRepository implements WorkflowExecutionStore {
       ...(counts ? { recordsFound: counts.records, recordsValid: counts.validRecords ?? counts.records, sourcesProcessed: counts.sources, ...(counts.duplicates === undefined ? {} : { duplicateCount: counts.duplicates }) } : {}),
       errorCode: error?.code ?? null, errorMessage: error?.message.slice(0, 1000) ?? null, finishedAt: new Date(),
     } });
-    await this.event(runId, `workflow_run.${status.toLowerCase()}`, { status, ...counts, errorCode: error?.code });
+    const canonicalAction = status === "COMPLETED" ? ActivityActions.RUN_COMPLETED : status === "FAILED" ? ActivityActions.RUN_FAILED : `workflow_run.${status.toLowerCase()}`;
+    await this.emitRunEvent(runId, canonicalAction, { status, ...counts, errorCode: error?.code });
+    if (canonicalAction !== `workflow_run.${status.toLowerCase()}`) {
+      await this.emitRunEvent(runId, `workflow_run.${status.toLowerCase()}`, { status, ...counts, errorCode: error?.code });
+    }
   }
 
   async completeRun(runId: string, result: AgentResult): Promise<void> {
@@ -152,8 +162,9 @@ export class WorkflowExecutionRepository implements WorkflowExecutionStore {
         status: "FAILED", finishedAt: now, durationMs: 0, errorCode: error.code.slice(0, 100), errorMessage: error.message.slice(0, 1000),
       } });
       await tx.workflowRun.updateMany({ where: { id: runId, status: { in: ["PENDING", "PLANNING", "RUNNING"] } }, data: { status: "FAILED", errorCode: error.code.slice(0, 100), errorMessage: error.message.slice(0, 1000), finishedAt: now } });
-      await tx.activityEvent.create({ data: { workspaceId: run.workspaceId, action: "workflow_run.failed", entityType: "workflow_run", entityId: runId, details: { errorCode: error.code } } });
+      await tx.activityEvent.create({ data: { workspaceId: run.workspaceId, action: ActivityActions.RUN_FAILED, entityType: "workflow_run", entityId: runId, details: { errorCode: error.code } } });
     });
+    await this.emitRunEvent(runId, ActivityActions.RUN_FAILED, { errorCode: error.code, errorMessage: error.message });
   }
 
   async requestCancellation(runId: string, workspaceId: string, userId: string): Promise<{ status: string; queued: boolean }> {
@@ -298,9 +309,43 @@ export class WorkflowExecutionRepository implements WorkflowExecutionStore {
           details: asJson({ datasetId: dataset.id, workflowRunId: context.id, metrics }),
         } });
       }
+      await tx.activityEvent.create({ data: {
+        workspaceId: context.workspaceId, action: ActivityActions.DATASET_CREATED, entityType: "dataset", entityId: dataset.id,
+        details: asJson({ datasetId: dataset.id, name: dataset.name, recordCount: inserted, sourceCount: sourceRows.length }),
+      } });
+    });
+    await this.emitRunEvent(context.id, ActivityActions.DATASET_CREATED, {
+      datasetId: dataset.id,
+      name: dataset.name,
+      recordCount: inserted,
+      sourceCount: sourceRows.length,
     });
     if (inserted === 0 && result.records.length > 0) throw new AppError("No verified source evidence could be linked to the extracted records", 422, "SOURCE_EVIDENCE_REQUIRED");
     return { datasetId: dataset.id, recordCount: inserted, sourceCount: sourceRows.length };
+  }
+
+  async emitRunEvent(runId: string, action: string, details: Record<string, unknown> = {}): Promise<void> {
+    const run = await this.prisma.workflowRun.findUnique({ where: { id: runId }, select: { workspaceId: true } });
+    if (!run) return;
+    if (this.broadcaster) {
+      await this.broadcaster.recordAndBroadcast({
+        workspaceId: run.workspaceId,
+        action,
+        entityType: "workflow_run",
+        entityId: runId,
+        details,
+      });
+    } else {
+      await this.prisma.activityEvent.create({
+        data: {
+          workspaceId: run.workspaceId,
+          action,
+          entityType: "workflow_run",
+          entityId: runId,
+          details: asJson(details),
+        },
+      });
+    }
   }
 
   private async assertAccess(workspaceId: string, userId: string): Promise<void> {
@@ -309,8 +354,7 @@ export class WorkflowExecutionRepository implements WorkflowExecutionStore {
   }
 
   private async event(runId: string, action: string, details: Record<string, unknown>): Promise<void> {
-    const run = await this.prisma.workflowRun.findUnique({ where: { id: runId }, select: { workspaceId: true } });
-    if (run) await this.prisma.activityEvent.create({ data: { workspaceId: run.workspaceId, action, entityType: "workflow_run", entityId: runId, details: asJson(details) } });
+    await this.emitRunEvent(runId, action, details);
   }
 }
 
