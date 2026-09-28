@@ -512,11 +512,10 @@ describe("DatasetQueryRepository.getRowEvidence", () => {
       },
     });
     const repo = new DatasetQueryRepository(prisma);
-    const result = await repo.getRowEvidence(WS, DS, ROW, USER) as Record<string, unknown>;
-    expect(result["rowId"]).toBe(ROW);
-    expect((result["evidence"] as unknown[]).length).toBe(1);
-    const ev = (result["evidence"] as unknown[])[0] as Record<string, unknown>;
-    expect((ev["source"] as Record<string, unknown>)["domain"]).toBe("openai.com");
+    const result = await repo.getRowEvidence(WS, DS, ROW, USER);
+    expect(result.rowId).toBe(ROW);
+    expect(result.evidence.length).toBe(1);
+    expect(result.evidence[0]?.source.domain).toBe("openai.com");
   });
 });
 

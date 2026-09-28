@@ -1,5 +1,6 @@
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { AppError } from "../../common/errors.js";
+import { buildRowEvidenceExplorer, type RowEvidenceExplorerResponse } from "../../modules/evidence/index.js";
 
 // ---------------------------------------------------------------------------
 // Shared types
@@ -430,20 +431,42 @@ export class DatasetQueryRepository {
     );
   }
 
-  // ── GET /datasets/:id/rows/:rowId ─────────────────────────────────────────
+  // ── GET /rows/:id/evidence & /datasets/:id/rows/:rowId ───────────────────
 
   async getRowEvidence(
     workspaceId: string,
-    datasetId: string,
-    rowId: string,
-    userId: string,
-  ): Promise<object> {
+    firstId: string,
+    secondId: string,
+    thirdId?: string,
+  ): Promise<RowEvidenceExplorerResponse> {
+    let datasetId: string | undefined;
+    let rowId: string;
+    let userId: string;
+
+    if (thirdId !== undefined) {
+      // Called with (workspaceId, datasetId, rowId, userId)
+      datasetId = firstId;
+      rowId = secondId;
+      userId = thirdId;
+    } else {
+      // Called with (workspaceId, rowId, userId)
+      rowId = firstId;
+      userId = secondId;
+    }
+
     await this.assertAccess(workspaceId, userId);
 
+    const where: Prisma.DatasetRowWhereInput = {
+      workspaceId,
+      id: rowId,
+      ...(datasetId ? { datasetId } : {}),
+    };
+
     const row = await this.prisma.datasetRow.findFirst({
-      where: { workspaceId, datasetId, id: rowId },
+      where,
       select: {
         id: true,
+        datasetId: true,
         values: true,
         rawValues: true,
         confidence: true,
@@ -453,6 +476,7 @@ export class DatasetQueryRepository {
         duplicateOfId: true,
         collectedAt: true,
         createdAt: true,
+        dataset: { select: { id: true, workflowRunId: true } },
         validationIssues: {
           select: {
             fieldKey: true,
@@ -497,29 +521,7 @@ export class DatasetQueryRepository {
 
     if (!row) throw new AppError("Dataset row not found", 404, "DATASET_ROW_NOT_FOUND");
 
-    return {
-      rowId: row.id,
-      values: row.values,
-      rawValues: row.rawValues,
-      confidence: row.confidence,
-      isValid: row.isValid,
-      verificationStatus: row.verificationStatus,
-      qualityMetadata: row.qualityMetadata,
-      duplicateOfId: row.duplicateOfId,
-      collectedAt: row.collectedAt,
-      createdAt: row.createdAt,
-      validationIssues: row.validationIssues,
-      evidence: row.sourceEvidence.map((ev) => ({
-        id: ev.id,
-        fieldKey: ev.fieldKey,
-        column: ev.column,
-        evidenceType: ev.evidenceType,
-        snippet: ev.snippet,
-        confidence: ev.confidence,
-        retrievedAt: ev.retrievedAt,
-        source: ev.source,
-      })),
-    };
+    return buildRowEvidenceExplorer(row);
   }
 
   // ── GET /datasets/:id/sources ─────────────────────────────────────────────
@@ -580,32 +582,48 @@ export class DatasetQueryRepository {
           errorCode: true,
           errorMessage: true,
           sourceMetadata: true,
+          workflowRunId: true,
           createdAt: true,
+          evidence: {
+            take: 1,
+            select: { snippet: true },
+          },
           _count: { select: { evidence: true } },
         },
       }),
     ]);
 
     return paginated(
-      sources.map((src) => ({
-        id: src.id,
-        url: src.url,
-        canonicalUrl: src.canonicalUrl,
-        domain: src.domain,
-        title: src.title,
-        status: src.status,
-        policyReason: src.policyReason,
-        robotsStatus: src.robotsStatus,
-        robotsCheckedAt: src.robotsCheckedAt,
-        attemptCount: src.attemptCount,
-        lastAttemptAt: src.lastAttemptAt,
-        retrievedAt: src.retrievedAt,
-        errorCode: src.errorCode,
-        errorMessage: src.errorMessage,
-        sourceMetadata: src.sourceMetadata,
-        createdAt: src.createdAt,
-        evidenceCount: src._count.evidence,
-      })),
+      sources.map((src) => {
+        const meta = (typeof src.sourceMetadata === "object" && src.sourceMetadata !== null
+          ? src.sourceMetadata
+          : {}) as Record<string, unknown>;
+        return {
+          id: src.id,
+          url: src.url,
+          canonicalUrl: src.canonicalUrl,
+          domain: src.domain,
+          title: src.title,
+          pageTitle: src.title,
+          status: src.status,
+          sourceStatus: src.status,
+          sourceType: String(meta.sourceType ?? "scrape"),
+          workflowRunId: src.workflowRunId,
+          extractionStep: String(meta.stepType ?? "EXTRACT"),
+          policyReason: src.policyReason,
+          robotsStatus: src.robotsStatus,
+          robotsCheckedAt: src.robotsCheckedAt,
+          attemptCount: src.attemptCount,
+          lastAttemptAt: src.lastAttemptAt,
+          retrievedAt: src.retrievedAt,
+          errorCode: src.errorCode,
+          errorMessage: src.errorMessage,
+          sourceMetadata: src.sourceMetadata,
+          evidenceSnippet: src.evidence?.[0]?.snippet ?? null,
+          createdAt: src.createdAt,
+          evidenceCount: src._count?.evidence ?? 0,
+        };
+      }),
       total,
       pagination,
     );
@@ -637,6 +655,10 @@ export class DatasetQueryRepository {
 
     if (!source) throw new AppError("Source not found", 404, "SOURCE_NOT_FOUND");
 
+    const meta = (typeof source.sourceMetadata === "object" && source.sourceMetadata !== null
+      ? source.sourceMetadata
+      : {}) as Record<string, unknown>;
+
     return {
       id: source.id,
       workspaceId: source.workspaceId,
@@ -646,7 +668,11 @@ export class DatasetQueryRepository {
       canonicalUrl: source.canonicalUrl,
       domain: source.domain,
       title: source.title,
+      pageTitle: source.title,
       status: source.status,
+      sourceStatus: source.status,
+      sourceType: String(meta.sourceType ?? "scrape"),
+      extractionStep: String(meta.stepType ?? "EXTRACT"),
       policyReason: source.policyReason,
       robotsStatus: source.robotsStatus,
       robotsCheckedAt: source.robotsCheckedAt,
@@ -657,7 +683,19 @@ export class DatasetQueryRepository {
       errorMessage: source.errorMessage,
       sourceMetadata: source.sourceMetadata,
       createdAt: source.createdAt,
-      evidence: source.evidence,
+      evidenceSnippet: source.evidence?.[0]?.snippet ?? null,
+      evidenceCount: source.evidence?.length ?? 0,
+      evidence: (source.evidence ?? []).map((ev) => ({
+        id: ev.id,
+        datasetId: ev.datasetId,
+        datasetRowId: ev.datasetRowId,
+        fieldKey: ev.fieldKey,
+        evidenceType: ev.evidenceType,
+        snippet: ev.snippet,
+        evidenceSnippet: ev.snippet,
+        confidence: typeof ev.confidence === "number" ? ev.confidence : ev.confidence ? Number(ev.confidence) : null,
+        retrievedAt: ev.retrievedAt,
+      })),
     };
   }
 

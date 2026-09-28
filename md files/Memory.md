@@ -4,9 +4,9 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 9 — Dataset Management complete; Phase 10 not started.
+- **Current Phase:** Phase 10 — Source and Evidence Explorer complete.
 - **Last updated:** 2026-09-28.
-- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, and complete Dataset Management query APIs (`/api/v1/datasets`, `/schema`, `/rows`, `/evidence`, `/sources`, `/sources/:id`) are wired and verified.
+- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, and Source and Evidence Explorer APIs (`GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, and nested `/api/v1/datasets/:id/rows/:rowId/evidence`) are wired and verified.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
@@ -20,7 +20,8 @@
 - [x] Phase 6 — Plan allow/deny domain rules, URL normalization/validation, robots policy checks, Redis sliding-window rate limits, bounded request timeout/retry, source lifecycle/reason persistence, and safe alternative-source continuation.
 - [x] Phase 7 — BullMQ workflow runs, dependency-ordered safe step runner, per-step status/retry/timing/source references, cancellation requests, activity events, evidence-backed dataset persistence, run/step APIs, worker error handling, and runner tests.
 - [x] Phase 8 — Integrated relevant Web Research Agent URL relevance concepts in native TypeScript around Firecrawl Search; added normalization, field-aware validation, conservative deduplication/entity resolution, conflict handling, provenance quality metrics, MySQL persistence, and integration tests. Firecrawl remains the primary collection engine.
-- [x] Phase 9 — Dataset Management: Full business data layer. Implemented `DatasetQueryRepository` and Express routes for `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId` (and `/evidence` alias), `GET /api/v1/datasets/:id/sources`, and `GET /api/v1/sources/:id`. Coexists dynamic JSON rows with indexed relational columns, prevents SQL/JSON injection via schema-aware validation, supports pagination, text search, dynamic field filters, valid-only, duplicates-only, sorting, and full source/evidence lineage.
+- [x] Phase 9 — Dataset Management: Full business data layer. Implemented `DatasetQueryRepository` and Express routes for `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, and `GET /api/v1/sources/:id`. Coexists dynamic JSON rows with indexed relational columns, prevents SQL/JSON injection via schema-aware validation, supports pagination, text search, dynamic field filters, valid-only, duplicates-only, sorting, and full source/evidence lineage.
+- [x] Phase 10 — Source and Evidence Explorer: Explainable and source-backed provenance at row and field granularity. Implemented domain models (`SourceDetail`, `SourceEvidence`, `DatasetRowSource`, `FieldEvidence`, `RowEvidenceExplorerResponse`) and `ProvenanceService`. Preserves URL, domain, page title, `retrievedAt`, `sourceType`, workflow run, extraction step, evidence snippet, and source status. Implemented `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, and `GET /api/v1/rows/:id/evidence` (with alias `/api/v1/datasets/:id/rows/:rowId/evidence`). Supports multi-source row provenance (e.g., Company from Source A, Website from Source B), prevents claiming a source verifies a value if the snippet contains unrelated content (`isVerified: false`), and preserves conflict history where different sources disagree.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -48,6 +49,8 @@
 | 2026-09-28 | Port the Web Research Agent's relevance-selection idea to `RelevantSourceSelector` in TypeScript and run it on Firecrawl Search results before they reach the agent. | Keeps Firecrawl Search primary, applies the plan's queries/domain preferences/source limit, removes normalized duplicates, and avoids adding Python services or embedding dependencies. Robots/retry and source-policy logic already exist in the app and remain authoritative. |
 | 2026-09-28 | Preserve duplicate rows and link them to canonical rows; merge only exact/high-confidence keys or entities sharing a stable identifier, and retain conflicts with review decisions. | Keeps the extracted/source evidence trail intact and prevents uncertain name similarity from silently combining records. |
 | 2026-09-28 | Combine relational indexed columns with safe parameterised MySQL queries for dynamic JSON fields and full-text search. | Column keys are pre-validated against registered `DatasetColumn` schema to prevent SQL/JSON path injection; keyword `values` is escaped with backticks in raw queries; search uses escaped LIKE parameter binding. |
+| 2026-09-28 | Field-level explainability via `ProvenanceService.buildRowEvidenceExplorer`. | Maps extracted row fields to supporting sources and citations, evaluates token containment to prevent false verification claims (`isVerified: false`), and surfaces quality/schema conflict history. |
+| 2026-09-28 | Expose top-level `GET /api/v1/rows/:id/evidence` with nested `GET /api/v1/datasets/:id/rows/:rowId/evidence` alias. | Conforms to Phase 10 specification while preserving backward compatibility with dataset-scoped paths. |
 
 ## 4. Database / Schema Changes
 
@@ -115,7 +118,7 @@
 
 ## 7. Pending Work / Next Steps
 
-- Phase 8 implementation is complete. Stop here; do not start Phase 9 until explicitly requested.
+- Phase 10 implementation is complete. Stop here; do not start Phase 11 until explicitly requested.
 - Authentication is not implemented. For now `createdById` is supplied by the caller and checked against active workspace membership; a future auth phase must bind it to an authenticated principal.
 - `Phases.md` uses older phase numbering; follow the user's current phase prompts and do not build its later planner phase early.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
@@ -128,7 +131,7 @@
 - **Checks:** `npm run typecheck`; `npm run lint`; `npm test`; `npm run test:db` with `RUN_DATABASE_TESTS=true` and `DATABASE_URL`; `npm run build`; `npm audit`.
 - **Schema validation:** `npm run db:validate`.
 - **Environment variables:** `APP_ENV`, `PORT`, `FRONTEND_ORIGIN`, `LOG_LEVEL`, `REQUEST_BODY_LIMIT`, `SOURCE_ROBOTS_USER_AGENT`, `SOURCE_ROBOTS_TIMEOUT_MS`, `DATABASE_URL` or `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE`, `REDIS_URL`, `FIRECRAWL_API_KEY`, `FIRECRAWL_BASE_URL`, `LLM_PROVIDER`, `LLM_MODEL_ID`, provider credentials, and paired `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` when auth is introduced.
-- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/runs/:id`, and `GET /api/v1/runs/:id/steps`. Long runs are queued; `SAVE` persists datasets, rows, and row-level evidence through `DatasetRepository`. Auth is not active.
+- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/steps`, `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, and `GET /api/v1/datasets/:id/rows/:rowId/evidence`. Long runs are queued; `SAVE` persists datasets, rows, and row-level evidence through `DatasetRepository`. Auth is not active.
 - **Data services:** `docker-compose.yml` defines local MySQL 8.4 and Redis 7.
 
 ## 9. Notes for the Next AI Session
@@ -140,4 +143,15 @@
 
 ## 10. Last Session Summary
 
-Phase 9 (Dataset Management) completed. Implemented the complete business data layer: `DatasetQueryRepository` and Express routes under `/api/v1/datasets` and `/api/v1/sources`. Coexists dynamic JSON rows with indexed relational columns, prevents SQL/JSON injection via schema-aware validation against registered `DatasetColumn`s, supports pagination, free-text search across JSON values, dynamic field filters, valid-only, duplicates-only, confidence range, multi-field sorting, and full source/evidence lineage. Verification passed: all 106 automated tests passing (8 skipped for live MySQL/Firecrawl), 0 ESLint errors, clean typecheck, and successful production build.
+Phase 10 (Source and Evidence Explorer) completed. Implemented the complete explainability layer answering "Where did this data come from?" at dataset, row, and field granularities:
+- Domain models and types in `backend/src/modules/evidence/` (`SourceDetail`, `SourceEvidence`, `DatasetRowSource`, `FieldEvidence`, `RowEvidenceExplorerResponse`).
+- Field-level citation aggregation and conflict tracking via `ProvenanceService.buildRowEvidenceExplorer`.
+- Verified snippet checking via `isSnippetVerifyingValue` ensuring sources without matching content are not marked as verifying values (`isVerified: false`).
+- Preservation of conflicting values and citations where multiple sources disagree.
+- Preserved metadata: URL, domain, page title, `retrievedAt`, `sourceType`, workflow run ID, extraction step, evidence snippet, and source status.
+- Endpoints wired and verified:
+  - `GET /api/v1/datasets/:id/sources` (paginated dataset sources with title, domain, snippet, count)
+  - `GET /api/v1/sources/:id` (full source details with associated evidence records)
+  - `GET /api/v1/rows/:id/evidence` (complete row evidence explorer with field-by-field citations, snippet verification, and conflict detection)
+  - `GET /api/v1/datasets/:id/rows/:rowId/evidence` (nested alias)
+- Verification passed: 117 automated tests passing across 11 test suites (including 11 dedicated Phase 10 source/evidence explorer tests), 0 ESLint errors, clean typecheck, and successful production build.

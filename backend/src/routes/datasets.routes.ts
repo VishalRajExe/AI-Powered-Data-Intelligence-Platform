@@ -242,6 +242,19 @@ export function createDatasetsRouter(repository: DatasetQueryRepository): Router
     },
   );
 
+  // GET /rows/:id/evidence  — Phase 10 Source and Evidence Explorer
+  router.get(
+    "/rows/:id/evidence",
+    validateRequest({ params: UUIDParam, query: DatasetAccessQuery }),
+    async (_req, res) => {
+      const { params, query } = res.locals.validated as {
+        params: z.infer<typeof UUIDParam>;
+        query: z.infer<typeof DatasetAccessQuery>;
+      };
+      res.json(await repository.getRowEvidence(query.workspaceId, params.id, query.userId));
+    },
+  );
+
   // GET /datasets/:id/sources
   router.get(
     "/datasets/:id/sources",
