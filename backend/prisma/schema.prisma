@@ -245,24 +245,25 @@ model WorkflowPlan {
 }
 
 model WorkflowRun {
-  id               String            @id @default(uuid()) @db.Char(36)
-  workspaceId      String            @map("workspace_id") @db.Char(36)
-  workflowId       String            @map("workflow_id") @db.Char(36)
-  workflowPlanId   String            @map("workflow_plan_id") @db.Char(36)
-  status           WorkflowRunStatus @default(PENDING)
-  attempt          Int               @default(0)
-  progress         Int               @default(0) @db.UnsignedInt
-  recordsFound     Int               @default(0) @map("records_found") @db.UnsignedInt
-  recordsValid     Int               @default(0) @map("records_valid") @db.UnsignedInt
-  duplicateCount   Int               @default(0) @map("duplicate_count") @db.UnsignedInt
-  sourcesProcessed Int               @default(0) @map("sources_processed") @db.UnsignedInt
-  sourcesFailed    Int               @default(0) @map("sources_failed") @db.UnsignedInt
-  errorCode        String?           @map("error_code") @db.VarChar(100)
-  errorMessage     String?           @map("error_message") @db.Text
-  startedAt        DateTime?         @map("started_at") @db.DateTime(3)
-  finishedAt       DateTime?         @map("finished_at") @db.DateTime(3)
-  createdAt        DateTime          @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt        DateTime          @updatedAt @map("updated_at") @db.DateTime(3)
+  id                String            @id @default(uuid()) @db.Char(36)
+  workspaceId       String            @map("workspace_id") @db.Char(36)
+  workflowId        String            @map("workflow_id") @db.Char(36)
+  workflowPlanId    String            @map("workflow_plan_id") @db.Char(36)
+  status            WorkflowRunStatus @default(PENDING)
+  attempt           Int               @default(0)
+  progress          Int               @default(0) @db.UnsignedInt
+  recordsFound      Int               @default(0) @map("records_found") @db.UnsignedInt
+  recordsValid      Int               @default(0) @map("records_valid") @db.UnsignedInt
+  duplicateCount    Int               @default(0) @map("duplicate_count") @db.UnsignedInt
+  sourcesProcessed  Int               @default(0) @map("sources_processed") @db.UnsignedInt
+  sourcesFailed     Int               @default(0) @map("sources_failed") @db.UnsignedInt
+  errorCode         String?           @map("error_code") @db.VarChar(100)
+  errorMessage      String?           @map("error_message") @db.Text
+  cancelRequestedAt DateTime?         @map("cancel_requested_at") @db.DateTime(3)
+  startedAt         DateTime?         @map("started_at") @db.DateTime(3)
+  finishedAt        DateTime?         @map("finished_at") @db.DateTime(3)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime          @updatedAt @map("updated_at") @db.DateTime(3)
 
   workflow            Workflow             @relation(fields: [workspaceId, workflowId], references: [workspaceId, id], onDelete: Cascade)
   plan                WorkflowPlan         @relation(fields: [workspaceId, workflowId, workflowPlanId], references: [workspaceId, workflowId, id], onDelete: Restrict)
@@ -285,8 +286,11 @@ model WorkflowStep {
   type          WorkflowStepType
   status        WorkflowStepStatus @default(PENDING)
   attempt       Int                @default(0)
+  retryCount    Int                @default(0) @map("retry_count") @db.UnsignedInt
   input         Json?
   outputSummary Json?
+  sourceIds     Json?              @map("source_ids")
+  durationMs    Int?               @map("duration_ms") @db.UnsignedInt
   errorCode     String?            @map("error_code") @db.VarChar(100)
   errorMessage  String?            @map("error_message") @db.Text
   startedAt     DateTime?          @map("started_at") @db.DateTime(3)

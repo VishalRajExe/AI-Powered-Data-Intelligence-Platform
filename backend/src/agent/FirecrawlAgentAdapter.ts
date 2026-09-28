@@ -58,7 +58,7 @@ export class FirecrawlAgentAdapter implements AgentAdapter {
       });
     }
 
-    const enabled = allowedFirecrawlTools(input.plan);
+    const enabled = allowedFirecrawlTools(input.plan, input.stepType);
     const firecrawlApiKey = this.config.FIRECRAWL_API_KEY!;
     const model: ModelConfig = {
       provider: this.config.LLM_PROVIDER,
@@ -102,9 +102,9 @@ export class FirecrawlAgentAdapter implements AgentAdapter {
 
     try {
       const agent = this.agentFactory(options);
-      const urls = seedUrls(input.plan);
+      const urls = seedUrls(input.plan, undefined, input.sourceUrls, input.stepType);
       const result = await collectStream(agent.stream({
-        prompt: buildAgentPrompt(input.prompt, input.plan),
+        prompt: buildAgentPrompt(input.prompt, input.plan, input.stepType, input.priorRecords, input.sourceUrls),
         ...(urls.length ? { urls } : {}),
         format: "json",
         schema: buildAgentOutputSchema(input.plan),
@@ -164,9 +164,10 @@ export class FirecrawlAgentAdapter implements AgentAdapter {
   }
 }
 
-function allowedFirecrawlTools(plan: WorkflowPlan): Set<"search" | "scrape" | "interact"> {
+function allowedFirecrawlTools(plan: WorkflowPlan, stepType?: AgentExecutionInput["stepType"]): Set<"search" | "scrape" | "interact"> {
   const enabled = new Set<"search" | "scrape" | "interact">();
   for (const step of plan.steps) {
+    if (stepType && step.type !== stepType) continue;
     if (step.type === "SEARCH") enabled.add("search");
     if (step.type === "SCRAPE") enabled.add("scrape");
     if (step.type === "INTERACT") enabled.add("interact");
@@ -196,8 +197,8 @@ function buildAgentOutputSchema(plan: WorkflowPlan): Record<string, unknown> {
   };
 }
 
-function buildAgentPrompt(prompt: string, plan: WorkflowPlan): string {
-  const planTools = plan.steps.filter(({ type }) => ["SEARCH", "SCRAPE", "INTERACT"].includes(type));
+function buildAgentPrompt(prompt: string, plan: WorkflowPlan, stepType?: AgentExecutionInput["stepType"], priorRecords: AgentExecutionInput["priorRecords"] = [], sourceUrls: AgentExecutionInput["sourceUrls"] = []): string {
+  const planTools = plan.steps.filter(({ type }) => ["SEARCH", "SCRAPE", "INTERACT"].includes(type) && (!stepType || type === stepType));
   const queries = plan.searchStrategy.queries.map(({ query, sourceType }) => `- [${sourceType}] ${query}`);
   const blockedDomains = plan.sourcePolicy.blockedDomains.map((domain) => domain.toLowerCase().replace(/^\*\./, ""));
   const stepText = planTools.map(({ type, description, input }) => {
@@ -209,6 +210,7 @@ function buildAgentPrompt(prompt: string, plan: WorkflowPlan): string {
     "Execute the supplied, already-validated workflow plan using only its enabled Firecrawl tools and approved public sources.",
     "Do not add steps, visit blocked domains, log in, bypass authentication or CAPTCHAs, or ignore robots.txt/site terms. When a source is blocked, inaccessible, rate-limited, or fails, record/use the reason and continue with other allowed sources when available. Do not claim data is verified unless it came from tool results.",
     `User request: ${prompt}`,
+    ...(stepType ? [`Current workflow step: ${stepType}. Complete only this step; previous dependencies have completed.`, `Source URLs from completed prerequisite steps: ${sourceUrls.join(", ") || "none"}`, `Structured results from completed prerequisite steps: ${JSON.stringify(priorRecords).slice(0, 12_000)}`] : []),
     `Objective: ${plan.objective}`,
     `Required fields: ${plan.requirement.requiredFields.join(", ") || "none"}`,
     `Requested fields: ${plan.extractionSchema.required.join(", ")}`,
@@ -362,9 +364,10 @@ function publicDomain(value: string): string | undefined {
   } catch { return undefined; }
 }
 
-function seedUrls(plan: WorkflowPlan, blockedDomains = plan.sourcePolicy.blockedDomains.map((domain) => domain.toLowerCase().replace(/^\*\./, ""))): string[] {
-  const candidates: string[] = [];
+function seedUrls(plan: WorkflowPlan, blockedDomains = plan.sourcePolicy.blockedDomains.map((domain) => domain.toLowerCase().replace(/^\*\./, "")), additional: string[] = [], stepType?: AgentExecutionInput["stepType"]): string[] {
+  const candidates: string[] = [...additional];
   for (const step of plan.steps) {
+    if (stepType && step.type !== stepType) continue;
     if (step.type !== "SCRAPE" && step.type !== "INTERACT") continue;
     if (typeof step.input.url === "string") candidates.push(step.input.url);
     if (Array.isArray(step.input.urls)) candidates.push(...step.input.urls.filter((url): url is string => typeof url === "string"));

@@ -1,74 +1,41 @@
-import type { AgentAdapter, AgentExecutionEvent, AgentResult } from "../../agent/types.js";
-import type { WorkflowExecutionStore } from "../../db/repositories/workflow-execution.repository.js";
+import type { Queue } from "bullmq";
 import { AppError } from "../../common/errors.js";
+import type { WorkflowExecutionRepository } from "../../db/repositories/workflow-execution.repository.js";
 import type { RequirementParser } from "../requirements/parser.service.js";
 import type { WorkflowPlanner } from "../planner/planner.service.js";
 
-export interface ExecuteWorkflowInput {
-  prompt: string;
-  workspaceId: string;
-  createdById: string;
-  onEvent?: (event: AgentExecutionEvent) => void;
-}
+export interface EnqueuedWorkflowRun { workflowId: string; runId: string; status: "PENDING"; }
 
-export interface WorkflowExecutionServiceContract {
-  execute(input: ExecuteWorkflowInput): Promise<{
-    workflowId: string;
-    runId: string;
-    requirement: Awaited<ReturnType<RequirementParser["parse"]>>;
-    plan: Awaited<ReturnType<WorkflowPlanner["plan"]>>["plan"];
-    result: AgentResult;
-  }>;
-}
-
-export class WorkflowExecutionService implements WorkflowExecutionServiceContract {
+export class WorkflowExecutionService {
   constructor(
     private readonly requirementParser: RequirementParser,
     private readonly workflowPlanner: WorkflowPlanner,
-    private readonly agentAdapter: AgentAdapter,
-    private readonly store: WorkflowExecutionStore,
+    private readonly store: Pick<WorkflowExecutionRepository, "createRun" | "failRun">,
+    private readonly queue: Pick<Queue, "add">,
   ) {}
 
-  async execute(input: ExecuteWorkflowInput) {
+  async execute(input: { prompt: string; workspaceId: string; createdById: string }): Promise<EnqueuedWorkflowRun & { requirement: unknown; plan: unknown }> {
     const requirement = await this.requirementParser.parse(input.prompt);
-    if (requirement.validationStatus !== "valid") {
-      throw new AppError("Clarification is required before collection can start.", 422, "REQUIREMENT_NEEDS_CLARIFICATION", requirement);
-    }
-    const planned = await this.workflowPlanner.plan({
-      workspaceId: input.workspaceId,
-      createdById: input.createdById,
-      requirement: requirement.parsedRequirement,
-      originalPrompt: input.prompt,
-    });
-    const run = await this.store.createRun({
-      workspaceId: input.workspaceId,
-      createdById: input.createdById,
-      workflowId: planned.workflowId,
-      planVersion: planned.plan.version,
-    });
-    let result: AgentResult;
+    if (requirement.validationStatus !== "valid") throw new AppError("Clarification is required before collection can start.", 422, "REQUIREMENT_NEEDS_CLARIFICATION", requirement);
+    const planned = await this.workflowPlanner.plan({ workspaceId: input.workspaceId, createdById: input.createdById, requirement: requirement.parsedRequirement, originalPrompt: input.prompt });
+    const run = await this.enqueue(planned.workflowId, input.workspaceId, input.createdById, planned.plan.version);
+    return { ...run, requirement, plan: planned.plan };
+  }
+
+  async runWorkflow(input: { workflowId: string; workspaceId: string; createdById: string }): Promise<EnqueuedWorkflowRun> {
+    return this.enqueue(input.workflowId, input.workspaceId, input.createdById);
+  }
+
+  private async enqueue(workflowId: string, workspaceId: string, createdById: string, planVersion?: number): Promise<EnqueuedWorkflowRun> {
+    const run = await this.store.createRun({ workspaceId, createdById, workflowId, ...(planVersion === undefined ? {} : { planVersion }) });
     try {
-      result = await this.agentAdapter.execute({
-        prompt: input.prompt,
-        plan: planned.plan,
-        workspaceId: input.workspaceId,
-        runId: run.id,
-        ...(input.onEvent ? { onEvent: input.onEvent } : {}),
-      });
+      await this.queue.add("execute-workflow", { runId: run.id }, { jobId: run.id, removeOnComplete: 500, removeOnFail: 1_000 });
     } catch {
-      await this.store.completeRun(run.id, failedResult());
-      throw new AppError("Workflow agent execution failed.", 502, "AGENT_EXECUTION_FAILED", { workflowId: planned.workflowId, runId: run.id });
+      await this.store.failRun(run.id, { code: "QUEUE_ENQUEUE_FAILED", message: "The run could not be added to the background queue." });
+      throw new AppError("The workflow run could not be queued.", 503, "QUEUE_UNAVAILABLE", { runId: run.id });
     }
-    await this.store.completeRun(run.id, result);
-    return { workflowId: planned.workflowId, runId: run.id, requirement, plan: planned.plan, result };
+    return { workflowId, runId: run.id, status: "PENDING" };
   }
 }
 
-function failedResult(): AgentResult {
-  const now = new Date().toISOString();
-  return {
-    status: "FAILED", data: null, records: [], sources: [], events: [],
-    execution: { provider: "unknown", model: "unknown", startedAt: now, finishedAt: now, durationMs: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, toolCallCount: 0, toolsUsed: [] },
-    errors: [{ code: "AGENT_EXECUTION_FAILED", message: "Workflow agent execution failed.", retryable: true }],
-  };
-}
+export type WorkflowExecutionServiceContract = Pick<WorkflowExecutionService, "execute"> & Partial<Pick<WorkflowExecutionService, "runWorkflow">>;

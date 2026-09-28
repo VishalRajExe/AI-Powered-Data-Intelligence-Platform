@@ -5,12 +5,13 @@ import { loadEnvConfig } from "./config/env.js";
 import { createPrismaClient } from "./db/prisma.js";
 import { createLogger } from "./logger.js";
 import { createRedisConnection } from "./queue/connection.js";
-import { createWorkflowQueue } from "./queue/workflowQueue.js";
+import { createWorkflowQueue, createWorkflowWorker } from "./queue/workflowQueue.js";
 import { createRequirementParser } from "./modules/requirements/index.js";
 import { createWorkflowPlanner } from "./modules/planner/index.js";
 import { FirecrawlAgentAdapter } from "./agent/FirecrawlAgentAdapter.js";
 import { WorkflowExecutionRepository } from "./db/repositories/workflow-execution.repository.js";
 import { WorkflowExecutionService } from "./modules/workflows/workflow-execution.service.js";
+import { WorkflowRunner } from "./modules/workflows/workflow-runner.js";
 import { SourcePolicyService } from "./modules/sources/SourcePolicyService.js";
 import { SourceValidator } from "./modules/sources/SourceValidator.js";
 import { RobotsPolicyService } from "./modules/sources/RobotsPolicyService.js";
@@ -36,12 +37,25 @@ const sourcePolicy = new SourcePolicyService(
   logger,
 );
 const agentAdapter = new FirecrawlAgentAdapter(config, logger, undefined, undefined, sourcePolicy);
+const workflowRepository = new WorkflowExecutionRepository(prisma);
+const workflowRunner = new WorkflowRunner(workflowRepository, agentAdapter, logger);
+const workflowWorker = createWorkflowWorker<{ runId: string }>(redis, async (job) => {
+  try {
+    await workflowRunner.run(job.data.runId);
+  } catch (error) {
+    logger.error({ runId: job.data.runId, errorName: error instanceof Error ? error.name : "UnknownError" }, "Workflow worker failed unexpectedly");
+    await workflowRepository.failRun(job.data.runId, { code: "WORKER_EXECUTION_FAILED", message: "The workflow worker stopped unexpectedly. Inspect the run steps and retry the workflow." });
+    throw error;
+  }
+}, { concurrency: 2 });
+workflowWorker.on("failed", (job, error) => logger.error({ runId: job?.data.runId, errorName: error.name }, "Workflow queue job failed"));
 const app = createApp({
   config,
   logger,
   requirementParser,
   workflowPlanner,
-  workflowExecution: new WorkflowExecutionService(requirementParser, workflowPlanner, agentAdapter, new WorkflowExecutionRepository(prisma)),
+  workflowExecution: new WorkflowExecutionService(requirementParser, workflowPlanner, workflowRepository, workflowQueue),
+  workflowRunRepository: workflowRepository,
   agentAdapter,
   readiness: {
     mysql: () => prisma.$queryRaw`SELECT 1`,
@@ -63,7 +77,7 @@ async function shutdown(signal: string): Promise<void> {
   forceExit.unref();
   server.close(async (error) => {
     if (error) logger.error({ err: error }, "HTTP server close failed");
-    await Promise.allSettled([workflowQueue.close(), redis.quit(), prisma.$disconnect()]);
+    await Promise.allSettled([workflowWorker.close(), workflowQueue.close(), redis.quit(), prisma.$disconnect()]);
     clearTimeout(forceExit);
     process.exit(error ? 1 : 0);
   });

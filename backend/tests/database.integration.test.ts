@@ -131,6 +131,30 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
 
   it("creates and finalizes an execution run from a persisted workflow plan", async () => {
     const fixture = await createFixture("execution");
+    const requirement = {
+      objective: "Collect company names", entityType: "company", quantity: 1,
+      geography: { places: [], scope: "unspecified", includeSubregions: null },
+      timeRange: { field: null, after: null, before: null, on: null, expression: null }, filters: [], constraints: [],
+      fields: [{ key: "company", label: "Company", type: "string", description: null }],
+      requiredFields: ["company"], optionalFields: [], sourcePreferences: [], sourceRestrictions: [], deduplicationKeys: ["company"], validationRules: [],
+      outputFormat: "json", ambiguities: [], missingInformation: [], warnings: [],
+    };
+    const retryPolicy = { maxAttempts: 2, backoff: "none", initialDelayMs: 0, multiplier: 1, maxDelayMs: 0, retryableErrors: ["TRANSIENT_NETWORK"] };
+    const steps = [
+      { id: "search-companies", type: "SEARCH", description: "Find company pages", input: {}, configuration: {}, dependencies: [], retryPolicy, timeoutMs: 30_000, expectedOutput: "Source pages", status: "PENDING" },
+      { id: "extract-companies", type: "EXTRACT", description: "Extract company names", input: {}, configuration: {}, dependencies: ["search-companies"], retryPolicy, timeoutMs: 30_000, expectedOutput: "Company rows", status: "PENDING" },
+      { id: "save-companies", type: "SAVE", description: "Save dataset", input: {}, configuration: {}, dependencies: ["extract-companies"], retryPolicy, timeoutMs: 30_000, expectedOutput: "Persisted rows", status: "PENDING" },
+    ];
+    await prisma.workflowPlan.update({ where: { id: fixture.plan.id }, data: {
+      objective: "Collect company names", requirement, constraints: [],
+      sourcePolicy: { permittedSourceTypes: ["official_website"], allowedDomains: [], preferredDomains: [], blockedDomains: [], respectRobotsTxt: true, respectSiteTerms: true, allowAuthentication: false, allowCaptchaBypass: false, maxRequestsPerDomainPerMinute: 10, policyRationale: "Use public company pages." },
+      searchStrategy: { queries: [{ query: "public company example", sourceType: "official_website", rationale: "Find a source." }], desiredSourceCount: 1, maximumSourceCount: 5, selectionRationale: "One source is enough." },
+      extractionSchema: { type: "object", properties: { company: { type: "string", description: "Company name" } }, required: ["company"], additionalProperties: false },
+      steps, transformations: [], validationRules: [{ fieldKey: "company", rule: "REQUIRED", severity: "ERROR", description: "Company is required." }],
+      deduplicationRules: [{ keys: ["company"], strategy: "NORMALIZED", confidenceThreshold: 1, ambiguousMatchAction: "KEEP_SEPARATE", rationale: "Normalize company names." }],
+      outputConfiguration: { format: "json", expectedColumns: ["company"], includeSourceEvidence: true },
+      completionCriteria: { targetRecordCount: 1, minimumSources: 1, requiredFieldsPresent: ["company"], requireSourceEvidence: true, stopWhenTargetReached: true, allowPartialResults: true, completionDescription: "Collect one sourced company." },
+    } });
     const executions = new WorkflowExecutionRepository(prisma);
     const created = await executions.createRun({
       workspaceId: fixture.workspace.id,
@@ -139,8 +163,10 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
       planVersion: fixture.plan.version,
     });
     const running = await prisma.workflowRun.findUniqueOrThrow({ where: { id: created.id } });
-    expect(running.status).toBe("RUNNING");
+    expect(running.status).toBe("PENDING");
     expect(running.workflowPlanId).toBe(fixture.plan.id);
+    expect(await executions.markRunStarted(created.id)).toBe(true);
+    expect(await prisma.workflowStep.count({ where: { workflowRunId: created.id } })).toBe(steps.length);
 
     await executions.completeRun(created.id, {
       status: "COMPLETED",

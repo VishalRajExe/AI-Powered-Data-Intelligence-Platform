@@ -28,6 +28,8 @@ export interface AgentSourceMetadata {
 export interface AgentRecord {
   values: Record<string, unknown>;
   sourceUrls: string[];
+  isValid?: boolean;
+  validationIssues?: Array<{ fieldKey?: string; ruleCode: string; severity: "ERROR" | "WARNING"; message: string }>;
 }
 
 export interface AgentExecutionError {
@@ -72,6 +74,9 @@ export interface AgentExecutionInput {
   plan: WorkflowPlan;
   workspaceId?: string;
   runId?: string;
+  stepType?: "SEARCH" | "SCRAPE" | "INTERACT" | "EXTRACT";
+  sourceUrls?: string[];
+  priorRecords?: AgentRecord[];
   onEvent?: (event: AgentExecutionEvent) => void;
 }
 
