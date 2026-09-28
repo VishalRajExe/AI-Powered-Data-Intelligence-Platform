@@ -26,6 +26,7 @@ import { createAuthRouter } from "./routes/auth.routes.js";
 import type { AuthService } from "./modules/auth/auth.service.js";
 import type { TokenService } from "./modules/auth/token.service.js";
 import { optionalAuthenticate, enforceClientIdentity } from "./modules/auth/auth.middleware.js";
+import { createOpenApiRouter } from "./routes/openapi.routes.js";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -97,6 +98,7 @@ export function createApp(dependencies: AppDependencies): express.Express {
   if (dependencies.exportRepository && dependencies.exportService) {
     app.use("/api/v1", createExportsRouter(dependencies.exportRepository, dependencies.exportService));
   }
+  app.use("/api/v1", createOpenApiRouter());
   if (dependencies.customRoutes) {
     for (const route of dependencies.customRoutes) {
       app.use(route.path, route.router);

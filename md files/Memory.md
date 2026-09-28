@@ -4,9 +4,9 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 13 — Authentication and Authorization complete.
+- **Current Phase:** Phase 14 — Frontend Integration Contract complete.
 - **Last updated:** 2026-09-28.
-- **App runnable end-to-end:** Full multi-user authentication and authorization layer is implemented and verified. Users can register with bcrypt password hashing, login with secure credentials, acquire short-lived JWT access tokens (15m) and cryptographically tracked refresh tokens (7d) with Redis/memory revocation, query `/api/v1/auth/me` for profile and workspace memberships, and rotate/revoke tokens via `/api/v1/auth/refresh` and `/api/v1/auth/logout`. Password hashes are strictly omitted from all outputs. Workspace isolation and client-supplied identity protection middleware prevent ID tampering and cross-tenant access. Prompt parsing, plan generation/persistence, BullMQ run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, Source and Evidence Explorer APIs, persistent Workflow and Run history views, SSE live monitoring, and Dataset Export APIs are fully functional and protected.
+- **App runnable end-to-end:** Complete backend and integration contracts are finalized, verified, and documented. Full OpenAPI 3.1.0 specification is available at `backend/docs/openapi.json` and served live at `GET /api/v1/openapi.json`. Canonical Frontend Integration Contract is documented in `md files/FrontendIntegrationContract.md` across all 11 core areas (Auth, Requirements, Workflows, Runs, Events, Datasets, Rows, Sources, Evidence, Exports, Activity) and mapped to all 8 target screens. Prompt parsing, plan generation/persistence, BullMQ run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, Source and Evidence Explorer APIs, persistent Workflow and Run history views, SSE live monitoring, Dataset Export APIs, and multi-user authentication/authorization are fully active, tested, and contract-verified.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
@@ -25,6 +25,7 @@
 - [x] Phase 11 — Workflow History and Live Monitoring: Persistent workflow and run history views and real-time live monitoring. Implemented `WorkflowHistoryRepository` exposing Workflow view (name, prompt, created time, last run summary, status, dataset summary, runs count) and WorkflowRun view (started, completed, duration, records found, records accepted, duplicates, failures, source count, dataset summary, steps). Standardized canonical activity actions (`PLANNING_STARTED`, `PLAN_CREATED`, `SOURCE_DISCOVERY_STARTED`, `SOURCE_DISCOVERED`, `SCRAPE_STARTED`, `SCRAPE_COMPLETED`, `EXTRACTION_STARTED`, `RECORDS_EXTRACTED`, `VALIDATION_COMPLETED`, `DEDUPLICATION_COMPLETED`, `DATASET_CREATED`, `RUN_COMPLETED`, `RUN_FAILED`). Implemented `WorkflowEventBroadcaster` with durable MySQL `ActivityEvent` persistence before Redis Pub/Sub and in-process broadcasting (no history kept only in memory). Implemented SSE endpoint `GET /api/v1/runs/:id/events` for frontend `EventSource` consumption with historical replay, Redis cross-process event distribution, and 15s keepalive heartbeats.
 - [x] Phase 12 — Data Export: Dataset exports in CSV, JSON, and XLSX with chunked streaming to prevent memory exhaustion. Supports complete datasets, filtered datasets (search, validOnly, duplicatesOnly, verificationStatus, confidence, fieldFilters, sort), and selected columns subset. Implemented `ExportRepository` and `ExportService` managing asynchronous `ExportJob` models with status tracking, RFC 4180 CSV escaping, valid JSON streaming arrays, and valid OpenXML spreadsheets via ExcelJS. Exposed `POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, and `GET /api/v1/exports/:id/download` with strict workspace access control.
 - [x] Phase 13 — Authentication and Authorization: Multi-user security layer with bcrypt password hashing (10 salt rounds), environment-based JWT secrets (`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, min 32 chars), short-lived access tokens (15m), rotating refresh tokens with unique UUID `jti` (7d), and Redis/memory token revocation. Default workspace and OWNER membership provisioned upon registration. Implemented routes: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`. Authorization middleware enforces active workspace membership (`requireWorkspaceAccess`), role hierarchy (`OWNER` > `ADMIN` > `MEMBER`), and client-supplied identity protection (`enforceClientIdentity`), rejecting user impersonation with 403 `FORBIDDEN_USER_MISMATCH`. Password hashes are strictly omitted from all models and responses.
+- [x] Phase 14 — Frontend Integration Contract: Generated OpenAPI 3.1.0 specification (`backend/docs/openapi.json`, `GET /api/v1/openapi.json`) and comprehensive integration contract (`md files/FrontendIntegrationContract.md`) defining every endpoint across all 11 core areas (Auth, Requirements, Workflows, Runs, Events, Datasets, Rows, Sources, Evidence, Exports, Activity + Health). Mapped all 8 target screens (New Research Task, Workflow Preview, Workflow Running, Workflow History, Dataset Explorer, Source Explorer, Export, Activity Log). Documented SSE event format with keepalives and reconnection, uniform `PaginationMeta` envelope, dynamic dataset columns and row filter syntax, and granular row/source/evidence provenance relationships. Verified with 27 automated contract tests.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -61,6 +62,7 @@
 | 2026-09-28 | Secure password hashing using `bcryptjs` with 10 salt rounds; omit password hashes from all domain models and API responses. | Protects credentials against rainbow tables and timing attacks; guarantees password hashes never leak into logs, serialization, or client views. |
 | 2026-09-28 | Dual-token authentication with short-lived JWT access tokens (15m), rotating refresh tokens with unique UUID `jti` (7d), and Redis/memory revocation. | Minimizes exposure window if access token is intercepted; refresh tokens with unique UUID `jti` allow instant revocation on logout across distributed instances. |
 | 2026-09-28 | Client identity anti-spoofing via `enforceClientIdentity` middleware and workspace isolation via `requireWorkspaceAccess`. | Prohibits client-supplied `userId`/`createdById`/`requestedById` overriding authenticated identity (403 `FORBIDDEN_USER_MISMATCH`); guarantees tenants cannot access foreign workspaces, workflows, datasets, sources, or exports. |
+| 2026-09-28 | Generate OpenAPI 3.1.0 specification (`backend/docs/openapi.json`, `GET /api/v1/openapi.json`) and document canonical Frontend Integration Contract in `md files/FrontendIntegrationContract.md`. | Guarantees transparent, machine-readable and human-readable API contracts for the future frontend without implementing frontend prematurely; ensures strict screen mapping, SSE live stream wire format, dynamic dataset schema definitions, and evidence explorer contracts are verified. |
 
 ## 4. Database / Schema Changes
 
@@ -129,7 +131,8 @@
 
 ## 7. Pending Work / Next Steps
 
-- Phase 13 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
+- Phase 14 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
+- Complete OpenAPI 3.1.0 specification and Frontend Integration Contract are verified, defining all contracts for future UI screens without premature frontend implementation.
 - Multi-user authentication and authorization with bcrypt password hashing, JWT access/refresh token rotation, Redis token revocation, and workspace isolation are active.
 - `Phases.md` uses older phase numbering; follow the user's current phase prompts and do not build its later planner phase early.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
@@ -139,44 +142,50 @@
 - **Requirements:** Node.js 20+, npm, MySQL 8+; Docker Compose provides local MySQL 8.4 and Redis 7 when available.
 - **Local setup:** `Copy-Item .env.example .env`; `docker compose up -d`; `npm install`; `npm run db:generate`; `npm run db:migrate --workspace @aidp/backend -- --name init`; `npm run db:seed`; `npm run dev`.
 - **Migration deploy:** `npm run db:deploy`.
+- **Generate OpenAPI:** `npm run docs:generate --workspace @aidp/backend` (emits `backend/docs/openapi.json`).
 - **Checks:** `npm run typecheck`; `npm run lint`; `npm test`; `npm run test:db` with `RUN_DATABASE_TESTS=true` and `DATABASE_URL`; `npm run build`; `npm audit`.
 - **Schema validation:** `npm run db:validate`.
 - **Environment variables:** `APP_ENV`, `PORT`, `FRONTEND_ORIGIN`, `LOG_LEVEL`, `REQUEST_BODY_LIMIT`, `SOURCE_ROBOTS_USER_AGENT`, `SOURCE_ROBOTS_TIMEOUT_MS`, `DATABASE_URL` or `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE`, `REDIS_URL`, `FIRECRAWL_API_KEY`, `FIRECRAWL_BASE_URL`, `LLM_PROVIDER`, `LLM_MODEL_ID`, provider credentials, `JWT_ACCESS_SECRET` (min 32 chars), and `JWT_REFRESH_SECRET` (min 32 chars).
-- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/workflows`, `GET /api/v1/workflows/:id`, `GET /api/v1/workflows/:id/runs`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/steps`, `GET /api/v1/runs/:id/activity`, `GET /api/v1/runs/:id/events`, `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, `GET /api/v1/datasets/:id/rows/:rowId/evidence`, `POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, and `GET /api/v1/exports/:id/download`. Multi-user authentication, JWT Bearer tokens, and workspace isolation are active across all endpoints.
+- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `GET /api/v1/openapi.json`, `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/workflows`, `GET /api/v1/workflows/:id`, `GET /api/v1/workflows/:id/runs`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/steps`, `GET /api/v1/runs/:id/activity`, `GET /api/v1/runs/:id/events`, `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, `GET /api/v1/datasets/:id/rows/:rowId/evidence`, `POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, and `GET /api/v1/exports/:id/download`. Multi-user authentication, JWT Bearer tokens, workspace isolation, and OpenAPI documentation are active across all endpoints.
 - **Data services:** `docker-compose.yml` defines local MySQL 8.4 and Redis 7.
 
 ## 9. Notes for the Next AI Session
 
-- Read `PRD.md`, `Architecture.md`, `Rules.md`, `Phases.md`, `Design.md`, and this memory before starting new phase work.
+- Read `PRD.md`, `Architecture.md`, `Rules.md`, `Phases.md`, `Design.md`, `FrontendIntegrationContract.md`, and this memory before starting new phase work.
 - Backend sources are under `backend/src/`; Prisma schema, migrations, and seed are under `backend/prisma/`.
 - Dataset row persistence must go through `DatasetRepository.insertRowWithEvidence` to preserve the source-evidence invariant.
 - Frontend is separate and must not be implemented unless specifically requested.
 
 ## 10. Last Session Summary
 
-Phase 13 (Authentication and Authorization) completed. Implemented multi-user security foundation and workspace isolation:
-- Defined domain types and models in `backend/src/modules/auth/auth.types.ts` (`UserView`, `WorkspaceSummary`, `AuthTokens`, `AuthResponse`, `AccessTokenPayload`, `RefreshTokenPayload`, `AuthenticatedUser`, `RegisterInput`, `LoginInput`).
-- Implemented secure password hashing in `backend/src/modules/auth/password.ts` using `bcryptjs` (10 salt rounds) with constant-time comparison; password hashes are strictly omitted from all client-facing models.
-- Implemented token management in `backend/src/modules/auth/token.service.ts`:
-  - Issues signed JWT access tokens (15m TTL) with environment-based `JWT_ACCESS_SECRET`.
-  - Issues signed JWT refresh tokens (7d TTL) with unique UUID `jti` and environment-based `JWT_REFRESH_SECRET`.
-  - Supports token revocation via Redis key `aidp:revoked_token:${jti}` with in-memory fallback.
-  - Maps JWT errors to standard `TOKEN_EXPIRED`, `INVALID_TOKEN`, and `TOKEN_REVOKED` AppErrors.
-- Implemented `AuthService` (`backend/src/modules/auth/auth.service.ts`):
-  - `register`: Validates password length (>= 8 chars), rejects duplicate emails (409 `EMAIL_ALREADY_EXISTS`), atomically provisions User, default Workspace, and OWNER `WorkspaceMember` inside a transaction, and returns tokens and sanitized user profile without password hash.
-  - `login`: Verifies credentials via bcrypt, checks account `ACTIVE` status, and issues fresh token pair and workspace summaries.
-  - `refreshToken`: Validates refresh token signature and revocation state, rotates token pair, and ensures user remains active.
-  - `logout`: Revokes refresh token `jti` in Redis / in-memory revocation store.
-  - `getCurrentUser`: Fetches sanitized user profile and active workspace memberships.
-- Implemented Authorization Middleware (`backend/src/modules/auth/auth.middleware.ts`):
-  - `authenticate`: Enforces valid Bearer JWT on protected endpoints, setting `res.locals.user`.
-  - `optionalAuthenticate`: Gracefully attaches `res.locals.user` if Bearer header is present.
-  - `requireWorkspaceAccess`: Enforces active membership in target workspace (`res.locals.workspaceId`) and validates hierarchical roles (`OWNER` > `ADMIN` > `MEMBER`).
-  - `enforceClientIdentity`: Prohibits client-supplied `userId`, `createdById`, or `requestedById` that does not match authenticated identity, rejecting spoofing with 403 `FORBIDDEN_USER_MISMATCH`.
-- Exposed Express routes in `backend/src/routes/auth.routes.ts`:
-  - `POST /api/v1/auth/register`: Account creation with default workspace.
-  - `POST /api/v1/auth/login`: Credential verification and token issuance.
-  - `POST /api/v1/auth/refresh`: Token rotation.
-  - `POST /api/v1/auth/logout`: Refresh token revocation.
-  - `GET /api/v1/auth/me`: Authenticated profile and workspace list.
-- Verification passed: 151 automated tests passing across 14 test suites (including 13 dedicated tests in `backend/tests/auth.test.ts` covering unauthenticated, authenticated, wrong user, workspace isolation, expired token, invalid token, duplicate email, and password omission), 0 ESLint errors, clean typecheck, and successful production build.
+Phase 14 (Frontend Integration Contract) completed. Created and verified the complete backend contract that the future frontend will consume:
+- Authored full OpenAPI 3.1.0 specification object in `backend/src/docs/openapi.spec.ts` and generated standalone `backend/docs/openapi.json` via npm script `docs:generate`.
+- Exposed live endpoint `GET /api/v1/openapi.json` via `backend/src/routes/openapi.routes.ts` mounted in `backend/src/app.ts`.
+- Created comprehensive integration documentation in `md files/FrontendIntegrationContract.md` and `backend/docs/FRONTEND_INTEGRATION_CONTRACT.md` documenting every endpoint across all 11 core areas:
+  - Auth (`/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/me`).
+  - Requirements (`/requirements/parse`).
+  - Workflows (`/workflows/plan`, `/workflows/execute`, `/workflows/:id/run`, `/workflows`, `/workflows/:id`, `/workflows/:id/runs`).
+  - Runs (`/runs/:id`, `/runs/:id/steps`, `/runs/:id/cancel`).
+  - Events (`/runs/:id/events` SSE stream).
+  - Datasets (`/datasets`, `/datasets/:id`, `/datasets/:id/schema`).
+  - Rows (`/datasets/:id/rows`, `/datasets/:id/rows/:rowId`).
+  - Sources (`/datasets/:id/sources`, `/sources/:id`).
+  - Evidence (`/rows/:id/evidence`, `/datasets/:id/rows/:rowId/evidence`).
+  - Exports (`/datasets/:id/exports`, `/exports/:id`, `/exports/:id/download`).
+  - Activity (`/runs/:id/activity`).
+- Defined deep-dive architectural specifications:
+  - Server-Sent Events (SSE) format: `event: message`, `data: { ... }`, 15-second keepalive comment heartbeats, historical event replay on connection, Redis pub/sub distribution, and reconnection with `Last-Event-ID`.
+  - Uniform pagination format: `PaginationMeta` (`page`, `limit`, `total`, `totalPages`, `hasMore`).
+  - Filter & search syntax: `search`, `validOnly`, `duplicatesOnly`, `verificationStatus`, `minConfidence`, `sourceId`, `fieldFilters`, `sortBy`, `sortOrder`.
+  - Dynamic dataset columns & rows architecture: Relational schema registration (`DatasetColumnView`) coexisting with typed dynamic values in MySQL without single JSON blob compromises.
+  - Granular row, source, and evidence provenance: `RowEvidenceExplorerResponse`, `FieldEvidenceView`, `SupportingSourceView` with explicit verification checks (`isVerified: true/false`).
+- Fully mapped the backend contracts to all 8 target frontend screens defined in `Design.md`:
+  1. New Research Task
+  2. Workflow Preview
+  3. Workflow Running
+  4. Workflow History
+  5. Dataset Explorer
+  6. Source Explorer
+  7. Export
+  8. Activity Log.
+- Verification passed: 178 automated tests passing across 15 test suites (including 27 dedicated contract verification tests in `backend/tests/frontend-contract.test.ts`), 0 ESLint errors, clean TypeScript typecheck, and successful production build.
