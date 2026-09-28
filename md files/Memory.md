@@ -4,9 +4,9 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 11 — Workflow History and Live Monitoring complete.
+- **Current Phase:** Phase 12 — Data Export complete.
 - **Last updated:** 2026-09-28.
-- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, Source and Evidence Explorer APIs, persistent Workflow and Run history views, and Server-Sent Events (SSE) live progress monitoring with Redis Pub/Sub cross-process event propagation (`GET /api/v1/runs/:id/events`, `GET /api/v1/runs/:id/activity`, `GET /api/v1/workflows`, `GET /api/v1/workflows/:id`, `GET /api/v1/workflows/:id/runs`) are wired and verified.
+- **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, Source and Evidence Explorer APIs, persistent Workflow and Run history views, SSE live monitoring, and Dataset Export APIs (`POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, `GET /api/v1/exports/:id/download`) for CSV, JSON, and XLSX with chunked streaming and workspace authorization are wired and verified.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
@@ -23,6 +23,7 @@
 - [x] Phase 9 — Dataset Management: Full business data layer. Implemented `DatasetQueryRepository` and Express routes for `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, and `GET /api/v1/sources/:id`. Coexists dynamic JSON rows with indexed relational columns, prevents SQL/JSON injection via schema-aware validation, supports pagination, text search, dynamic field filters, valid-only, duplicates-only, sorting, and full source/evidence lineage.
 - [x] Phase 10 — Source and Evidence Explorer: Explainable and source-backed provenance at row and field granularity. Implemented domain models (`SourceDetail`, `SourceEvidence`, `DatasetRowSource`, `FieldEvidence`, `RowEvidenceExplorerResponse`) and `ProvenanceService`. Preserves URL, domain, page title, `retrievedAt`, `sourceType`, workflow run, extraction step, evidence snippet, and source status. Implemented `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, and `GET /api/v1/rows/:id/evidence` (with alias `/api/v1/datasets/:id/rows/:rowId/evidence`). Supports multi-source row provenance (e.g., Company from Source A, Website from Source B), prevents claiming a source verifies a value if the snippet contains unrelated content (`isVerified: false`), and preserves conflict history where different sources disagree.
 - [x] Phase 11 — Workflow History and Live Monitoring: Persistent workflow and run history views and real-time live monitoring. Implemented `WorkflowHistoryRepository` exposing Workflow view (name, prompt, created time, last run summary, status, dataset summary, runs count) and WorkflowRun view (started, completed, duration, records found, records accepted, duplicates, failures, source count, dataset summary, steps). Standardized canonical activity actions (`PLANNING_STARTED`, `PLAN_CREATED`, `SOURCE_DISCOVERY_STARTED`, `SOURCE_DISCOVERED`, `SCRAPE_STARTED`, `SCRAPE_COMPLETED`, `EXTRACTION_STARTED`, `RECORDS_EXTRACTED`, `VALIDATION_COMPLETED`, `DEDUPLICATION_COMPLETED`, `DATASET_CREATED`, `RUN_COMPLETED`, `RUN_FAILED`). Implemented `WorkflowEventBroadcaster` with durable MySQL `ActivityEvent` persistence before Redis Pub/Sub and in-process broadcasting (no history kept only in memory). Implemented SSE endpoint `GET /api/v1/runs/:id/events` for frontend `EventSource` consumption with historical replay, Redis cross-process event distribution, and 15s keepalive heartbeats.
+- [x] Phase 12 — Data Export: Dataset exports in CSV, JSON, and XLSX with chunked streaming to prevent memory exhaustion. Supports complete datasets, filtered datasets (search, validOnly, duplicatesOnly, verificationStatus, confidence, fieldFilters, sort), and selected columns subset. Implemented `ExportRepository` and `ExportService` managing asynchronous `ExportJob` models with status tracking, RFC 4180 CSV escaping, valid JSON streaming arrays, and valid OpenXML spreadsheets via ExcelJS. Exposed `POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, and `GET /api/v1/exports/:id/download` with strict workspace access control.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -54,6 +55,8 @@
 | 2026-09-28 | Expose top-level `GET /api/v1/rows/:id/evidence` with nested `GET /api/v1/datasets/:id/rows/:rowId/evidence` alias. | Conforms to Phase 10 specification while preserving backward compatibility with dataset-scoped paths. |
 | 2026-09-28 | Persist all workflow activity events durably in MySQL `activity_events` before publishing to pub/sub. | Guarantees auditability and replayability; prevents losing run events or keeping workflow history only in volatile memory across worker/server restarts. |
 | 2026-09-28 | Implement live run monitoring via Server-Sent Events (`GET /api/v1/runs/:id/events`) using standard EventSource format with Redis Pub/Sub cross-process distribution and event deduplication. | Replays historical activity on connection, receives live events across multiple API/worker nodes via Redis channel `aidp:run:${runId}:events`, deduplicates via bounded set, and maintains keepalive comments every 15s. |
+| 2026-09-28 | Stream dataset exports in configurable chunks (default 500 rows) directly to disk using RFC 4180 CSV serializer, JSON array streamer, and ExcelJS streaming WorkbookWriter. | Prevents heap exhaustion on large datasets by avoiding loading all rows into Node.js memory simultaneously. |
+| 2026-09-28 | Model export lifecycle via `ExportJob` with states (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`) and persist `fileMetadata` (size, rowCount, columnCount, contentType, SHA256 checksum). | Enables asynchronous background export jobs, decoupled polling, verifiable downloads, and workspace-scoped ownership checks. |
 
 ## 4. Database / Schema Changes
 
@@ -82,6 +85,7 @@
 - Robots policy uses a bounded native HTTP fetch, parses user-agent groups, allow/disallow specificity, and crawl delay, and caches per origin. Robots fetch errors/HTTP access failures fail closed. Redis Lua sliding-window limits are checked for each actual request attempt, including retries. Timeout/retry settings come from the validated workflow step.
 - Source records preserve title/snippet metadata, normalized/canonical URL/hash, lifecycle state, reason/error code, robots result/check time, request attempt count/time, and retrieval time. Full web page bodies are not saved.
 - Added `backend/tests/source-governance.test.ts` and MySQL lifecycle/provenance assertions. `.env.example` now includes `SOURCE_ROBOTS_USER_AGENT` and `SOURCE_ROBOTS_TIMEOUT_MS`.
+- Added migration `20260928180000_phase12_data_export`: added `file_metadata` JSON column to `export_jobs` table to persist file metadata, size in bytes, row and column counts, and SHA256 checksums.
 
 ## 5. Known Bugs / Issues / Verification Limits
 
@@ -121,8 +125,8 @@
 
 ## 7. Pending Work / Next Steps
 
-- Phase 11 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
-- Authentication is not implemented. For now `createdById` is supplied by the caller and checked against active workspace membership; a future auth phase must bind it to an authenticated principal.
+- Phase 12 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
+- Authentication is not implemented. For now `createdById` and `requestedById` are supplied by the caller and checked against active workspace membership; a future auth phase must bind them to an authenticated principal.
 - `Phases.md` uses older phase numbering; follow the user's current phase prompts and do not build its later planner phase early.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
 
@@ -134,7 +138,7 @@
 - **Checks:** `npm run typecheck`; `npm run lint`; `npm test`; `npm run test:db` with `RUN_DATABASE_TESTS=true` and `DATABASE_URL`; `npm run build`; `npm audit`.
 - **Schema validation:** `npm run db:validate`.
 - **Environment variables:** `APP_ENV`, `PORT`, `FRONTEND_ORIGIN`, `LOG_LEVEL`, `REQUEST_BODY_LIMIT`, `SOURCE_ROBOTS_USER_AGENT`, `SOURCE_ROBOTS_TIMEOUT_MS`, `DATABASE_URL` or `MYSQL_HOST`/`MYSQL_PORT`/`MYSQL_USER`/`MYSQL_PASSWORD`/`MYSQL_DATABASE`, `REDIS_URL`, `FIRECRAWL_API_KEY`, `FIRECRAWL_BASE_URL`, `LLM_PROVIDER`, `LLM_MODEL_ID`, provider credentials, and paired `JWT_ACCESS_SECRET`/`JWT_REFRESH_SECRET` when auth is introduced.
-- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/workflows`, `GET /api/v1/workflows/:id`, `GET /api/v1/workflows/:id/runs`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/steps`, `GET /api/v1/runs/:id/activity`, `GET /api/v1/runs/:id/events`, `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, and `GET /api/v1/datasets/:id/rows/:rowId/evidence`. Long runs are queued; `SAVE` persists datasets, rows, and row-level evidence through `DatasetRepository`. Live monitoring connects via EventSource SSE. Auth is not active.
+- **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/workflows`, `GET /api/v1/workflows/:id`, `GET /api/v1/workflows/:id/runs`, `GET /api/v1/runs/:id`, `GET /api/v1/runs/:id/steps`, `GET /api/v1/runs/:id/activity`, `GET /api/v1/runs/:id/events`, `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, `GET /api/v1/rows/:id/evidence`, `GET /api/v1/datasets/:id/rows/:rowId/evidence`, `POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, and `GET /api/v1/exports/:id/download`. Long runs and exports are queued/asynchronous; datasets and rows are persisted through `DatasetRepository`. Export streaming supports CSV, JSON, and XLSX. Auth is not active.
 - **Data services:** `docker-compose.yml` defines local MySQL 8.4 and Redis 7.
 
 ## 9. Notes for the Next AI Session
@@ -146,27 +150,25 @@
 
 ## 10. Last Session Summary
 
-Phase 11 (Workflow History and Live Monitoring) completed. Built the persistent workflow lifecycle monitoring infrastructure and live SSE streaming:
-- Defined domain models and types in `backend/src/modules/monitoring/` (`ActivityActions`, `RunActivityEvent`, `WorkflowListItem`, `WorkflowDetail`, `WorkflowLastRunSummary`, `WorkflowDatasetSummary`, `WorkflowRunView`, `WorkflowRunStepView`).
-- Standardized canonical activity actions: `PLANNING_STARTED`, `PLAN_CREATED`, `SOURCE_DISCOVERY_STARTED`, `SOURCE_DISCOVERED`, `SCRAPE_STARTED`, `SCRAPE_COMPLETED`, `EXTRACTION_STARTED`, `RECORDS_EXTRACTED`, `VALIDATION_COMPLETED`, `DEDUPLICATION_COMPLETED`, `DATASET_CREATED`, `RUN_COMPLETED`, `RUN_FAILED`.
-- Implemented `WorkflowEventBroadcaster`: records all activity events durably in MySQL `activity_events` first (never in-memory only), then distributes them over Redis Pub/Sub (`aidp:run:${runId}:events`) and in-memory event emitters with ID deduplication.
-- Implemented `WorkflowHistoryRepository`:
-  - Workflows: `listWorkflows`, `getWorkflow`, and `getWorkflowRuns` providing name, original prompt, created time, last run summary, status, dataset summary, and run count.
-  - WorkflowRuns: `getRun` and `getRunActivity` providing start/complete timestamps, duration in ms, records found, records accepted, duplicates, failures, source counts, dataset summary, and step breakdown.
-- Emitted activity events throughout execution lifecycle:
-  - Planner: `PLANNING_STARTED`, `PLAN_CREATED` (and `PLANNING_FAILED`).
-  - Worker/Execution repository: `SOURCE_DISCOVERY_STARTED`, `SOURCE_DISCOVERED`, `SCRAPE_STARTED`, `SCRAPE_COMPLETED`, `EXTRACTION_STARTED`, `RECORDS_EXTRACTED`, `VALIDATION_COMPLETED`, `DEDUPLICATION_COMPLETED`, `DATASET_CREATED`, `RUN_COMPLETED`, `RUN_FAILED`.
-- Implemented SSE live progress endpoint:
-  - `GET /api/v1/runs/:id/events` for frontend `EventSource` connections with `Content-Type: text/event-stream`.
-  - Replays historical activity events from MySQL upon client connect.
-  - Subscribes dynamically to Redis Pub/Sub and Node EventEmitter for real-time progress events.
-  - Emits 15-second heartbeat comments to keep connections alive through proxies and firewalls.
-  - Cleans up subscriptions and timers on client disconnect.
-- Exposed new API endpoints:
-  - `GET /api/v1/workflows` (workflow list with summary metrics)
-  - `GET /api/v1/workflows/:id` (detailed workflow view with last run & dataset info)
-  - `GET /api/v1/workflows/:id/runs` (paginated run history for a workflow)
-  - `GET /api/v1/runs/:id` (rich workflow run view with records found/accepted/duplicates/failures)
-  - `GET /api/v1/runs/:id/activity` (chronological activity event history for a run)
-  - `GET /api/v1/runs/:id/events` (EventSource SSE live event stream)
-- Verification passed: 126 automated tests passing across 12 test suites (including 9 dedicated Phase 11 history & monitoring tests), 0 ESLint errors, clean typecheck, and successful production build.
+Phase 12 (Data Export) completed. Implemented asynchronous streaming dataset exports in CSV, JSON, and XLSX:
+- Defined domain types and models in `backend/src/modules/export/export.types.ts` (`ExportFormat`, `ExportJobStatus`, `ExportFilterDefinition`, `ExportFileMetadata`, `ExportJobView`, `CreateExportInput`).
+- Implemented memory-efficient chunked streaming format writers in `backend/src/modules/export/format-writers.ts`:
+  - `writeCsvStream`: RFC 4180 compliant CSV stream writer with proper quote doubling, newline preservation, and comma escaping via `escapeCsvCell`.
+  - `writeJsonStream`: Valid streaming JSON array writer (`[\n  {...}\n]`) without loading entire dataset into memory.
+  - `writeXlsxStream`: OpenXML spreadsheet writer powered by `ExcelJS.stream.xlsx.WorkbookWriter` with immediate row commits to prevent heap exhaustion.
+- Implemented `ExportRepository` (`backend/src/db/repositories/export.repository.ts`):
+  - Manages `ExportJob` database records with workspace-scoped access control.
+  - Supports status lifecycle transitions: `PENDING` -> `RUNNING` -> `COMPLETED` / `FAILED`.
+  - Tracks file metadata: filename, file size, row count, column count, content type, and SHA256 checksums.
+  - Resolves file keys and enforces that only `COMPLETED` jobs can be downloaded.
+- Implemented `ExportService` (`backend/src/modules/export/export.service.ts`):
+  - Integrates with `DatasetQueryRepository` to fetch rows in bounded chunks (default 500 rows).
+  - Honors all filter criteria: full-text search, `validOnly`, `duplicatesOnly`, `verificationStatus`, confidence thresholds, `sourceId`, custom field filters, and sorting.
+  - Supports exporting a selected subset of columns or the full dataset column set.
+  - Cleans up partial files on failure and marks the job as `FAILED` with sanitized error details.
+- Implemented Express routes in `backend/src/routes/exports.routes.ts`:
+  - `POST /api/v1/datasets/:id/exports`: Accepts export request, verifies active workspace membership and dataset existence, starts asynchronous export job, and returns 202 Accepted with `ExportJobView`.
+  - `GET /api/v1/exports/:id`: Retrieves export job status, execution timestamps, error details, and file metadata.
+  - `GET /api/v1/exports/:id/download`: Streams the completed export file to the client with appropriate `Content-Type`, `Content-Disposition: attachment`, and `Content-Length` headers; returns 400 if export is not completed.
+- Added database migration `20260928180000_phase12_data_export` for `file_metadata` column on `export_jobs`.
+- Verification passed: 138 automated tests passing across 13 test suites (including 12 dedicated tests in `backend/tests/exports.test.ts` verifying file generation, RFC 4180 escaping, JSON parsing, ExcelJS XLSX reading, filters, column selection, and API authorization), 0 ESLint errors, clean typecheck, and successful production build.

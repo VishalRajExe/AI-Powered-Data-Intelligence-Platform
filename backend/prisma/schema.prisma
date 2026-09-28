@@ -544,6 +544,7 @@ model ExportJob {
   filters       Json?
   sort          Json?
   fileKey       String?         @map("file_key") @db.VarChar(1024)
+  fileMetadata  Json?           @map("file_metadata")
   expiresAt     DateTime?       @map("expires_at") @db.DateTime(3)
   errorCode     String?         @map("error_code") @db.VarChar(100)
   errorMessage  String?         @map("error_message") @db.Text

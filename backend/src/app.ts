@@ -19,6 +19,9 @@ import type { WorkflowHistoryRepository } from "./db/repositories/workflow-histo
 import type { WorkflowEventBroadcaster } from "./modules/monitoring/event-broadcaster.js";
 import { createDatasetsRouter } from "./routes/datasets.routes.js";
 import type { DatasetQueryRepository } from "./db/repositories/dataset-query.repository.js";
+import { createExportsRouter } from "./routes/exports.routes.js";
+import type { ExportRepository } from "./db/repositories/export.repository.js";
+import type { ExportService } from "./modules/export/export.service.js";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -31,6 +34,8 @@ export interface AppDependencies {
   workflowHistoryRepository?: WorkflowHistoryRepository;
   eventBroadcaster?: WorkflowEventBroadcaster;
   datasetQueryRepository?: DatasetQueryRepository;
+  exportRepository?: ExportRepository;
+  exportService?: ExportService;
   agentAdapter: AgentAdapter;
 }
 
@@ -75,6 +80,9 @@ export function createApp(dependencies: AppDependencies): express.Express {
     );
   }
   if (dependencies.datasetQueryRepository) app.use("/api/v1", createDatasetsRouter(dependencies.datasetQueryRepository));
+  if (dependencies.exportRepository && dependencies.exportService) {
+    app.use("/api/v1", createExportsRouter(dependencies.exportRepository, dependencies.exportService));
+  }
   app.use(notFoundHandler());
   app.use(createErrorHandler(dependencies.logger));
   return app;

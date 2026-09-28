@@ -21,6 +21,8 @@ import { WorkflowSourceRepository } from "./db/repositories/workflow-source.repo
 import { DatasetQueryRepository } from "./db/repositories/dataset-query.repository.js";
 import { WorkflowHistoryRepository } from "./db/repositories/workflow-history.repository.js";
 import { WorkflowEventBroadcaster } from "./modules/monitoring/event-broadcaster.js";
+import { ExportRepository } from "./db/repositories/export.repository.js";
+import { ExportService } from "./modules/export/export.service.js";
 
 const config = loadEnvConfig();
 process.env.DATABASE_URL = config.DATABASE_URL;
@@ -60,6 +62,8 @@ const workflowWorker = createWorkflowWorker<{ runId: string }>(redis, async (job
   }
 }, { concurrency: 2 });
 workflowWorker.on("failed", (job, error) => logger.error({ runId: job?.data.runId, errorName: error.name }, "Workflow queue job failed"));
+const exportRepository = new ExportRepository(prisma);
+const exportService = new ExportService(exportRepository, datasetQueryRepository, { logger });
 const app = createApp({
   config,
   logger,
@@ -70,6 +74,8 @@ const app = createApp({
   workflowHistoryRepository,
   eventBroadcaster,
   datasetQueryRepository,
+  exportRepository,
+  exportService,
   agentAdapter,
   readiness: {
     mysql: () => prisma.$queryRaw`SELECT 1`,
