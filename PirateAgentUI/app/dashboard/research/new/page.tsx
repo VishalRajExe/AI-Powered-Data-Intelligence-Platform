@@ -13,18 +13,43 @@ import type { DataContract } from "@/lib/types";
 
 type Stage = "input" | "analyzing" | "review";
 
+interface RawField {
+  name?: string;
+  key?: string;
+  label?: string;
+  type: string;
+  required?: boolean;
+}
+
 interface ParseResponse {
-  entity: string;
-  fields: Array<{ name: string; type: string; required: boolean }>;
-  filters: string[];
-  sourceTypes: string[];
-  targetCount: number;
+  entity?: string;
+  fields?: RawField[];
+  filters?: (string | { field?: string; operator?: string; value?: unknown })[];
+  sourceTypes?: string[];
+  targetCount?: number;
   dataContractName?: string;
+  parsedRequirement?: {
+    entityType?: string;
+    quantity?: number;
+    fields?: RawField[];
+    requiredFields?: string[];
+    filters?: Array<string | { field?: string; operator?: string; value?: unknown }>;
+    sourcePreferences?: string[];
+    constraints?: string[];
+  };
 }
 
 interface ExecuteResponse {
   workflowId: string;
   runId: string;
+}
+
+function normalizeFieldType(type: string): "text" | "url" | "number" | "email" {
+  const lower = (type || "text").toLowerCase();
+  if (lower === "url" || lower === "link" || lower === "website") return "url";
+  if (lower === "number" || lower === "integer" || lower === "float") return "number";
+  if (lower === "email") return "email";
+  return "text";
 }
 
 function NewResearchInner() {
@@ -50,22 +75,60 @@ function NewResearchInner() {
       .post<ParseResponse>("/requirements/parse", { prompt })
       .then((result) => {
         if (cancelled) return;
+        const req = result.parsedRequirement;
+        const entity = req?.entityType || result.entity || "Record";
+        const rawFields = req?.fields || result.fields || [];
+        const requiredSet = new Set(req?.requiredFields || []);
+
+        const mappedFields = rawFields.map((f) => {
+          const fieldName = f.name || f.key || f.label || "field";
+          const isRequired =
+            f.required !== undefined
+              ? f.required
+              : requiredSet.size > 0
+              ? requiredSet.has(fieldName) || requiredSet.has(f.key || "")
+              : true;
+          return {
+            name: fieldName,
+            type: normalizeFieldType(f.type),
+            required: isRequired,
+          };
+        });
+
+        const rawFilters = req?.filters || result.filters || [];
+        const filtersList = rawFilters
+          .map((fl) =>
+            typeof fl === "string"
+              ? fl
+              : `${fl.field ?? ""} ${fl.operator ?? ""} ${fl.value ?? ""}`.trim(),
+          )
+          .filter(Boolean)
+          .concat(req?.constraints || []);
+
+        const sourceTypes = req?.sourcePreferences || result.sourceTypes || [];
+        const targetCount = req?.quantity || result.targetCount || 100;
+
         setContract({
-          entity: result.entity,
-          fields: result.fields.map((f) => ({
-            name: f.name,
-            type: f.type as "text" | "url" | "number" | "email",
-            required: f.required,
-          })),
-          filters: result.filters || [],
-          sourceTypes: result.sourceTypes || [],
-          targetCount: result.targetCount || 100,
+          entity,
+          fields: mappedFields.length > 0 ? mappedFields : [
+            { name: "name", type: "text", required: true },
+            { name: "website", type: "url", required: true },
+          ],
+          filters: filtersList,
+          sourceTypes,
+          targetCount,
         });
         setStage("review");
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof ApiError ? err.message : "Failed to analyze request");
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+            ? err.message
+            : "Failed to analyze request",
+        );
         setStage("input");
       });
 
