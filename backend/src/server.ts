@@ -43,17 +43,18 @@ const workflowHistoryRepository = new WorkflowHistoryRepository(prisma);
 const workflowQueue = createWorkflowQueue(redis);
 const requirementParser = createRequirementParser(config, logger);
 const workflowPlanner = createWorkflowPlanner(config, logger, prisma);
+const workflowSourceRepository = new WorkflowSourceRepository(prisma);
 const sourcePolicy = new SourcePolicyService(
   new SourceValidator(),
   new RobotsPolicyService({ userAgent: config.SOURCE_ROBOTS_USER_AGENT, timeoutMs: config.SOURCE_ROBOTS_TIMEOUT_MS }),
   new RateLimitService({ eval: (script, numberOfKeys, ...args) => redis.eval(script, numberOfKeys, ...args.map(String)) }),
   new RetryPolicy(),
-  new WorkflowSourceRepository(prisma),
+  workflowSourceRepository,
   logger,
 );
 
 const agentAdapter = config.DEMO_MODE
-  ? new DemoAgentAdapter(logger)
+  ? new DemoAgentAdapter(logger, workflowSourceRepository)
   : new FirecrawlAgentAdapter(config, logger, undefined, undefined, sourcePolicy);
 
 if (config.DEMO_MODE) {

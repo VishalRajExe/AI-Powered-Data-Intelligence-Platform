@@ -7,9 +7,16 @@ import type {
   AgentSourceMetadata,
 } from "../../agent/types.js";
 import { resolveDemoScenario } from "./scenarios.data.js";
+import { SourceValidator } from "../sources/SourceValidator.js";
+import type { WorkflowSourceRepository } from "../../db/repositories/workflow-source.repository.js";
 
 export class DemoAgentAdapter implements AgentAdapter {
-  constructor(private readonly logger?: Logger) {}
+  private readonly validator = new SourceValidator();
+
+  constructor(
+    private readonly logger?: Logger,
+    private readonly sourceRepo?: WorkflowSourceRepository,
+  ) {}
 
   checkConfiguration(): AgentConfigurationHealth {
     return {
@@ -37,6 +44,40 @@ export class DemoAgentAdapter implements AgentAdapter {
 
     // Copy candidate sources
     const sources: AgentSourceMetadata[] = [...scenario.sources];
+
+    // Persist discovered/scraped sources to database if sourceRepo is available
+    if (this.sourceRepo && input.workspaceId && input.runId) {
+      for (const s of sources) {
+        const norm = this.validator.normalize(s.url);
+        if ("hash" in norm) {
+          try {
+            await this.sourceRepo.upsertDiscovered({
+              workspaceId: input.workspaceId,
+              workflowRunId: input.runId,
+              url: s.url,
+              canonicalUrl: s.canonicalUrl,
+              canonicalUrlHash: norm.hash,
+              domain: s.domain,
+              title: s.title,
+            });
+            if (s.verifiedByTool) {
+              await this.sourceRepo.updateLifecycle(input.workspaceId, input.runId, norm.hash, {
+                status: "COLLECTED",
+                retrievedAt: new Date(s.retrievedAt || now),
+              });
+            } else {
+              await this.sourceRepo.updateLifecycle(input.workspaceId, input.runId, norm.hash, {
+                status: "FAILED",
+                code: "HTTP_404_NOT_FOUND",
+                reason: "Source unreachable (simulated 404)",
+              });
+            }
+          } catch (err) {
+            this.logger?.warn({ err, url: s.url }, "Failed to upsert demo source to repository");
+          }
+        }
+      }
+    }
 
     const execution = {
       provider: "demo-simulator",

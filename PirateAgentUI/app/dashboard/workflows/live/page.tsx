@@ -13,8 +13,15 @@ interface RunResponse {
   id: string;
   workflowId: string;
   status: string;
+  progress?: number;
+  recordsFound?: number;
+  recordsValid?: number;
+  duplicateCount?: number;
+  sourcesProcessed?: number;
+  sourcesTotal?: number;
   datasetId?: string;
   workflow?: { name: string; prompt: string };
+  errorMessage?: string;
 }
 
 function LiveWorkflowInner() {
@@ -55,91 +62,146 @@ function LiveWorkflowInner() {
 
   // Derive state from SSE events
   const derived = useMemo(() => {
-    let status: WorkflowStatus = "running";
-    let progress = 0;
-    let recordsFound = 0;
-    let validRecords = 0;
-    let duplicates = 0;
-    let sourcesProcessed = 0;
-    let sourcesTotal = 0;
+    const isCompleted = run?.status === "COMPLETED";
+    const isFailed = run?.status === "FAILED";
+    const isCancelled = run?.status === "CANCELLED";
+
+    let status: WorkflowStatus = isCompleted ? "completed" : isFailed ? "failed" : isCancelled ? "paused" : "running";
+    let progress = isCompleted ? 100 : (run?.progress ?? 0);
+    let recordsFound = run?.recordsFound ?? 0;
+    let validRecords = run?.recordsValid ?? 0;
+    let duplicates = run?.duplicateCount ?? 0;
+    let sourcesProcessed = run?.sourcesProcessed ?? 0;
+    let sourcesTotal = run?.sourcesTotal ?? sourcesProcessed;
     let datasetId = run?.datasetId;
 
-    const stages: StageState[] = STAGE_TEMPLATE.map((s) => ({
-      ...s,
-      status: "pending" as const,
-    }));
+    const stages: StageState[] = STAGE_TEMPLATE.map((s, idx) => {
+      if (isCompleted) return { ...s, status: "done" as const };
+      return { ...s, status: idx === 0 ? ("done" as const) : ("pending" as const) };
+    });
+
+    const setStage = (key: StageState["key"], st: StageState["status"]) => {
+      const idx = stages.findIndex((s) => s.key === key);
+      if (idx >= 0) {
+        stages[idx] = { ...stages[idx], status: st };
+        if (st === "done") {
+          for (let i = 0; i < idx; i++) {
+            stages[i] = { ...stages[i], status: "done" };
+          }
+          progress = Math.max(progress, Math.min(100, Math.round(((idx + 1) / stages.length) * 100)));
+        }
+      }
+    };
 
     const log: { id: string; text: string; timestamp: string }[] = [];
 
+    // Prompt brief
+    if (run?.workflow?.prompt) {
+      log.push({
+        id: "init-prompt",
+        text: `Understood requirement: "${run.workflow.prompt.slice(0, 80)}"`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     for (const ev of events) {
       const d = ev.data ?? {};
+      const ts = ev.timestamp ?? new Date().toISOString();
 
       switch (ev.action) {
         case "STAGE_STARTED": {
-          const stageKey = d.stageKey as string;
-          const idx = stages.findIndex((s) => s.key === stageKey);
-          if (idx >= 0) stages[idx] = { ...stages[idx], status: "active" };
-          log.push({ id: ev.id, text: `Started: ${d.label || stageKey}`, timestamp: ev.timestamp ?? new Date().toISOString() });
+          const stageKey = d.stageKey as StageState["key"];
+          setStage(stageKey, "active");
+          log.push({ id: ev.id, text: `Started: ${d.label || stageKey}`, timestamp: ts });
           break;
         }
         case "STAGE_COMPLETED": {
-          const stageKey = d.stageKey as string;
-          const idx = stages.findIndex((s) => s.key === stageKey);
-          if (idx >= 0) stages[idx] = { ...stages[idx], status: "done" };
-          progress = Math.min(100, ((idx + 1) / stages.length) * 100);
-          log.push({ id: ev.id, text: `Completed: ${d.label || stageKey}`, timestamp: ev.timestamp ?? new Date().toISOString() });
+          const stageKey = d.stageKey as StageState["key"];
+          setStage(stageKey, "done");
+          log.push({ id: ev.id, text: `Completed: ${d.label || stageKey}`, timestamp: ts });
           break;
         }
-        case "RECORDS_COLLECTED":
-          recordsFound = (d.totalRecords as number) ?? recordsFound + (d.count as number ?? 0);
-          log.push({ id: ev.id, text: `Collected ${d.count ?? ""} records`, timestamp: ev.timestamp ?? new Date().toISOString() });
+        case "SOURCE_DISCOVERY_STARTED":
+          setStage("understand", "done");
+          setStage("discover", "active");
+          log.push({ id: ev.id, text: "Discovering permitted sources...", timestamp: ts });
           break;
-        case "SOURCE_DISCOVERED":
-          sourcesTotal = (d.totalSources as number) ?? sourcesTotal + 1;
-          log.push({ id: ev.id, text: `Discovered source: ${d.domain ?? d.url ?? ""}`, timestamp: ev.timestamp ?? new Date().toISOString() });
+        case "SOURCE_DISCOVERED": {
+          setStage("discover", "done");
+          const count = (d.sourceCount as number) ?? (Array.isArray(d.sources) ? d.sources.length : 1);
+          sourcesTotal = Math.max(sourcesTotal, count);
+          log.push({ id: ev.id, text: `Discovered source: ${d.domain ?? d.url ?? `${count} sources`}`, timestamp: ts });
           break;
-        case "SOURCE_PROCESSED":
-          sourcesProcessed = (d.processedCount as number) ?? sourcesProcessed + 1;
-          log.push({ id: ev.id, text: `Processed source: ${d.domain ?? d.url ?? ""}`, timestamp: ev.timestamp ?? new Date().toISOString() });
+        }
+        case "SCRAPE_STARTED":
+          setStage("discover", "done");
+          setStage("collect", "active");
+          log.push({ id: ev.id, text: "Collecting source contents...", timestamp: ts });
           break;
-        case "SOURCE_FAILED":
-          log.push({ id: ev.id, text: `Source failed: ${d.reason ?? d.url ?? ""}`, timestamp: ev.timestamp ?? new Date().toISOString() });
+        case "SCRAPE_COMPLETED":
+        case "SOURCE_PROCESSED": {
+          setStage("collect", "done");
+          const count = (d.sourceCount as number) ?? (d.processedCount as number) ?? sourcesProcessed + 1;
+          sourcesProcessed = Math.max(sourcesProcessed, count);
+          log.push({ id: ev.id, text: `Collected data from ${sourcesProcessed} sources`, timestamp: ts });
           break;
-        case "VALIDATION_COMPLETED":
-          validRecords = (d.validCount as number) ?? validRecords;
-          log.push({ id: ev.id, text: `Validated ${d.validCount ?? ""} records`, timestamp: ev.timestamp ?? new Date().toISOString() });
+        }
+        case "EXTRACTION_STARTED":
+          setStage("collect", "done");
+          setStage("extract", "active");
+          log.push({ id: ev.id, text: "Extracting structured fields...", timestamp: ts });
           break;
-        case "DEDUP_COMPLETED":
+        case "RECORDS_EXTRACTED":
+        case "RECORDS_COLLECTED": {
+          setStage("extract", "done");
+          const count = (d.recordCount as number) ?? (d.totalRecords as number) ?? recordsFound;
+          recordsFound = Math.max(recordsFound, count);
+          log.push({ id: ev.id, text: `Extracted ${recordsFound} candidate records`, timestamp: ts });
+          break;
+        }
+        case "VALIDATION_COMPLETED": {
+          setStage("validate", "done");
+          const count = (d.validCount as number) ?? (d.validRecordCount as number) ?? validRecords;
+          validRecords = count;
+          log.push({ id: ev.id, text: `Validated records (${validRecords} valid)`, timestamp: ts });
+          break;
+        }
+        case "DEDUPLICATION_COMPLETED":
+        case "DEDUP_COMPLETED": {
+          setStage("dedupe", "done");
           duplicates = (d.duplicateCount as number) ?? duplicates;
-          validRecords = (d.uniqueCount as number) ?? validRecords;
-          log.push({ id: ev.id, text: `Removed ${d.duplicateCount ?? 0} duplicates`, timestamp: ev.timestamp ?? new Date().toISOString() });
+          log.push({ id: ev.id, text: `Removed ${duplicates} duplicate records`, timestamp: ts });
           break;
+        }
         case "DATASET_CREATED":
+          setStage("build", "done");
           datasetId = (d.datasetId as string) ?? datasetId;
-          log.push({ id: ev.id, text: `Dataset created`, timestamp: ev.timestamp ?? new Date().toISOString() });
+          log.push({ id: ev.id, text: "Dataset created", timestamp: ts });
           break;
         case "RUN_COMPLETED":
           status = "completed";
           progress = 100;
           datasetId = (d.datasetId as string) ?? datasetId;
           stages.forEach((s, i) => { stages[i] = { ...s, status: "done" }; });
-          log.push({ id: ev.id, text: "Workflow completed", timestamp: ev.timestamp ?? new Date().toISOString() });
+          log.push({ id: ev.id, text: "Workflow completed", timestamp: ts });
           break;
-        case "RUN_FAILED":
+        case "RUN_FAILED": {
           status = "failed";
-          log.push({ id: ev.id, text: `Workflow failed: ${d.error ?? ""}`, timestamp: ev.timestamp ?? new Date().toISOString() });
+          const errDetail = d.error || d.errorMessage || d.message || d.errorCode || run?.errorMessage || "Execution error";
+          log.push({ id: ev.id, text: `Workflow failed: ${errDetail}`, timestamp: ts });
           break;
+        }
         case "RUN_CANCELLED":
           status = "paused";
-          log.push({ id: ev.id, text: "Workflow cancelled", timestamp: ev.timestamp ?? new Date().toISOString() });
+          log.push({ id: ev.id, text: "Workflow cancelled", timestamp: ts });
           break;
         default:
-          log.push({ id: ev.id, text: ev.action, timestamp: ev.timestamp ?? new Date().toISOString() });
+          log.push({ id: ev.id, text: String(ev.action).replace(/_/g, " ").toLowerCase(), timestamp: ts });
       }
     }
 
     return { status, progress, recordsFound, validRecords, duplicates, sourcesProcessed, sourcesTotal, stages, log, datasetId };
-  }, [events, run?.datasetId]);
+  }, [events, run]);
 
   if (loading || !run) {
     return (

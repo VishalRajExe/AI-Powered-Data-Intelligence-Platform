@@ -214,6 +214,35 @@ export class WorkflowExecutionRepository implements WorkflowExecutionStore {
     if (existing) return { datasetId: existing.id, recordCount: existing.recordCount, sourceCount: existing.sourceCount };
     const result = inputResult.dataQuality ? inputResult : this.dataQualityService.process(inputResult, context.plan);
     const sourceHashes = result.sources.filter((source) => source.verifiedByTool).map((source) => this.sourceValidator.normalize(source.url)).filter((value): value is { canonicalUrl: string; domain: string; hash: string } => "hash" in value).map(({ hash }) => hash);
+
+    // Ensure all verified sources exist in the database with status COLLECTED
+    for (const source of result.sources) {
+      const normalized = this.sourceValidator.normalize(source.url);
+      if ("hash" in normalized) {
+        const isVerified = source.verifiedByTool !== false;
+        await this.prisma.source.upsert({
+          where: { workflowRunId_canonicalUrlHash: { workflowRunId: context.id, canonicalUrlHash: normalized.hash } },
+          create: {
+            workspaceId: context.workspaceId,
+            workflowRunId: context.id,
+            canonicalUrlHash: normalized.hash,
+            canonicalUrl: normalized.canonicalUrl,
+            url: source.url,
+            domain: normalized.domain,
+            title: source.title || source.url,
+            status: isVerified ? "COLLECTED" : "FAILED",
+            errorCode: isVerified ? null : "FETCH_ERROR",
+            retrievedAt: new Date(),
+          },
+          update: {
+            ...(isVerified ? { status: "COLLECTED" } : {}),
+            ...(source.title ? { title: source.title } : {}),
+            retrievedAt: new Date(),
+          },
+        });
+      }
+    }
+
     const sourceRows = await this.prisma.source.findMany({ where: {
       workspaceId: context.workspaceId, workflowRunId: context.id, status: { in: ["COLLECTED", "FETCHED"] }, canonicalUrlHash: { in: sourceHashes },
     }, select: { id: true, canonicalUrlHash: true, retrievedAt: true } });
