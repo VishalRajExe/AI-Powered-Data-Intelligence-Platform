@@ -1,4 +1,5 @@
 import type { RobotsDecision } from "./source-governance.types.js";
+import { isNonPublicHost, validateDnsResolution } from "./SourceValidator.js";
 
 export interface RobotsFetchResponse {
   status: number;
@@ -16,6 +17,7 @@ export interface RobotsPolicyServiceOptions {
   cacheTtlMs?: number;
   fetcher?: RobotsFetch;
   now?: () => Date;
+  validateDns?: boolean;
 }
 
 export class RobotsPolicyService {
@@ -25,6 +27,7 @@ export class RobotsPolicyService {
   private readonly cacheTtlMs: number;
   private readonly fetcher: RobotsFetch;
   private readonly now: () => Date;
+  private readonly shouldValidateDns: boolean;
 
   constructor(options: RobotsPolicyServiceOptions = {}) {
     this.userAgent = options.userAgent ?? "ScoutlyBot";
@@ -32,6 +35,7 @@ export class RobotsPolicyService {
     this.cacheTtlMs = options.cacheTtlMs ?? 15 * 60_000;
     this.fetcher = options.fetcher ?? defaultFetcher;
     this.now = options.now ?? (() => new Date());
+    this.shouldValidateDns = options.validateDns ?? (options.fetcher === undefined);
   }
 
   async check(urlValue: string): Promise<RobotsDecision> {
@@ -71,6 +75,38 @@ export class RobotsPolicyService {
 
   private async load(origin: string): Promise<CachedPolicy> {
     const checkedAt = this.now();
+
+    let originUrl: URL;
+    try {
+      originUrl = new URL(origin);
+    } catch {
+      return {
+        expiresAt: checkedAt.getTime() + 60_000,
+        groups: [],
+        result: { allowed: false, status: "UNAVAILABLE", reason: "Invalid origin URL; robots policy fails closed.", checkedAt },
+      };
+    }
+
+    const host = originUrl.hostname.toLowerCase().replace(/\.$/, "");
+    if (isNonPublicHost(host)) {
+      return {
+        expiresAt: checkedAt.getTime() + 60_000,
+        groups: [],
+        result: { allowed: false, status: "DISALLOWED", reason: `SSRF protection blocked non-public host: ${host}`, checkedAt },
+      };
+    }
+
+    if (this.shouldValidateDns) {
+      const dnsCheck = await validateDnsResolution(host);
+      if (!dnsCheck.safe) {
+        return {
+          expiresAt: checkedAt.getTime() + 60_000,
+          groups: [],
+          result: { allowed: false, status: "DISALLOWED", reason: `SSRF protection blocked destination: ${dnsCheck.error}`, checkedAt },
+        };
+      }
+    }
+
     const robotsUrl = `${origin}/robots.txt`;
     try {
       const response = await this.fetcher(robotsUrl, {
@@ -90,7 +126,9 @@ export class RobotsPolicyService {
           result: { allowed: false, status: "UNAVAILABLE", reason: `robots.txt returned HTTP ${response.status}; source access fails closed.`, checkedAt },
         };
       }
-      return { expiresAt: checkedAt.getTime() + this.cacheTtlMs, groups: parseRobots(await response.text()) };
+      const rawText = await response.text();
+      const boundedText = rawText.slice(0, 512 * 1024);
+      return { expiresAt: checkedAt.getTime() + this.cacheTtlMs, groups: parseRobots(boundedText) };
     } catch (error) {
       const message = error instanceof Error && error.name === "TimeoutError" ? "robots.txt request timed out" : "robots.txt could not be fetched";
       return {

@@ -118,15 +118,21 @@ export class ExportRepository {
       throw new AppError("Export file record is missing file key", 404, "EXPORT_FILE_NOT_FOUND");
     }
 
-    const absolutePath = path.isAbsolute(job.fileKey)
-      ? job.fileKey
-      : path.resolve(this.storageDir, job.fileKey);
+    const resolvedPath = path.resolve(
+      path.isAbsolute(job.fileKey) ? job.fileKey : path.resolve(this.storageDir, job.fileKey),
+    );
+    const resolvedStorage = path.resolve(this.storageDir);
 
-    if (!fs.existsSync(absolutePath)) {
+    const relative = path.relative(resolvedStorage, resolvedPath);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new AppError("Invalid export file path outside storage directory", 403, "ACCESS_DENIED");
+    }
+
+    if (!fs.existsSync(resolvedPath)) {
       throw new AppError("Export file not found on disk", 404, "EXPORT_FILE_NOT_FOUND");
     }
 
-    return { job: this.mapToView(job), absolutePath };
+    return { job: this.mapToView(job), absolutePath: resolvedPath };
   }
 
   // ── Status updates ────────────────────────────────────────────────────────

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isIP } from "node:net";
 import { createAgent, buildFirecrawlToolkit, type AgentEvent, type CreateAgentOptions, type ModelConfig, type RunParams, type Toolkit } from "@aidp/firecrawl-agent-core";
 import type { Logger } from "pino";
 import type { AppConfig } from "../config/env.js";
@@ -10,6 +9,7 @@ import type { AgentAdapter, AgentConfigurationHealth, AgentExecutionEvent, Agent
 import type { SourcePolicyService } from "../modules/sources/SourcePolicyService.js";
 import type { SourceExecutionPolicy, SourcePolicyContext } from "../modules/sources/source-governance.types.js";
 import { RelevantSourceSelector, sourceCandidate } from "../modules/sources/RelevantSourceSelector.js";
+import { isNonPublicHost } from "../modules/sources/SourceValidator.js";
 
 interface StreamableFirecrawlAgent {
   stream(params: RunParams): AsyncGenerator<AgentEvent>;
@@ -369,8 +369,9 @@ function publicDomain(value: string): string | undefined {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    if (url.username || url.password) return undefined;
     const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
-    if (url.username || url.password || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || isPrivateIp(hostname)) return undefined;
+    if (!hostname || isNonPublicHost(hostname)) return undefined;
     return hostname;
   } catch { return undefined; }
 }
@@ -387,24 +388,6 @@ function seedUrls(plan: WorkflowPlan, blockedDomains = plan.sourcePolicy.blocked
     const host = publicDomain(url);
     return host && !blockedDomains.some((domain) => host === domain || host.endsWith(`.${domain}`));
   }))].slice(0, plan.searchStrategy.maximumSourceCount);
-}
-
-function isPrivateIp(hostname: string): boolean {
-  const version = isIP(hostname);
-  if (version === 4) {
-    const parts = hostname.split(".").map(Number);
-    const [a = 0, b = 0] = parts;
-    return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127) || a >= 224 ||
-      (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19 || b === 51)) || (a === 203 && b === 0);
-  }
-  if (version === 6) {
-    const value = hostname.toLowerCase();
-    if (value === "::" || value === "::1" || value.startsWith("fc") || value.startsWith("fd") || value.startsWith("fe8") || value.startsWith("fe9") || value.startsWith("fea") || value.startsWith("feb")) return true;
-    const mapped = value.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    return mapped ? isPrivateIp(mapped[1]!) : false;
-  }
-  return false;
 }
 
 function getProviderKey(config: AppConfig): string | undefined {

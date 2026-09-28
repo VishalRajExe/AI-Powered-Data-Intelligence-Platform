@@ -4,9 +4,9 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 15 — End-to-End Validation complete.
+- **Current Phase:** Phase 16 — Production Hardening complete.
 - **Last updated:** 2026-09-28.
-- **App runnable end-to-end:** Complete backend and integration contracts are finalized, verified, and end-to-end validated as one unified product across three realistic examples: (1) Indian AI Startups (50 targets, multi-source provenance, quality checks, failed source isolation, duplicates and conflict resolution), (2) Software Engineering Internships in India (dynamic requirement & workflow plan generation adaptation), and (3) Technology Sponsors in India for College Hackathons (distinct objective, schema, steps, and source criteria). All 25 end-to-end validation criteria passed. 191 tests pass across 16 active test suites, ESLint passes with 0 errors/warnings, TypeScript typechecks cleanly, and production build succeeds.
+- **App runnable end-to-end:** Backend is fully hardened, audited, containerized, and production-ready. Comprehensive SSRF defenses are active across all outbound collection paths (blocking localhost, 127.0.0.1, private RFC 1918, CGNAT, link-local, AWS/GCP/Azure cloud metadata, internal Docker/K8s hostnames, single-label names, and DNS rebinding via preflight resolution). Security rate limiting is active for authentication (15 req/min), workflow execution (30 req/min), and general API (300 req/min). Pino logger redacts all tokens, hashes, and secrets. Export paths enforce strict directory containment preventing path traversal. Multi-stage production `backend/Dockerfile` with non-root unprivileged execution (`USER node`) and healthchecks, plus unified `docker-compose.yml` (MySQL 8.4 + Redis 7 + Backend) are established. 206 tests pass across 17 test suites, ESLint passes with 0 errors/warnings, TypeScript typechecks cleanly, and production build succeeds.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
@@ -27,6 +27,7 @@
 - [x] Phase 13 — Authentication and Authorization: Multi-user security layer with bcrypt password hashing (10 salt rounds), environment-based JWT secrets (`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, min 32 chars), short-lived access tokens (15m), rotating refresh tokens with unique UUID `jti` (7d), and Redis/memory token revocation. Default workspace and OWNER membership provisioned upon registration. Implemented routes: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`. Authorization middleware enforces active workspace membership (`requireWorkspaceAccess`), role hierarchy (`OWNER` > `ADMIN` > `MEMBER`), and client-supplied identity protection (`enforceClientIdentity`), rejecting user impersonation with 403 `FORBIDDEN_USER_MISMATCH`. Password hashes are strictly omitted from all models and responses.
 - [x] Phase 14 — Frontend Integration Contract: Generated OpenAPI 3.1.0 specification (`backend/docs/openapi.json`, `GET /api/v1/openapi.json`) and comprehensive integration contract (`md files/FrontendIntegrationContract.md`) defining every endpoint across all 11 core areas (Auth, Requirements, Workflows, Runs, Events, Datasets, Rows, Sources, Evidence, Exports, Activity + Health). Mapped all 8 target screens (New Research Task, Workflow Preview, Workflow Running, Workflow History, Dataset Explorer, Source Explorer, Export, Activity Log). Documented SSE event format with keepalives and reconnection, uniform `PaginationMeta` envelope, dynamic dataset columns and row filter syntax, and granular row/source/evidence provenance relationships. Verified with 27 automated contract tests.
 - [x] Phase 15 — End-to-End Validation: Full system validation as one unified product across three realistic scenarios. Verified all 25 specific lifecycle criteria on Example 1 ("Find 50 Indian AI startups founded after 2020..."): 1. Prompt received, 2. Requirement parsed, 3. Requirement validated, 4. Workflow generated dynamically, 5. Workflow persisted, 6. Run created, 7. Jobs queued, 8. Sources discovered, 9. Sources checked, 10. Data collected, 11. Structured extraction executed, 12. Data normalized, 13. Data validated, 14. Duplicates detected, 15. Conflicts preserved, 16. Dataset created, 17. Sources linked, 18. Progress events generated, 19. History stored, 20. Dataset searchable, 21. Dataset filterable, 22. Dataset exportable, 23. Failed sources do not destroy the entire run, 24. User can inspect source evidence, 25. Frontend contract works. Example 2 ("Find software engineering internships in India...") verified dynamic workflow plan adaptation for internship recruitment rather than startup plans. Example 3 ("Find 30 technology sponsors in India...") verified dynamic plan generation tailored to hackathon sponsorships. Measured metrics: 98.1% success rate, 1 isolated failed source, 2 validation issues, 2 duplicate entities linked, 52 records persisted, 14 verified sources processed, 23-48 ms execution time.
+- [x] Phase 16 — Production Hardening: Complete backend security audit, vulnerability mitigation, and containerization. Hardened SSRF protection in `SourceValidator` and `RobotsPolicyService` rejecting loopback, private IPv4/IPv6, link-local, cloud metadata (`169.254.169.254`, `[fd00:ec2::254]`, `metadata.google.internal`), single-label container hostnames, and DNS rebinding via asynchronous preflight resolution. Bounded outbound robots response sizes (512 KB) and enforced manual redirect controls. Created sliding-window rate-limiting middleware (`authRateLimiter`, `workflowRateLimiter`, `apiRateLimiter`) with standard headers and 429 envelopes. Expanded Pino logger secret masking for tokens, hashes, and connection URIs. Enforced path traversal containment on export file downloads (`getExportJobForDownload`). Audited dependencies and eliminated dead code. Created multi-stage production `backend/Dockerfile` with non-root security and healthcheck probes, and updated `docker-compose.yml` to orchestrate MySQL, Redis, and Backend.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -66,6 +67,10 @@
 | 2026-09-28 | Generate OpenAPI 3.1.0 specification (`backend/docs/openapi.json`, `GET /api/v1/openapi.json`) and document canonical Frontend Integration Contract in `md files/FrontendIntegrationContract.md`. | Guarantees transparent, machine-readable and human-readable API contracts for the future frontend without implementing frontend prematurely; ensures strict screen mapping, SSE live stream wire format, dynamic dataset schema definitions, and evidence explorer contracts are verified. |
 | 2026-09-28 | Clean `enforceClientIdentity` to eliminate arbitrary request body mutation. | Removed automatic setting of `req.body.userId`, `req.body.createdById`, and `req.body.requestedById` in auth middleware, preventing Zod `.strict()` schema rejection while strictly enforcing identity verification whenever IDs are explicitly supplied by clients. |
 | 2026-09-28 | Unified end-to-end multi-scenario validation and fault isolation. | Verified end-to-end product lifecycle across 3 distinct domain prompts (startups, internships, sponsors). Confirmed that non-fatal source failures (e.g. HTTP 404) isolate gracefully without terminating the workflow run, duplicates are assigned canonical links, conflicting values are preserved with review decisions, and workflow plans adapt dynamically per prompt objective. |
+| 2026-09-28 | Comprehensive multi-layer SSRF prevention with DNS preflight. | Hardened `SourceValidator` with static IP classification (RFC 1918, CGNAT, loopback, cloud metadata, IPv6 mapped/compatible) and hostname filtering (rejecting single-label hosts and internal TLDs). Added `validateDnsResolution` to pre-resolve hostnames and block DNS rebinding before outbound HTTP connections in `RobotsPolicyService`. |
+| 2026-09-28 | Express security rate-limiting middleware with sliding window. | Implemented `MemoryRateLimiter` protecting authentication routes (15 req/min) against brute-force attacks and workflow planning/execution routes (30 req/min) against queue abuse, returning standard 429 envelopes and `Retry-After` headers. |
+| 2026-09-28 | Export path containment guard. | Hardened `ExportRepository.getExportJobForDownload` to verify resolved file paths remain strictly inside `storageDir`, preventing directory traversal attempts. |
+| 2026-09-28 | Multi-stage unprivileged Docker production build. | Built Debian-based `backend/Dockerfile` with build caching, devDependency pruning, OpenSSL/Prisma support, curl healthcheck, and unprivileged `node` user execution. |
 
 ## 4. Database / Schema Changes
 
@@ -134,10 +139,10 @@
 
 ## 7. Pending Work / Next Steps
 
-- Phase 15 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
-- Entire system is validated end-to-end as one product across multiple realistic domains (startups, internships, sponsors).
-- Complete OpenAPI 3.1.0 specification, Frontend Integration Contract, multi-user authentication/authorization, and full data intelligence pipeline are verified.
-- `Phases.md` uses older phase numbering; follow the user's current phase prompts.
+- Phase 16 implementation is complete. Stop here; the entire platform is hardened, validated, and containerized.
+- Complete backend security audit, SSRF protection with DNS preflight, rate limiting, and export path containment are verified.
+- Production `backend/Dockerfile` and unified `docker-compose.yml` (MySQL + Redis + Backend) are ready for deployment.
+- `Phases.md` uses older phase numbering; all required phases (0 through 16) are successfully implemented.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
 
 ## 8. Environment / Commands / Configuration
@@ -161,45 +166,30 @@
 
 ## 10. Last Session Summary
 
-Phase 15 (End-to-End Validation) completed. Tested and validated the entire system as one unified product:
-- Validated all 25 specific lifecycle criteria across the primary prompt:
-  - Prompt: `"Find 50 Indian AI startups founded after 2020. Give company name, founder, website, funding stage, location and source URL."`
-  1. Prompt received: Validated request accepted into requirements engine.
-  2. Requirement parsed: Structured requirement output generated (`Indian AI Startups Founded After 2020`).
-  3. Requirement validated: Entity type, target count (50), dynamic schema columns, and constraints verified without ambiguity.
-  4. Workflow generated dynamically: Tailored multi-step collection & refinement plan constructed.
-  5. Workflow persisted: Versioned workflow entity and plan record saved in repository.
-  6. Run created: Execution run initialized with `PENDING`/`CLAIMED` state.
-  7. Jobs queued: Execution submitted to BullMQ runner worker.
-  8. Sources discovered: Multiple search queries dispatched identifying 15 initial candidate URLs.
-  9. Sources checked: Policy, allow/deny domain rules, and robots preflight applied.
-  10. Data collected: Realistic payload collected across multi-source scrape steps.
-  11. Structured extraction executed: JSON entities parsed into structured records.
-  12. Data normalized: Domains, company names, URLs, and locations standardly formatted.
-  13. Data validated: Data intelligence validation rules applied; flags generated for malformed values.
-  14. Duplicates detected: Exact & fuzzy entity match identified duplicates and linked to canonical entities.
-  15. Conflicts preserved: Differing field values across sources preserved alongside quality review records.
-  16. Dataset created: Business dataset entity created with registered schema columns.
-  17. Sources linked: Provenance sources linked directly to dataset and row records.
-  18. Progress events generated: Standard activity events dispatched throughout execution lifecycle.
-  19. History stored: Workflow and WorkflowRun historical views durable and retrievable via API.
-  20. Dataset searchable: Full-text search verified across row fields.
-  21. Dataset filterable: Dynamic field filters (e.g., location, stage) and quality flags verified.
-  22. Dataset exportable: Asynchronous export jobs in CSV, JSON, and XLSX verified with verified file downloads.
-  23. Failed sources isolation: Broken source (`404 Not Found`) handled gracefully without crashing run; all remaining sources succeeded.
-  24. Source evidence inspection: Field-level and row-level evidence explorer verified (`GET /api/v1/rows/:id/evidence`).
-  25. Frontend contract works: All endpoints adhere strictly to OpenAPI and Frontend Integration Contract specs.
-- Validated Example 2 ("Find software engineering internships in India..."):
-  - Verified dynamic requirement & plan generation adaptation (internship entity, stipend/role/apply_url fields, job board source criteria) differing completely from startup research.
-- Validated Example 3 ("Find 30 technology sponsors in India suitable for a college hackathon..."):
-  - Verified dynamic plan generation targeting hackathon sponsorship tiers, contact portals, and company industry categorization.
-- Measured and reported execution & intelligence metrics:
-  - Success Rate: 98.1% (51 valid records / 52 candidate records)
-  - Failed Sources: 1 isolated failed source (HTTP 404 from `https://broken-source.example.com/404`)
-  - Validation Issues: 2 issues detected (missing required founder + malformed website URL)
-  - Duplicates: 2 duplicate records flagged and linked to canonical records
-  - Workflow Execution Time: 23–48 ms (in-memory execution)
-  - Record Count: 52 records persisted
-  - Source Count: 14 verified sources processed (15 candidate sources attempted)
-- Fixed bug in `backend/src/modules/auth/auth.middleware.ts` where arbitrary mutations to `req.body` broke strict Zod schema validation across `/requirements/parse` and `/workflows/plan`.
-- Verification passed: 191 tests passing across 16 active test suites (including 13 comprehensive E2E tests in `backend/tests/e2e-validation.test.ts`), 0 ESLint errors, clean TypeScript typecheck (`tsc --noEmit`), and successful production build (`tsc -p tsconfig.build.json`).
+Phase 16 (Production Hardening) completed. Audited backend security, eliminated vulnerabilities, implemented SSRF defenses and rate-limiting, and prepared containerization:
+- **SSRF Protection & URL Validation:**
+  - Upgraded `SourceValidator.isNonPublicHost` and `isNonPublicIpv4`/`isNonPublicIpv6` to comprehensively block:
+    - `localhost`, `127.0.0.1/8`, `0.0.0.0/8`, `::1`, `::`
+    - AWS, GCP, and Azure cloud metadata endpoints (`169.254.169.254`, `[fd00:ec2::254]`, `metadata.google.internal`, `metadata.google`, `instance-data`)
+    - Single-label container hostnames (`redis`, `mysql`, `database`, `api`, `internal`)
+    - Private RFC 1918 networks (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`) and CGNAT (`100.64.0.0/10`)
+    - IPv4-mapped and IPv4-compatible IPv6 addresses (`::ffff:127.0.0.1`, `::ffff:169.254.169.254`)
+    - Internal network TLDs (`.internal`, `.local`, `.corp`, `.lan`, `.home`, `.intranet`, `.localdomain`, `.docker.internal`, `.cluster.local`)
+  - Added asynchronous DNS preflight resolution check (`validateDnsResolution`) in `SourceValidator` to detect and block DNS rebinding attacks before outbound connections.
+  - Hardened `RobotsPolicyService` to preflight destination hostnames and DNS resolutions, enforce manual redirect mode, and bound response sizes (max 512 KB).
+  - Wired `isNonPublicHost` directly into `FirecrawlAgentAdapter.publicDomain` and `gateToolkit` to prevent agent collection tools from accessing private/internal infrastructure.
+- **Express Security Rate Limiting:**
+  - Implemented `MemoryRateLimiter` (`backend/src/common/rateLimiter.ts`) supporting IP and authenticated user sliding-window tracking with automated expired key cleanup.
+  - Added `authRateLimiter` (15 requests/min) to `/api/v1/auth` to prevent brute-force attacks.
+  - Added `workflowRateLimiter` (30 requests/min) to `/api/v1/requirements` and `/api/v1/workflows` to prevent queue flooding and resource exhaustion.
+  - Added `apiRateLimiter` (300 requests/min) to general `/api/v1` routes.
+  - Implemented standard rate-limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`) and uniform 429 error responses.
+- **Secrets & Log Masking:**
+  - Expanded Pino redaction paths in `backend/src/logger.ts` for JWT tokens (`accessToken`, `refreshToken`, `jwt`), passwords (`password`, `passHash`), cookies, authorization headers, and database/Redis connection URLs.
+- **Export Path Traversal Prevention:**
+  - Hardened `ExportRepository.getExportJobForDownload` to verify that resolved file paths remain strictly contained within `storageDir`, rejecting path traversal attempts with 403 `ACCESS_DENIED`.
+- **Docker Containerization:**
+  - Created multi-stage production `backend/Dockerfile` with Debian-based `node:20-bookworm-slim`, OpenSSL/CA certificates, devDependency pruning, unprivileged `node` user execution, and curl healthcheck probes.
+  - Updated `docker-compose.yml` to orchestrate MySQL 8.4, Redis 7-alpine, and the production Backend container on port 3000.
+- **Verification Passed:**
+  - 206 automated tests passing across 17 test suites (including 15 dedicated security/SSRF tests in `backend/tests/security-ssrf.test.ts`), 0 ESLint errors/warnings, clean TypeScript typecheck (`tsc --noEmit`), and successful production build (`tsc -p tsconfig.build.json`).

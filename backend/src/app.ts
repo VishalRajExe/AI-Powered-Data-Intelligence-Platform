@@ -26,6 +26,7 @@ import { createAuthRouter } from "./routes/auth.routes.js";
 import type { AuthService } from "./modules/auth/auth.service.js";
 import type { TokenService } from "./modules/auth/token.service.js";
 import { optionalAuthenticate, enforceClientIdentity } from "./modules/auth/auth.middleware.js";
+import { authRateLimiter, workflowRateLimiter, apiRateLimiter } from "./common/rateLimiter.js";
 import { createOpenApiRouter } from "./routes/openapi.routes.js";
 
 export interface AppDependencies {
@@ -73,8 +74,12 @@ export function createApp(dependencies: AppDependencies): express.Express {
   }
   app.use(createHealthRouter(dependencies.readiness, () => dependencies.agentAdapter.checkConfiguration()));
   if (dependencies.authService && dependencies.tokenService) {
+    app.use("/api/v1/auth", authRateLimiter);
     app.use("/api/v1", createAuthRouter(dependencies.authService, dependencies.tokenService));
   }
+  app.use("/api/v1/requirements", workflowRateLimiter);
+  app.use("/api/v1/workflows", workflowRateLimiter);
+  app.use("/api/v1", apiRateLimiter);
   app.use("/api/v1", createRequirementsRouter(dependencies.requirementParser));
   app.use(
     "/api/v1",
