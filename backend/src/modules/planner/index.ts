@@ -8,7 +8,15 @@ import { WorkflowPlannerService } from "./planner.service.js";
 import { DemoWorkflowPlanProvider } from "../demo/demo-plan.provider.js";
 
 export function createWorkflowPlanner(config: AppConfig, logger: Logger, prisma: PrismaClient): WorkflowPlannerService {
-  if (config.DEMO_MODE) {
+  const hasLlmKey = Boolean(
+    config.GOOGLE_GENERATIVE_AI_API_KEY ||
+    config.GEMINI_API_KEY ||
+    config.ANTHROPIC_API_KEY ||
+    config.OPENAI_API_KEY ||
+    config.AI_GATEWAY_API_KEY ||
+    config.CUSTOM_OPENAI_API_KEY,
+  );
+  if (config.DEMO_MODE || !hasLlmKey) {
     return new WorkflowPlannerService(new DemoWorkflowPlanProvider(), new WorkflowPlannerRepository(prisma), logger);
   }
   return new WorkflowPlannerService(new AiSdkWorkflowPlanProvider(config, logger), new WorkflowPlannerRepository(prisma), logger);

@@ -53,12 +53,17 @@ const sourcePolicy = new SourcePolicyService(
   logger,
 );
 
-const agentAdapter = config.DEMO_MODE
-  ? new DemoAgentAdapter(logger, workflowSourceRepository)
-  : new FirecrawlAgentAdapter(config, logger, undefined, undefined, sourcePolicy);
+const canUseFirecrawl = !config.DEMO_MODE && Boolean(config.FIRECRAWL_API_KEY);
+const agentAdapter = canUseFirecrawl
+  ? new FirecrawlAgentAdapter(config, logger, undefined, undefined, sourcePolicy)
+  : new DemoAgentAdapter(logger, workflowSourceRepository);
 
-if (config.DEMO_MODE) {
-  logger.warn("⚡ [DEMO MODE ACTIVE] Backend running in deterministic judge demonstration mode. Live web scraping disabled. Simulated datasets clearly marked.");
+if (!config.DEMO_MODE && !config.FIRECRAWL_API_KEY) {
+  logger.info("⚡ [ADAPTIVE AGENT] FIRECRAWL_API_KEY is not configured. Live web scraping is disabled; using dynamic adaptive simulation matching user requests.");
+} else if (config.DEMO_MODE) {
+  logger.warn("⚡ [DEMO MODE ACTIVE] Backend running in deterministic judge demonstration mode. Simulated datasets clearly marked.");
+} else {
+  logger.info("🚀 [FIRECRAWL AGENT ACTIVE] Live web scraping enabled with FirecrawlAgentAdapter.");
 }
 const workflowRepository = new WorkflowExecutionRepository(prisma, eventBroadcaster);
 const datasetQueryRepository = new DatasetQueryRepository(prisma);

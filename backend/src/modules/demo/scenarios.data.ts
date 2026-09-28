@@ -821,10 +821,14 @@ export const DEMO_SCENARIO_3: DemoScenarioDefinition = {
 
 export const ALL_DEMO_SCENARIOS = [DEMO_SCENARIO_1, DEMO_SCENARIO_2, DEMO_SCENARIO_3] as const;
 
+import { createDynamicDemoScenario } from "./dynamic-scenario.generator.js";
+
 export function resolveDemoScenario(prompt: string): DemoScenarioDefinition {
   for (const scenario of ALL_DEMO_SCENARIOS) {
     if (scenario.match(prompt)) return scenario;
   }
-  // Default fallback is Scenario 1
-  return DEMO_SCENARIO_1;
+  // Instead of static Indian AI startups fallback, dynamically synthesize
+  // prompt-matching requirements, sources, steps, and records for arbitrary user requests.
+  return createDynamicDemoScenario(prompt);
 }
+

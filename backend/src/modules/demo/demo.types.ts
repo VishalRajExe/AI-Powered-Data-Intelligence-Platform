@@ -5,7 +5,7 @@ import type { AgentSourceMetadata, AgentRecord } from "../../agent/types.js";
 export interface DemoScenarioDefinition {
   id: string;
   name: string;
-  scenarioNumber: 1 | 2 | 3;
+  scenarioNumber: number;
   canonicalPrompt: string;
   description: string;
   match: (prompt: string) => boolean;
