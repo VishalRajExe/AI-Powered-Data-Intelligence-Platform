@@ -62,11 +62,34 @@ export default function DatasetDetailPage({ params }: { params: { id: string } }
   useEffect(() => {
     if (!user) return;
     api
-      .get<DatasetDetail>(`/datasets/${params.id}`, {
+      .get<any>(`/datasets/${params.id}`, {
         workspaceId: user.workspaceId,
         userId: user.id,
       })
-      .then(setDataset)
+      .then((raw) => {
+        if (!raw) {
+          setDataset(null);
+          return;
+        }
+        const rawFields = raw.fields ?? raw.columns ?? [];
+        const fields: DataField[] = rawFields.map((c: any) => ({
+          name: c.name ?? c.key ?? "",
+          label: c.label ?? c.name ?? c.key ?? "",
+          type: (c.type ?? "text").toLowerCase(),
+          required: c.required ?? true,
+        }));
+        setDataset({
+          id: raw.id,
+          name: raw.name,
+          description: raw.description ?? raw.originalPrompt ?? "Structured research dataset",
+          recordCount: raw.recordCount ?? 0,
+          sourceCount: raw.sourceCount ?? 0,
+          status: raw.status ?? "READY",
+          createdAt: raw.createdAt,
+          updatedAt: raw.updatedAt,
+          fields,
+        });
+      })
       .catch(() => setDataset(null))
       .finally(() => setLoading(false));
   }, [params.id, user]);
@@ -91,10 +114,24 @@ export default function DatasetDetailPage({ params }: { params: { id: string } }
     if (confidenceFilter === "low") queryParams.confidenceMax = 0.69;
 
     api
-      .get<RowsResponse>(`/datasets/${params.id}/rows`, queryParams)
+      .get<any>(`/datasets/${params.id}/rows`, queryParams)
       .then((res) => {
-        setRows(res.data ?? []);
-        setTotalRows(res.pagination?.total ?? 0);
+        const rawList = res?.data ?? [];
+        const formattedRows: DatasetRow[] = rawList.map((r: any) => {
+          const confNum = typeof r.confidence === "number"
+            ? (r.confidence <= 1 ? Math.round(r.confidence * 100) : Math.round(r.confidence))
+            : 90;
+          return {
+            id: r.id,
+            data: r.data ?? r.values ?? {},
+            sourceIds: r.sourceIds ?? Array.from({ length: r.sourceEvidenceCount ?? 1 }, (_, i) => `src-${i + 1}`),
+            confidence: confNum,
+            isValid: r.isValid ?? true,
+            collectedAt: r.collectedAt ? new Date(r.collectedAt).toISOString() : new Date().toISOString(),
+          };
+        });
+        setRows(formattedRows);
+        setTotalRows(res?.total ?? res?.pagination?.total ?? formattedRows.length);
       })
       .catch(() => {
         setRows([]);

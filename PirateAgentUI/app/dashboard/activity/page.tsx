@@ -20,7 +20,9 @@ interface ActivityEvent {
   id: string;
   action: string;
   message?: string;
-  timestamp: string;
+  timestamp?: string;
+  createdAt?: string;
+  details?: Record<string, unknown> | null;
   workflowId?: string;
   runId?: string;
 }
@@ -35,10 +37,16 @@ const ICON_MAP: Record<string, React.ElementType> = {
   export: CargoIcon,
   // Backend event mappings
   RUN_STARTED: ShipWheelIcon,
+  SOURCE_DISCOVERY_STARTED: LighthouseIcon,
   SOURCE_DISCOVERED: LighthouseIcon,
   SOURCE_PROCESSED: LighthouseIcon,
+  SCRAPE_STARTED: TreasureChestIcon,
+  SCRAPE_COMPLETED: TreasureChestIcon,
+  EXTRACTION_STARTED: CargoIcon,
+  RECORDS_EXTRACTED: TreasureChestIcon,
   RECORDS_COLLECTED: TreasureChestIcon,
   VALIDATION_COMPLETED: AnchorCheckIcon,
+  DEDUPLICATION_COMPLETED: TreasureMapIcon,
   DEDUP_COMPLETED: TreasureMapIcon,
   DATASET_CREATED: ShipLogIcon,
   RUN_COMPLETED: ShipWheelIcon,
@@ -56,10 +64,16 @@ const TONE_MAP: Record<string, string> = {
   dataset: "bg-surface text-primary border border-border",
   export: "bg-surface text-tan border border-border",
   RUN_STARTED: "bg-surface text-tan border border-border",
+  SOURCE_DISCOVERY_STARTED: "bg-surface text-muted-foreground border border-border",
   SOURCE_DISCOVERED: "bg-surface text-muted-foreground border border-border",
   SOURCE_PROCESSED: "bg-surface text-muted-foreground border border-border",
+  SCRAPE_STARTED: "bg-surface text-primary border border-border",
+  SCRAPE_COMPLETED: "bg-surface text-primary border border-border",
+  EXTRACTION_STARTED: "bg-surface text-tan border border-border",
+  RECORDS_EXTRACTED: "bg-surface text-primary border border-border",
   RECORDS_COLLECTED: "bg-surface text-primary border border-border",
   VALIDATION_COMPLETED: "bg-success-soft text-success border border-success/30",
+  DEDUPLICATION_COMPLETED: "bg-warning-soft text-warning border border-warning/30",
   DEDUP_COMPLETED: "bg-warning-soft text-warning border border-warning/30",
   DATASET_CREATED: "bg-surface text-primary border border-border",
   RUN_COMPLETED: "bg-success-soft text-success border border-success/30",
@@ -68,13 +82,31 @@ const TONE_MAP: Record<string, string> = {
   STAGE_COMPLETED: "bg-surface text-tan border border-border",
 };
 
-interface WorkflowItem {
-  id: string;
-  lastRun?: { id: string };
-}
+function formatActionMessage(ev: ActivityEvent): string {
+  if (ev.message) return ev.message;
+  const d = ev.details as any;
+  if (d && typeof d === "object" && typeof d.message === "string") return d.message;
 
-interface WorkflowListResponse {
-  data: WorkflowItem[];
+  switch (ev.action) {
+    case "RUN_STARTED": return "Workflow mission initiated";
+    case "STAGE_STARTED": return `Stage started: ${d?.stage ?? "Processing"}`;
+    case "STAGE_COMPLETED": return `Stage completed: ${d?.stage ?? "Processing"}`;
+    case "SOURCE_DISCOVERY_STARTED": return "Discovering permitted sources...";
+    case "SOURCE_DISCOVERED": return `Discovered source: ${d?.url ?? d?.domain ?? "1 source"}`;
+    case "SCRAPE_STARTED": return "Collecting source contents...";
+    case "SCRAPE_COMPLETED":
+    case "SOURCE_PROCESSED": return "Collected data from sources";
+    case "EXTRACTION_STARTED": return "Extracting structured fields...";
+    case "RECORDS_EXTRACTED":
+    case "RECORDS_COLLECTED": return `Extracted ${d?.recordCount ?? d?.totalRecords ?? "data"} candidate records`;
+    case "VALIDATION_COMPLETED": return `Validated records (${d?.validCount ?? d?.validRecordCount ?? d?.valid ?? 0} valid)`;
+    case "DEDUPLICATION_COMPLETED":
+    case "DEDUP_COMPLETED": return `Removed ${d?.duplicateCount ?? d?.duplicates ?? 0} duplicate records`;
+    case "DATASET_CREATED": return "Dataset created and ready";
+    case "RUN_COMPLETED": return "Workflow completed successfully";
+    case "RUN_FAILED": return `Workflow failed: ${d?.errorMessage ?? d?.error ?? "Execution error"}`;
+    default: return ev.action.replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase());
+  }
 }
 
 export default function ActivityPage() {
@@ -87,23 +119,31 @@ export default function ActivityPage() {
 
     // Get recent workflows and their activity
     api
-      .get<WorkflowListResponse>("/workflows", {
+      .get<any>("/workflows", {
         workspaceId: user.workspaceId,
         userId: user.id,
         limit: 10,
       })
       .then(async (wfRes) => {
         const allEvents: ActivityEvent[] = [];
+        const workflows = wfRes?.data ?? wfRes?.items ?? [];
 
-        for (const wf of wfRes.data ?? []) {
-          if (!wf.lastRun?.id) continue;
+        for (const wf of workflows) {
+          const runId = wf.lastRun?.id;
+          if (!runId) continue;
           try {
-            const actRes = await api.get<{ events: ActivityEvent[] }>(`/runs/${wf.lastRun.id}/activity`, {
+            const actRes = await api.get<{ events: ActivityEvent[] }>(`/runs/${runId}/activity`, {
               workspaceId: user.workspaceId,
               userId: user.id,
             });
-            for (const ev of actRes.events ?? []) {
-              allEvents.push({ ...ev, workflowId: wf.id });
+            for (const ev of actRes?.events ?? []) {
+              const ts = ev.timestamp || ev.createdAt || new Date().toISOString();
+              allEvents.push({
+                ...ev,
+                timestamp: ts,
+                message: formatActionMessage(ev),
+                workflowId: wf.id,
+              });
             }
           } catch {
             // Skip failed activity fetches
@@ -111,7 +151,7 @@ export default function ActivityPage() {
         }
 
         // Sort by timestamp descending
-        allEvents.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        allEvents.sort((a, b) => new Date(b.timestamp!).getTime() - new Date(a.timestamp!).getTime());
         setEvents(allEvents.slice(0, 50));
       })
       .catch(() => setEvents([]))
@@ -166,7 +206,7 @@ export default function ActivityPage() {
                   </div>
                   <div className="flex-1 pb-5">
                     <p className="text-[13.5px] font-medium text-foreground">{text}</p>
-                    <p className="mt-0.5 text-[12px] text-muted-foreground">{formatRelativeTime(item.timestamp)}</p>
+                    <p className="mt-0.5 text-[12px] text-muted-foreground">{formatRelativeTime(item.timestamp || item.createdAt || new Date().toISOString())}</p>
                   </div>
                 </div>
               );

@@ -51,6 +51,8 @@ export class WorkflowRunner {
     let partialResult = false;
     let cancelled = false;
 
+    let createdDatasetId: string | undefined;
+
     for (const [index, step] of context.plan.steps.entries()) {
       if (await this.store.isCancellationRequested(runId)) { cancelled = true; break; }
       const unmet = step.dependencies.filter((id) => completed.get(id) !== "COMPLETED");
@@ -62,6 +64,9 @@ export class WorkflowRunner {
       }
       const result = await this.executeStep(context, step, index, runId, finalResult);
       completed.set(step.id, result.status);
+      if (step.type === "SAVE" && result.output && typeof result.output === "object" && "datasetId" in result.output) {
+        createdDatasetId = (result.output as { datasetId: string }).datasetId;
+      }
       if (result.agentResult) finalResult = isAgentStep(step.type) ? mergeResults(finalResult, result.agentResult) : result.agentResult;
       if (result.agentResult?.status === "PARTIAL") partialResult = true;
       if (result.status === "FAILED" || result.status === "BLOCKED") failed = true;
@@ -79,19 +84,22 @@ export class WorkflowRunner {
       await this.store.finishRun(runId, partial ? "PARTIAL" : "FAILED", { code: "WORKFLOW_STEP_FAILED", message: "One or more workflow steps failed; inspect step errors for details." }, runCounts(finalResult));
       await this.store.emitRunEvent?.(runId, ActivityActions.RUN_FAILED, { status: partial ? "PARTIAL" : "FAILED", errorCode: "WORKFLOW_STEP_FAILED" });
     } else if (skipped) {
-      await this.store.finishRun(runId, "PARTIAL", { code: "WORKFLOW_STEPS_SKIPPED", message: "One or more planned steps were skipped; inspect step details for reasons." }, runCounts(finalResult));
-      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_COMPLETED, { status: "PARTIAL", ...runCounts(finalResult) });
+      const counts = runCounts(finalResult);
+      await this.store.finishRun(runId, "PARTIAL", { code: "WORKFLOW_STEPS_SKIPPED", message: "One or more planned steps were skipped; inspect step details for reasons." }, counts);
+      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_COMPLETED, { status: "PARTIAL", datasetId: createdDatasetId, ...counts, recordsFound: counts.records, recordsValid: counts.validRecords, duplicateCount: counts.duplicates, sourcesProcessed: counts.sources });
     } else if (partialResult) {
       const firstError = finalResult?.errors[0];
-      await this.store.finishRun(runId, "PARTIAL", firstError ? { code: firstError.code, message: firstError.message } : { code: "AGENT_PARTIAL_RESULT", message: "The agent returned incomplete results; inspect source and step details." }, runCounts(finalResult));
-      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_COMPLETED, { status: "PARTIAL", ...runCounts(finalResult) });
+      const counts = runCounts(finalResult);
+      await this.store.finishRun(runId, "PARTIAL", firstError ? { code: firstError.code, message: firstError.message } : { code: "AGENT_PARTIAL_RESULT", message: "The agent returned incomplete results; inspect source and step details." }, counts);
+      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_COMPLETED, { status: "PARTIAL", datasetId: createdDatasetId, ...counts, recordsFound: counts.records, recordsValid: counts.validRecords, duplicateCount: counts.duplicates, sourcesProcessed: counts.sources });
     } else {
-      await this.store.finishRun(runId, "COMPLETED", undefined, runCounts(finalResult));
-      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_COMPLETED, { status: "COMPLETED", ...runCounts(finalResult) });
+      const counts = runCounts(finalResult);
+      await this.store.finishRun(runId, "COMPLETED", undefined, counts);
+      await this.store.emitRunEvent?.(runId, ActivityActions.RUN_COMPLETED, { status: "COMPLETED", datasetId: createdDatasetId, ...counts, recordsFound: counts.records, recordsValid: counts.validRecords, duplicateCount: counts.duplicates, sourcesProcessed: counts.sources });
     }
   }
 
-  private async executeStep(context: ExecutionRunContext, step: WorkflowStep, index: number, runId: string, priorResult?: AgentResult): Promise<{ status: StepStatus; agentResult?: AgentResult }> {
+  private async executeStep(context: ExecutionRunContext, step: WorkflowStep, index: number, runId: string, priorResult?: AgentResult): Promise<{ status: StepStatus; agentResult?: AgentResult; output?: unknown }> {
     const stepRowId = await this.stepDatabaseId(runId, index);
     const maxRetries = step.retryPolicy.maxAttempts - 1;
     let retryCount = 0;
@@ -129,11 +137,25 @@ export class WorkflowRunner {
         } else if (step.type === "VALIDATE" && priorResult) {
           const validated = this.dataQuality.validate(priorResult, context.plan);
           agentResult = validated.result;
-          output = { recordCount: agentResult.records.length, validationRules: context.plan.validationRules.length, issueCount: validated.issueCount, invalidRecordCount: validated.invalidRecordCount };
+          const validRecordCount = agentResult.records.filter((r) => r.isValid !== false).length;
+          output = {
+            recordCount: agentResult.records.length,
+            validRecordCount,
+            validCount: validRecordCount,
+            validationRules: context.plan.validationRules.length,
+            issueCount: validated.issueCount,
+            invalidRecordCount: validated.invalidRecordCount,
+          };
         } else if (step.type === "DEDUPLICATE" && priorResult) {
           const deduplicated = this.dataQuality.deduplicate(priorResult, context.plan);
           agentResult = deduplicated.result;
-          output = { recordCount: agentResult.records.length, duplicateCount: deduplicated.duplicateCount, conflictCount: deduplicated.conflictCount, decisions: deduplicated.events.length };
+          output = {
+            recordCount: agentResult.records.length,
+            duplicateCount: deduplicated.duplicateCount,
+            duplicates: deduplicated.duplicateCount,
+            conflictCount: deduplicated.conflictCount,
+            decisions: deduplicated.events.length,
+          };
         } else if (step.type === "MERGE" && priorResult) {
           agentResult = this.dataQuality.process(priorResult, context.plan);
           output = { recordCount: agentResult.records.length, provenanceSources: agentResult.sources.length, ...(agentResult.dataQuality?.metrics ?? {}) };
@@ -181,7 +203,7 @@ export class WorkflowRunner {
         }
         const sourceIds = agentResult ? await this.store.resolveSourceIds(runId, agentResult.sources.map((source) => source.canonicalUrl)) : [];
         await this.store.finishStep(runId, stepRowId, { status: "COMPLETED", startedAt, output, retryCount, ...(agentResult ? { sourceIds } : {}) });
-        return { status: "COMPLETED", ...(agentResult ? { agentResult } : {}) };
+        return { status: "COMPLETED", ...(agentResult ? { agentResult } : {}), output };
       } catch (error) {
         lastError = error;
         if (await this.store.isCancellationRequested(runId)) {

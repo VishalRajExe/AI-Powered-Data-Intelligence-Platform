@@ -45,15 +45,23 @@ export default function HistoryPage() {
     { skip: !user },
   );
 
-  const workflows = data?.data ?? [];
+  const rawList = data?.data ?? (data as any)?.items ?? [];
+  const workflows: WorkflowItem[] = rawList.map((w: any) => ({
+    ...w,
+    prompt: w.prompt ?? w.requirement ?? w.originalPrompt ?? "",
+    validRecords: w.validRecords ?? w.lastRun?.recordsAccepted ?? w.dataset?.validCount ?? 0,
+    sourcesProcessed: w.lastRun?.sourcesProcessed ?? w.lastRun?.sourceCount ?? w.sourcesProcessed ?? w.dataset?.sourceCount ?? 0,
+    durationSec: w.lastRun?.durationMs ? Math.round(w.lastRun.durationMs / 1000) : w.durationSec,
+  }));
+
   const past = workflows.filter((w) => {
     const runStatus = w.lastRun?.status;
-    return runStatus === "COMPLETED" || runStatus === "FAILED" || w.status === "ARCHIVED";
+    return runStatus === "COMPLETED" || runStatus === "PARTIAL" || runStatus === "FAILED" || w.status === "ARCHIVED" || !runStatus;
   });
 
   function mapStatus(w: WorkflowItem): WorkflowStatus {
     const rs = w.lastRun?.status;
-    if (rs === "COMPLETED") return "completed";
+    if (rs === "COMPLETED" || rs === "PARTIAL") return "completed";
     if (rs === "FAILED") return "failed";
     return "completed";
   }

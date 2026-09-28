@@ -17,7 +17,8 @@ export interface StageState {
 
 export interface DataField {
   name: string;
-  type: "text" | "url" | "number" | "email";
+  label?: string;
+  type: "text" | "url" | "number" | "email" | string;
   required: boolean;
 }
 

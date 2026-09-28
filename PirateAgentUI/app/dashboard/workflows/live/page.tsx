@@ -16,11 +16,22 @@ interface RunResponse {
   progress?: number;
   recordsFound?: number;
   recordsValid?: number;
+  recordsAccepted?: number;
   duplicateCount?: number;
+  duplicates?: number;
   sourcesProcessed?: number;
+  sourceCount?: number;
   sourcesTotal?: number;
   datasetId?: string;
-  workflow?: { name: string; prompt: string };
+  dataset?: {
+    id: string;
+    name?: string;
+    recordCount?: number;
+    validCount?: number;
+    duplicateCount?: number;
+    sourceCount?: number;
+  };
+  workflow?: { name: string; prompt?: string; requirement?: string };
   errorMessage?: string;
 }
 
@@ -68,12 +79,12 @@ function LiveWorkflowInner() {
 
     let status: WorkflowStatus = isCompleted ? "completed" : isFailed ? "failed" : isCancelled ? "paused" : "running";
     let progress = isCompleted ? 100 : (run?.progress ?? 0);
-    let recordsFound = run?.recordsFound ?? 0;
-    let validRecords = run?.recordsValid ?? 0;
-    let duplicates = run?.duplicateCount ?? 0;
-    let sourcesProcessed = run?.sourcesProcessed ?? 0;
-    let sourcesTotal = run?.sourcesTotal ?? sourcesProcessed;
-    let datasetId = run?.datasetId;
+    let recordsFound = run?.recordsFound ?? (run as any)?.recordCount ?? run?.dataset?.recordCount ?? 0;
+    let validRecords = run?.recordsValid ?? run?.recordsAccepted ?? run?.dataset?.validCount ?? 0;
+    let duplicates = run?.duplicateCount ?? run?.duplicates ?? run?.dataset?.duplicateCount ?? 0;
+    let sourcesProcessed = run?.sourcesProcessed ?? run?.sourceCount ?? run?.dataset?.sourceCount ?? 0;
+    let sourcesTotal = run?.sourcesTotal ?? Math.max(sourcesProcessed, 1);
+    let datasetId = run?.datasetId ?? run?.dataset?.id;
 
     const stages: StageState[] = STAGE_TEMPLATE.map((s, idx) => {
       if (isCompleted) return { ...s, status: "done" as const };
@@ -175,13 +186,22 @@ function LiveWorkflowInner() {
         }
         case "DATASET_CREATED":
           setStage("build", "done");
-          datasetId = (d.datasetId as string) ?? datasetId;
+          datasetId = (d.datasetId as string) ?? (d.dataset as any)?.id ?? datasetId;
+          if (typeof d.recordCount === "number") recordsFound = Math.max(recordsFound, d.recordCount);
+          if (typeof d.validRecordCount === "number") validRecords = Math.max(validRecords, d.validRecordCount);
+          if (typeof d.duplicateCount === "number") duplicates = Math.max(duplicates, d.duplicateCount);
+          if (typeof d.sourceCount === "number") sourcesProcessed = Math.max(sourcesProcessed, d.sourceCount);
           log.push({ id: ev.id, text: "Dataset created", timestamp: ts });
           break;
         case "RUN_COMPLETED":
           status = "completed";
           progress = 100;
-          datasetId = (d.datasetId as string) ?? datasetId;
+          datasetId = (d.datasetId as string) ?? (d.dataset as any)?.id ?? datasetId;
+          recordsFound = (d.recordsFound as number) ?? (d.records as number) ?? (d.recordCount as number) ?? recordsFound;
+          validRecords = (d.recordsValid as number) ?? (d.validRecords as number) ?? (d.validCount as number) ?? (d.recordsAccepted as number) ?? validRecords;
+          duplicates = (d.duplicateCount as number) ?? (d.duplicates as number) ?? duplicates;
+          sourcesProcessed = (d.sourcesProcessed as number) ?? (d.sources as number) ?? (d.sourceCount as number) ?? sourcesProcessed;
+          sourcesTotal = Math.max(sourcesTotal, sourcesProcessed);
           stages.forEach((s, i) => { stages[i] = { ...s, status: "done" }; });
           log.push({ id: ev.id, text: "Workflow completed", timestamp: ts });
           break;
@@ -202,6 +222,23 @@ function LiveWorkflowInner() {
 
     return { status, progress, recordsFound, validRecords, duplicates, sourcesProcessed, sourcesTotal, stages, log, datasetId };
   }, [events, run]);
+
+  // If run is completed but datasetId is not yet loaded, query run once to hydrate
+  useEffect(() => {
+    if (derived.status === "completed" && !derived.datasetId && runId && user) {
+      const timer = setTimeout(() => {
+        api.get<RunResponse>(`/runs/${runId}`, {
+          workspaceId: user.workspaceId,
+          userId: user.id,
+        }).then((latest) => {
+          if (latest?.datasetId || latest?.dataset?.id) {
+            setRun(latest);
+          }
+        }).catch(() => {});
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+  }, [derived.status, derived.datasetId, runId, user]);
 
   if (loading || !run) {
     return (

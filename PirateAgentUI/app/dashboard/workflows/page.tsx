@@ -45,9 +45,9 @@ interface WorkflowListResponse {
 function mapStatusToFilter(w: WorkflowItem): WorkflowStatus {
   const runStatus = w.lastRun?.status;
   if (runStatus === "RUNNING") return "running";
-  if (runStatus === "COMPLETED") return "completed";
-  if (runStatus === "FAILED") return "failed";
-  if (w.status === "ACTIVE") return "running";
+  if (runStatus === "COMPLETED" || runStatus === "PARTIAL") return "completed";
+  if (runStatus === "FAILED" || runStatus === "CANCELLED") return "failed";
+  if (w.status === "ACTIVE" && !runStatus) return "running";
   if (w.status === "ARCHIVED") return "completed";
   return "completed";
 }
@@ -64,7 +64,15 @@ export default function WorkflowsPage() {
     { skip: !user },
   );
 
-  const workflows = data?.data ?? [];
+  const rawList = data?.data ?? (data as any)?.items ?? [];
+  const workflows: WorkflowItem[] = useMemo(() => {
+    return rawList.map((w: any) => ({
+      ...w,
+      prompt: w.prompt ?? w.requirement ?? w.originalPrompt ?? "",
+      validRecords: w.validRecords ?? w.lastRun?.recordsAccepted ?? w.dataset?.validCount ?? 0,
+      progress: w.progress ?? (w.lastRun?.status === "COMPLETED" || w.status === "COMPLETED" ? 100 : 0),
+    }));
+  }, [rawList]);
 
   const filtered = useMemo(() => {
     return workflows.filter((w) => {

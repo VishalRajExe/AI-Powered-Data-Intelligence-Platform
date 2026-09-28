@@ -21,7 +21,7 @@ const ListWorkflowsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().optional(),
-  status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional(),
+  status: z.string().trim().optional(),
 });
 
 const WorkflowAccessQuerySchema = z.object({
@@ -81,7 +81,20 @@ export function createWorkflowsRouter(
         throw new AppError("Workflow history is unavailable.", 503, "HISTORY_UNAVAILABLE");
       }
       const { query } = response.locals.validated as { query: z.infer<typeof ListWorkflowsQuerySchema> };
-      response.json(await historyRepository.listWorkflows(query.workspaceId, query.userId, query));
+      const result = await historyRepository.listWorkflows(query.workspaceId, query.userId, query);
+      const enrichedData = result.items.map((item) => ({
+        ...item,
+        prompt: item.originalPrompt || item.requirement || "",
+        validRecords: item.lastRun?.recordsAccepted ?? item.dataset?.validCount ?? 0,
+        recordsFound: item.lastRun?.recordsFound ?? item.dataset?.recordCount ?? 0,
+        duplicates: item.lastRun?.duplicates ?? item.dataset?.duplicateCount ?? 0,
+        sourcesProcessed: item.lastRun?.sourceCount ?? item.dataset?.sourceCount ?? 0,
+        progress: item.lastRun?.status === "COMPLETED" ? 100 : item.lastRun?.status === "RUNNING" ? 50 : 0,
+      }));
+      response.json({
+        ...result,
+        data: enrichedData,
+      });
     },
   );
 
@@ -97,7 +110,20 @@ export function createWorkflowsRouter(
         params: z.infer<typeof UUIDParam>;
         query: z.infer<typeof WorkflowAccessQuerySchema>;
       };
-      response.json(await historyRepository.getWorkflow(query.workspaceId, params.id, query.userId));
+      const wf = await historyRepository.getWorkflow(query.workspaceId, params.id, query.userId);
+      const enrichedWf = {
+        ...wf,
+        prompt: wf.requirement || wf.originalPrompt || "",
+        lastRun: wf.lastRun
+          ? {
+              ...wf.lastRun,
+              validRecords: wf.lastRun.recordsAccepted,
+              sourcesProcessed: wf.lastRun.sourceCount,
+              datasetId: wf.dataset?.id,
+            }
+          : null,
+      };
+      response.json(enrichedWf);
     },
   );
 

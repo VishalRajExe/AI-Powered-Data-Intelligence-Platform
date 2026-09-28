@@ -9,17 +9,21 @@ import type { DatasetRow, SourceRecord, DataField } from "@/lib/types";
 
 export function SourceDrawer({
   row,
-  sources,
-  fields,
+  sources = [],
+  fields = [],
   open,
   onOpenChange,
 }: {
   row: DatasetRow | null;
-  sources: SourceRecord[];
-  fields: DataField[];
+  sources?: SourceRecord[];
+  fields?: DataField[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const safeFields = fields ?? [];
+  const safeSources = sources ?? [];
+  const rowData = ((row?.data ?? (row as any)?.values ?? {}) as Record<string, unknown>);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       {row && (
@@ -40,29 +44,33 @@ export function SourceDrawer({
                   <CrossedAnchorIcon className="h-3 w-3" /> Needs review
                 </Badge>
               )}
-              <Badge variant="default">{row.confidence}% confidence</Badge>
+              <Badge variant="default">{typeof row.confidence === "number" ? (row.confidence <= 1 ? Math.round(row.confidence * 100) : Math.round(row.confidence)) : 90}% confidence</Badge>
             </div>
 
             <Separator className="my-5 bg-border/60" />
 
             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Structured data</p>
             <dl className="space-y-2.5">
-              {fields.map((f) => (
-                <div key={f.name} className="flex items-start justify-between gap-4 text-[13px]">
-                  <dt className="capitalize text-muted-foreground">{f.name}</dt>
-                  <dd className="text-right font-medium text-foreground">{String(row.data[f.name] ?? "—")}</dd>
-                </div>
-              ))}
+              {safeFields.map((f) => {
+                const rawVal = rowData[f.name] ?? (f.label ? rowData[f.label] : undefined) ?? "—";
+                const val = typeof rawVal === "object" && rawVal !== null ? JSON.stringify(rawVal) : String(rawVal);
+                return (
+                  <div key={f.name} className="flex items-start justify-between gap-4 text-[13px]">
+                    <dt className="capitalize text-muted-foreground">{f.label || f.name}</dt>
+                    <dd className="text-right font-medium text-foreground">{val}</dd>
+                  </div>
+                );
+              })}
             </dl>
 
             <Separator className="my-5 bg-border/60" />
 
             <div className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <LighthouseIcon className="h-3.5 w-3.5 text-tan" />
-              <span>Evidence ({sources.length} source{sources.length !== 1 ? "s" : ""})</span>
+              <span>Evidence ({safeSources.length} source{safeSources.length !== 1 ? "s" : ""})</span>
             </div>
             <div className="space-y-2.5">
-              {sources.map((s) => (
+              {safeSources.map((s) => (
                 <a
                   key={s.id}
                   href={`https://${s.domain}`}

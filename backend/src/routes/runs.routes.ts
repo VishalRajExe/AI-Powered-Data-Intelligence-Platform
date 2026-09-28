@@ -38,11 +38,19 @@ export function createRunsRouter(
     validateRequest({ params: UUIDParam, query: AccessQuery }),
     async (_request, response) => {
       const { params, query } = response.locals.validated as { params: { id: string }; query: z.infer<typeof AccessQuery> };
+      let run: any;
       if (historyRepository) {
-        response.json(await historyRepository.getRun(query.workspaceId, params.id, query.userId));
+        run = await historyRepository.getRun(query.workspaceId, params.id, query.userId);
       } else {
-        response.json(await repository.getRun(params.id, query.workspaceId, query.userId));
+        run = await repository.getRun(params.id, query.workspaceId, query.userId);
       }
+      response.json({
+        ...run,
+        datasetId: run.dataset?.id ?? run.datasetId,
+        validRecords: run.recordsAccepted ?? run.recordsValid ?? 0,
+        sourcesProcessed: run.sourceCount ?? run.sourcesProcessed ?? 0,
+        duplicates: run.duplicates ?? run.duplicateCount ?? 0,
+      });
     },
   );
 
@@ -62,13 +70,18 @@ export function createRunsRouter(
     validateRequest({ params: UUIDParam, query: AccessQuery }),
     async (_request, response) => {
       const { params, query } = response.locals.validated as { params: { id: string }; query: z.infer<typeof AccessQuery> };
+      let rawEvents: any[] = [];
       if (historyRepository) {
-        response.json({ events: await historyRepository.getRunActivity(query.workspaceId, params.id, query.userId) });
+        rawEvents = await historyRepository.getRunActivity(query.workspaceId, params.id, query.userId);
       } else if (broadcaster) {
-        response.json({ events: await broadcaster.getHistory(query.workspaceId, params.id) });
-      } else {
-        response.json({ events: [] });
+        rawEvents = await broadcaster.getHistory(query.workspaceId, params.id);
       }
+      const events = rawEvents.map((ev: any) => ({
+        ...ev,
+        timestamp: ev.createdAt || ev.timestamp || new Date().toISOString(),
+        message: ev.message || (ev.details && typeof ev.details === "object" && typeof ev.details?.message === "string" ? ev.details.message : undefined),
+      }));
+      response.json({ events });
     },
   );
 

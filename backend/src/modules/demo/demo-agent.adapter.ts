@@ -58,7 +58,7 @@ export class DemoAgentAdapter implements AgentAdapter {
               canonicalUrl: s.canonicalUrl,
               canonicalUrlHash: norm.hash,
               domain: s.domain,
-              title: s.title,
+              title: s.title || s.url,
             });
             if (s.verifiedByTool) {
               await this.sourceRepo.updateLifecycle(input.workspaceId, input.runId, norm.hash, {

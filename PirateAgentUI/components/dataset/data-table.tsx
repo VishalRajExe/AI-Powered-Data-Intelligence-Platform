@@ -13,8 +13,8 @@ export interface SortState {
 }
 
 export function DataTable({
-  fields,
-  rows,
+  fields = [],
+  rows = [],
   page,
   pageSize,
   total,
@@ -26,7 +26,7 @@ export function DataTable({
   onOpenRow,
   onPageChange,
 }: {
-  fields: DataField[];
+  fields?: DataField[];
   rows: DatasetRow[];
   page: number;
   pageSize: number;
@@ -39,7 +39,9 @@ export function DataTable({
   onOpenRow: (row: DatasetRow) => void;
   onPageChange: (page: number) => void;
 }) {
-  const allChecked = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  const safeFields = fields ?? [];
+  const safeRows = rows ?? [];
+  const allChecked = safeRows.length > 0 && safeRows.every((r) => selected.has(r.id));
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -51,13 +53,13 @@ export function DataTable({
               <th className="w-10 px-3.5 py-3">
                 <Checkbox checked={allChecked} onCheckedChange={onToggleAll} />
               </th>
-              {fields.map((f) => (
+              {safeFields.map((f) => (
                 <th key={f.name} className="whitespace-nowrap px-3.5 py-3">
                   <button
                     onClick={() => onSort(f.name)}
                     className="flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
                   >
-                    {f.name}
+                    {f.label || f.name}
                     <ArrowUpDown className={cn("h-3 w-3", sort.key === f.name ? "text-primary" : "text-muted-foreground/50")} />
                   </button>
                 </th>
@@ -67,36 +69,48 @@ export function DataTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-border/50">
-            {rows.map((row) => (
-              <tr
-                key={row.id}
-                className="cursor-pointer transition-colors hover:bg-surface/60"
-                onClick={() => onOpenRow(row)}
-              >
-                <td className="px-3.5 py-3" onClick={(e) => e.stopPropagation()}>
-                  <Checkbox checked={selected.has(row.id)} onCheckedChange={() => onToggleRow(row.id)} />
-                </td>
-                {fields.map((f) => (
-                  <td key={f.name} className="max-w-[220px] truncate px-3.5 py-3 text-foreground font-normal">
-                    {f.type === "url" ? (
-                      <span className="text-primary hover:underline font-medium">{String(row.data[f.name] ?? "—")}</span>
-                    ) : (
-                      String(row.data[f.name] ?? "—")
-                    )}
+            {safeRows.map((row) => {
+              const rowData = (row.data ?? (row as any).values ?? {}) as Record<string, unknown>;
+              const conf = typeof row.confidence === "number"
+                ? (row.confidence <= 1 ? Math.round(row.confidence * 100) : Math.round(row.confidence))
+                : 90;
+              const sourceCount = row.sourceIds?.length ?? (row as any).sourceEvidenceCount ?? 1;
+
+              return (
+                <tr
+                  key={row.id}
+                  className="cursor-pointer transition-colors hover:bg-surface/60"
+                  onClick={() => onOpenRow(row)}
+                >
+                  <td className="px-3.5 py-3" onClick={(e) => e.stopPropagation()}>
+                    <Checkbox checked={selected.has(row.id)} onCheckedChange={() => onToggleRow(row.id)} />
                   </td>
-                ))}
-                <td className="px-3.5 py-3">
-                  <Badge variant={row.confidence >= 85 ? "success" : row.confidence >= 70 ? "warning" : "danger"}>
-                    {row.confidence}%
-                  </Badge>
-                </td>
-                <td className="px-3.5 py-3">
-                  <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground">
-                    <LighthouseIcon className="h-3.5 w-3.5 text-tan" /> {row.sourceIds.length}
-                  </span>
-                </td>
-              </tr>
-            ))}
+                  {safeFields.map((f) => {
+                    const rawVal = rowData[f.name] ?? (f.label ? rowData[f.label] : undefined) ?? "—";
+                    const val = typeof rawVal === "object" && rawVal !== null ? JSON.stringify(rawVal) : String(rawVal);
+                    return (
+                      <td key={f.name} className="max-w-[220px] truncate px-3.5 py-3 text-foreground font-normal">
+                        {f.type === "url" ? (
+                          <span className="text-primary hover:underline font-medium">{val}</span>
+                        ) : (
+                          val
+                        )}
+                      </td>
+                    );
+                  })}
+                  <td className="px-3.5 py-3">
+                    <Badge variant={conf >= 85 ? "success" : conf >= 70 ? "warning" : "danger"}>
+                      {conf}%
+                    </Badge>
+                  </td>
+                  <td className="px-3.5 py-3">
+                    <span className="inline-flex items-center gap-1.5 text-[12px] font-medium text-muted-foreground">
+                      <LighthouseIcon className="h-3.5 w-3.5 text-tan" /> {sourceCount}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

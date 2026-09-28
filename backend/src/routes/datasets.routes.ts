@@ -146,7 +146,21 @@ export function createDatasetsRouter(repository: DatasetQueryRepository): Router
         params: z.infer<typeof UUIDParam>;
         query: z.infer<typeof DatasetAccessQuery>;
       };
-      res.json(await repository.getDataset(query.workspaceId, params.id, query.userId));
+      const ds = await repository.getDataset(query.workspaceId, params.id, query.userId);
+      const columns = (ds as any).columns ?? [];
+      const fields = columns.map((col: any) => ({
+        id: col.id,
+        name: col.key,
+        label: col.label || col.key,
+        type: (col.type || "string").toLowerCase(),
+        required: col.required ?? true,
+        filterable: col.filterable ?? true,
+        sortable: col.sortable ?? true,
+      }));
+      res.json({
+        ...ds,
+        fields,
+      });
     },
   );
 
@@ -208,7 +222,34 @@ export function createDatasetsRouter(repository: DatasetQueryRepository): Router
         ...(query.sourceId !== undefined ? { sourceId: query.sourceId } : {}),
         ...(fieldFilters !== undefined ? { fieldFilters } : {}),
       });
-      res.json(result);
+
+      const formattedRows = result.data.map((r: any) => {
+        const confNum = typeof r.confidence === "number"
+          ? (r.confidence <= 1.0 ? Math.round(r.confidence * 100) : Math.round(r.confidence))
+          : 90;
+        return {
+          ...r,
+          data: r.values ?? r.data ?? {},
+          values: r.values ?? r.data ?? {},
+          confidence: confNum,
+          isValid: r.isValid ?? true,
+          verificationStatus: r.verificationStatus,
+          collectedAt: r.collectedAt ? new Date(r.collectedAt).toISOString() : new Date().toISOString(),
+          sourceIds: r.sourceIds ?? Array.from({ length: r.sourceEvidenceCount ?? 1 }, (_, i) => `src-${i + 1}`),
+          sourceEvidenceCount: r.sourceEvidenceCount ?? 0,
+        };
+      });
+
+      res.json({
+        ...result,
+        data: formattedRows,
+        pagination: {
+          total: result.total,
+          page: result.page,
+          limit: result.limit,
+          totalPages: result.totalPages,
+        },
+      });
     },
   );
 

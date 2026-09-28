@@ -76,11 +76,11 @@ export function WorkflowRunView(props: WorkflowRunViewProps) {
               <RotateCcw className="h-3.5 w-3.5" /> Retry
             </Button>
           )}
-          {status === "completed" && datasetId && (
+          {status === "completed" && (
             <Button
               size="sm"
-              className="bg-primary text-primary-foreground hover:bg-primary-hover font-semibold"
-              onClick={() => router.push(`/dashboard/datasets/${datasetId}`)}
+              className="bg-primary text-primary-foreground hover:bg-primary-hover font-semibold gap-1.5"
+              onClick={() => router.push(datasetId ? `/dashboard/datasets/${datasetId}` : "/dashboard/datasets")}
             >
               View results <ArrowRight className="h-3.5 w-3.5" />
             </Button>

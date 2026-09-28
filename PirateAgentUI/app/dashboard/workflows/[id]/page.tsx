@@ -90,7 +90,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
 
   const run = workflow.lastRun;
   const status = run?.status === "RUNNING" ? "running"
-    : run?.status === "COMPLETED" ? "completed"
+    : (run?.status === "COMPLETED" || run?.status === "PARTIAL") ? "completed"
     : run?.status === "FAILED" ? "failed"
     : "completed";
 
@@ -102,27 +102,34 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   }));
 
   const log = activity.length > 0
-    ? activity.map((a) => ({
+    ? activity.map((a: any) => ({
         id: a.id,
         text: a.message ?? a.action,
-        timestamp: a.timestamp,
+        timestamp: a.timestamp ?? a.createdAt ?? new Date().toISOString(),
       }))
     : [{ id: "l0", text: "Workflow created", timestamp: new Date().toISOString() }];
+
+  const datasetId = run?.datasetId ?? (workflow as any)?.dataset?.id;
+  const recordsFound = run?.recordsFound ?? (workflow as any)?.dataset?.recordCount ?? 0;
+  const validRecords = run?.validRecords ?? (run as any)?.recordsAccepted ?? (workflow as any)?.dataset?.validCount ?? 0;
+  const duplicates = run?.duplicates ?? (run as any)?.duplicateCount ?? (workflow as any)?.dataset?.duplicateCount ?? 0;
+  const sourcesProcessed = run?.sourcesProcessed ?? (run as any)?.sourceCount ?? (workflow as any)?.dataset?.sourceCount ?? 0;
+  const sourcesTotal = run?.sourcesTotal ?? Math.max(sourcesProcessed, 1);
 
   return (
     <WorkflowRunView
       name={workflow.name}
-      prompt={workflow.prompt}
+      prompt={workflow.prompt ?? (workflow as any).requirement ?? ""}
       status={status}
       progress={progress}
       stages={stages}
-      recordsFound={run?.recordsFound ?? 0}
-      validRecords={run?.validRecords ?? 0}
-      duplicates={run?.duplicates ?? 0}
-      sourcesProcessed={run?.sourcesProcessed ?? 0}
-      sourcesTotal={run?.sourcesTotal ?? 0}
+      recordsFound={recordsFound}
+      validRecords={validRecords}
+      duplicates={duplicates}
+      sourcesProcessed={sourcesProcessed}
+      sourcesTotal={sourcesTotal}
       log={log}
-      datasetId={run?.datasetId}
+      datasetId={datasetId}
     />
   );
 }

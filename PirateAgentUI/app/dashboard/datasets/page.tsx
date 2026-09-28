@@ -37,7 +37,7 @@ export default function DatasetsPage() {
     { skip: !user },
   );
 
-  const datasets = data?.data ?? [];
+  const datasets: DatasetItem[] = data?.data ?? (data as any)?.items ?? [];
 
   return (
     <div className="space-y-6">
