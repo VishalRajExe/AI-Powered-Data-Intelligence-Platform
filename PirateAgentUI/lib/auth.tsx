@@ -53,27 +53,58 @@ export function useAuth(): AuthState {
 // Response shapes from the backend
 // ---------------------------------------------------------------------------
 
-interface LoginResponse {
-  user: {
-    id: string;
-    email: string;
-    name: string | null;
-  };
-  workspace: {
-    id: string;
-    name: string;
-  };
+interface WorkspaceInfo {
+  id: string;
+  name: string;
+  slug?: string;
+  role?: string;
+}
+
+interface UserInfo {
+  id: string;
+  email: string;
+  name: string | null;
+}
+
+interface AuthTokensObj {
   accessToken: string;
   refreshToken: string;
 }
 
+interface LoginResponse {
+  user?: UserInfo;
+  id?: string;
+  email?: string;
+  name?: string | null;
+  workspaces?: WorkspaceInfo[];
+  workspace?: WorkspaceInfo;
+  tokens?: AuthTokensObj;
+  accessToken?: string;
+  refreshToken?: string;
+}
+
 interface MeResponse {
-  id: string;
-  email: string;
-  name: string | null;
-  workspace: {
-    id: string;
-    name: string;
+  user?: UserInfo;
+  id?: string;
+  email?: string;
+  name?: string | null;
+  workspaces?: WorkspaceInfo[];
+  workspace?: WorkspaceInfo;
+}
+
+function extractAuthUser(data: LoginResponse | MeResponse): AuthUser {
+  const u = data.user ?? {
+    id: data.id ?? "",
+    email: data.email ?? "",
+    name: data.name ?? null,
+  };
+  const ws = data.workspaces?.[0] ?? data.workspace ?? { id: "", name: "" };
+  return {
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    workspaceId: ws.id,
+    workspaceName: ws.name || null,
   };
 }
 
@@ -101,13 +132,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     api
       .get<MeResponse>("/auth/me")
       .then((me) => {
-        setUser({
-          id: me.id,
-          email: me.email,
-          name: me.name,
-          workspaceId: me.workspace.id,
-          workspaceName: me.workspace.name,
-        });
+        setUser(extractAuthUser(me));
       })
       .catch(() => {
         clearTokens();
@@ -129,14 +154,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Login -------------------------------------------------------------------
   const login = useCallback(async (email: string, password: string) => {
     const res = await api.post<LoginResponse>("/auth/login", { email, password });
-    setTokens(res.accessToken, res.refreshToken);
-    const authUser: AuthUser = {
-      id: res.user.id,
-      email: res.user.email,
-      name: res.user.name,
-      workspaceId: res.workspace.id,
-      workspaceName: res.workspace.name,
-    };
+    const accessToken = res.tokens?.accessToken ?? res.accessToken;
+    const refreshToken = res.tokens?.refreshToken ?? res.refreshToken;
+    if (accessToken && refreshToken) {
+      setTokens(accessToken, refreshToken);
+    }
+    const authUser = extractAuthUser(res);
     setUser(authUser);
     return authUser;
   }, []);
@@ -144,14 +167,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Register ----------------------------------------------------------------
   const register = useCallback(async (email: string, password: string, name?: string) => {
     const res = await api.post<LoginResponse>("/auth/register", { email, password, name });
-    setTokens(res.accessToken, res.refreshToken);
-    const authUser: AuthUser = {
-      id: res.user.id,
-      email: res.user.email,
-      name: res.user.name,
-      workspaceId: res.workspace.id,
-      workspaceName: res.workspace.name,
-    };
+    const accessToken = res.tokens?.accessToken ?? res.accessToken;
+    const refreshToken = res.tokens?.refreshToken ?? res.refreshToken;
+    if (accessToken && refreshToken) {
+      setTokens(accessToken, refreshToken);
+    }
+    const authUser = extractAuthUser(res);
     setUser(authUser);
     return authUser;
   }, []);
@@ -172,13 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshUser = useCallback(async () => {
     try {
       const me = await api.get<MeResponse>("/auth/me");
-      setUser({
-        id: me.id,
-        email: me.email,
-        name: me.name,
-        workspaceId: me.workspace.id,
-        workspaceName: me.workspace.name,
-      });
+      setUser(extractAuthUser(me));
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         clearTokens();

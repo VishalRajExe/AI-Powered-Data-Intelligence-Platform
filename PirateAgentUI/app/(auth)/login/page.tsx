@@ -33,6 +33,8 @@ export default function LoginPage() {
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);
+      } else if (err instanceof Error) {
+        setError(err.message);
       } else {
         setError("Something went wrong. Please try again.");
       }

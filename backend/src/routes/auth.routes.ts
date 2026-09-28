@@ -46,7 +46,12 @@ export function createAuthRouter(
     async (_req, res) => {
       const { body } = res.locals.validated as { body: z.infer<typeof RegisterBody> };
       const result = await authService.register(body);
-      res.status(201).json(result);
+      res.status(201).json({
+        ...result,
+        accessToken: result.tokens.accessToken,
+        refreshToken: result.tokens.refreshToken,
+        workspace: result.workspaces[0],
+      });
     },
   );
 
@@ -57,7 +62,12 @@ export function createAuthRouter(
     async (_req, res) => {
       const { body } = res.locals.validated as { body: z.infer<typeof LoginBody> };
       const result = await authService.login(body);
-      res.status(200).json(result);
+      res.status(200).json({
+        ...result,
+        accessToken: result.tokens.accessToken,
+        refreshToken: result.tokens.refreshToken,
+        workspace: result.workspaces[0],
+      });
     },
   );
 
@@ -97,7 +107,13 @@ export function createAuthRouter(
       }
 
       const result = await authService.getCurrentUser(authUser.id);
-      res.status(200).json(result);
+      res.status(200).json({
+        ...result,
+        id: result.user.id,
+        email: result.user.email,
+        name: result.user.name,
+        workspace: result.workspaces[0],
+      });
     },
   );
 

@@ -180,8 +180,17 @@ async function request<T>(
     } catch {
       body = null;
     }
-    const msg = (body as { message?: string })?.message ?? response.statusText;
-    const code = (body as { error?: string })?.error ?? "REQUEST_FAILED";
+    const errPayload = body as {
+      error?: { code?: string; message?: string } | string;
+      message?: string;
+    } | null;
+    const errObj = errPayload?.error;
+    const code = typeof errObj === "string" ? errObj : errObj?.code ?? "REQUEST_FAILED";
+    const msg =
+      (typeof errObj === "object" && errObj?.message) ||
+      errPayload?.message ||
+      (typeof errObj === "string" ? errObj : null) ||
+      response.statusText;
     throw new ApiError(response.status, code, msg, body);
   }
 
