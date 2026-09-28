@@ -178,11 +178,6 @@ export function enforceClientIdentity(): RequestHandler {
           "FORBIDDEN_USER_MISMATCH",
         );
       }
-
-      // Automatically bind authenticated identity into body if missing
-      if (!req.body.userId) req.body.userId = authUser.id;
-      if (!req.body.createdById) req.body.createdById = authUser.id;
-      if (!req.body.requestedById) req.body.requestedById = authUser.id;
     }
 
     next();

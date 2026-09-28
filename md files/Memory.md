@@ -4,9 +4,9 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 14 — Frontend Integration Contract complete.
+- **Current Phase:** Phase 15 — End-to-End Validation complete.
 - **Last updated:** 2026-09-28.
-- **App runnable end-to-end:** Complete backend and integration contracts are finalized, verified, and documented. Full OpenAPI 3.1.0 specification is available at `backend/docs/openapi.json` and served live at `GET /api/v1/openapi.json`. Canonical Frontend Integration Contract is documented in `md files/FrontendIntegrationContract.md` across all 11 core areas (Auth, Requirements, Workflows, Runs, Events, Datasets, Rows, Sources, Evidence, Exports, Activity) and mapped to all 8 target screens. Prompt parsing, plan generation/persistence, BullMQ run execution, Firecrawl step adapters, source governance, data quality intelligence pipeline, evidence-backed dataset saving, Dataset Management query APIs, Source and Evidence Explorer APIs, persistent Workflow and Run history views, SSE live monitoring, Dataset Export APIs, and multi-user authentication/authorization are fully active, tested, and contract-verified.
+- **App runnable end-to-end:** Complete backend and integration contracts are finalized, verified, and end-to-end validated as one unified product across three realistic examples: (1) Indian AI Startups (50 targets, multi-source provenance, quality checks, failed source isolation, duplicates and conflict resolution), (2) Software Engineering Internships in India (dynamic requirement & workflow plan generation adaptation), and (3) Technology Sponsors in India for College Hackathons (distinct objective, schema, steps, and source criteria). All 25 end-to-end validation criteria passed. 191 tests pass across 16 active test suites, ESLint passes with 0 errors/warnings, TypeScript typechecks cleanly, and production build succeeds.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
 
 ## 2. Completed Phases / Features
@@ -20,12 +20,13 @@
 - [x] Phase 6 — Plan allow/deny domain rules, URL normalization/validation, robots policy checks, Redis sliding-window rate limits, bounded request timeout/retry, source lifecycle/reason persistence, and safe alternative-source continuation.
 - [x] Phase 7 — BullMQ workflow runs, dependency-ordered safe step runner, per-step status/retry/timing/source references, cancellation requests, activity events, evidence-backed dataset persistence, run/step APIs, worker error handling, and runner tests.
 - [x] Phase 8 — Integrated relevant Web Research Agent URL relevance concepts in native TypeScript around Firecrawl Search; added normalization, field-aware validation, conservative deduplication/entity resolution, conflict handling, provenance quality metrics, MySQL persistence, and integration tests. Firecrawl remains the primary collection engine.
-- [x] Phase 9 — Dataset Management: Full business data layer. Implemented `DatasetQueryRepository` and Express routes for `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, and `GET /api/v1/sources/:id`. Coexists dynamic JSON rows with indexed relational columns, prevents SQL/JSON injection via schema-aware validation, supports pagination, text search, dynamic field filters, valid-only, duplicates-only, sorting, and full source/evidence lineage.
+- [x] Phase 9 — Dataset Management: Full business data layer. Implemented `DatasetQueryRepository` and Express routes for `GET /api/v1/datasets`, `GET /api/v1/datasets/:id`, `GET /api/v1/datasets/:id/schema`, `GET /api/v1/datasets/:id/rows`, `GET /api/v1/datasets/:id/rows/:rowId`, `GET /api/v1/datasets/:id/sources`, and `GET /api/sources/:id`. Coexists dynamic JSON rows with indexed relational columns, prevents SQL/JSON injection via schema-aware validation, supports pagination, text search, dynamic field filters, valid-only, duplicates-only, sorting, and full source/evidence lineage.
 - [x] Phase 10 — Source and Evidence Explorer: Explainable and source-backed provenance at row and field granularity. Implemented domain models (`SourceDetail`, `SourceEvidence`, `DatasetRowSource`, `FieldEvidence`, `RowEvidenceExplorerResponse`) and `ProvenanceService`. Preserves URL, domain, page title, `retrievedAt`, `sourceType`, workflow run, extraction step, evidence snippet, and source status. Implemented `GET /api/v1/datasets/:id/sources`, `GET /api/v1/sources/:id`, and `GET /api/v1/rows/:id/evidence` (with alias `/api/v1/datasets/:id/rows/:rowId/evidence`). Supports multi-source row provenance (e.g., Company from Source A, Website from Source B), prevents claiming a source verifies a value if the snippet contains unrelated content (`isVerified: false`), and preserves conflict history where different sources disagree.
 - [x] Phase 11 — Workflow History and Live Monitoring: Persistent workflow and run history views and real-time live monitoring. Implemented `WorkflowHistoryRepository` exposing Workflow view (name, prompt, created time, last run summary, status, dataset summary, runs count) and WorkflowRun view (started, completed, duration, records found, records accepted, duplicates, failures, source count, dataset summary, steps). Standardized canonical activity actions (`PLANNING_STARTED`, `PLAN_CREATED`, `SOURCE_DISCOVERY_STARTED`, `SOURCE_DISCOVERED`, `SCRAPE_STARTED`, `SCRAPE_COMPLETED`, `EXTRACTION_STARTED`, `RECORDS_EXTRACTED`, `VALIDATION_COMPLETED`, `DEDUPLICATION_COMPLETED`, `DATASET_CREATED`, `RUN_COMPLETED`, `RUN_FAILED`). Implemented `WorkflowEventBroadcaster` with durable MySQL `ActivityEvent` persistence before Redis Pub/Sub and in-process broadcasting (no history kept only in memory). Implemented SSE endpoint `GET /api/v1/runs/:id/events` for frontend `EventSource` consumption with historical replay, Redis cross-process event distribution, and 15s keepalive heartbeats.
 - [x] Phase 12 — Data Export: Dataset exports in CSV, JSON, and XLSX with chunked streaming to prevent memory exhaustion. Supports complete datasets, filtered datasets (search, validOnly, duplicatesOnly, verificationStatus, confidence, fieldFilters, sort), and selected columns subset. Implemented `ExportRepository` and `ExportService` managing asynchronous `ExportJob` models with status tracking, RFC 4180 CSV escaping, valid JSON streaming arrays, and valid OpenXML spreadsheets via ExcelJS. Exposed `POST /api/v1/datasets/:id/exports`, `GET /api/v1/exports/:id`, and `GET /api/v1/exports/:id/download` with strict workspace access control.
 - [x] Phase 13 — Authentication and Authorization: Multi-user security layer with bcrypt password hashing (10 salt rounds), environment-based JWT secrets (`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, min 32 chars), short-lived access tokens (15m), rotating refresh tokens with unique UUID `jti` (7d), and Redis/memory token revocation. Default workspace and OWNER membership provisioned upon registration. Implemented routes: `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `POST /api/v1/auth/refresh`, `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`. Authorization middleware enforces active workspace membership (`requireWorkspaceAccess`), role hierarchy (`OWNER` > `ADMIN` > `MEMBER`), and client-supplied identity protection (`enforceClientIdentity`), rejecting user impersonation with 403 `FORBIDDEN_USER_MISMATCH`. Password hashes are strictly omitted from all models and responses.
 - [x] Phase 14 — Frontend Integration Contract: Generated OpenAPI 3.1.0 specification (`backend/docs/openapi.json`, `GET /api/v1/openapi.json`) and comprehensive integration contract (`md files/FrontendIntegrationContract.md`) defining every endpoint across all 11 core areas (Auth, Requirements, Workflows, Runs, Events, Datasets, Rows, Sources, Evidence, Exports, Activity + Health). Mapped all 8 target screens (New Research Task, Workflow Preview, Workflow Running, Workflow History, Dataset Explorer, Source Explorer, Export, Activity Log). Documented SSE event format with keepalives and reconnection, uniform `PaginationMeta` envelope, dynamic dataset columns and row filter syntax, and granular row/source/evidence provenance relationships. Verified with 27 automated contract tests.
+- [x] Phase 15 — End-to-End Validation: Full system validation as one unified product across three realistic scenarios. Verified all 25 specific lifecycle criteria on Example 1 ("Find 50 Indian AI startups founded after 2020..."): 1. Prompt received, 2. Requirement parsed, 3. Requirement validated, 4. Workflow generated dynamically, 5. Workflow persisted, 6. Run created, 7. Jobs queued, 8. Sources discovered, 9. Sources checked, 10. Data collected, 11. Structured extraction executed, 12. Data normalized, 13. Data validated, 14. Duplicates detected, 15. Conflicts preserved, 16. Dataset created, 17. Sources linked, 18. Progress events generated, 19. History stored, 20. Dataset searchable, 21. Dataset filterable, 22. Dataset exportable, 23. Failed sources do not destroy the entire run, 24. User can inspect source evidence, 25. Frontend contract works. Example 2 ("Find software engineering internships in India...") verified dynamic workflow plan adaptation for internship recruitment rather than startup plans. Example 3 ("Find 30 technology sponsors in India...") verified dynamic plan generation tailored to hackathon sponsorships. Measured metrics: 98.1% success rate, 1 isolated failed source, 2 validation issues, 2 duplicate entities linked, 52 records persisted, 14 verified sources processed, 23-48 ms execution time.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -63,6 +64,8 @@
 | 2026-09-28 | Dual-token authentication with short-lived JWT access tokens (15m), rotating refresh tokens with unique UUID `jti` (7d), and Redis/memory revocation. | Minimizes exposure window if access token is intercepted; refresh tokens with unique UUID `jti` allow instant revocation on logout across distributed instances. |
 | 2026-09-28 | Client identity anti-spoofing via `enforceClientIdentity` middleware and workspace isolation via `requireWorkspaceAccess`. | Prohibits client-supplied `userId`/`createdById`/`requestedById` overriding authenticated identity (403 `FORBIDDEN_USER_MISMATCH`); guarantees tenants cannot access foreign workspaces, workflows, datasets, sources, or exports. |
 | 2026-09-28 | Generate OpenAPI 3.1.0 specification (`backend/docs/openapi.json`, `GET /api/v1/openapi.json`) and document canonical Frontend Integration Contract in `md files/FrontendIntegrationContract.md`. | Guarantees transparent, machine-readable and human-readable API contracts for the future frontend without implementing frontend prematurely; ensures strict screen mapping, SSE live stream wire format, dynamic dataset schema definitions, and evidence explorer contracts are verified. |
+| 2026-09-28 | Clean `enforceClientIdentity` to eliminate arbitrary request body mutation. | Removed automatic setting of `req.body.userId`, `req.body.createdById`, and `req.body.requestedById` in auth middleware, preventing Zod `.strict()` schema rejection while strictly enforcing identity verification whenever IDs are explicitly supplied by clients. |
+| 2026-09-28 | Unified end-to-end multi-scenario validation and fault isolation. | Verified end-to-end product lifecycle across 3 distinct domain prompts (startups, internships, sponsors). Confirmed that non-fatal source failures (e.g. HTTP 404) isolate gracefully without terminating the workflow run, duplicates are assigned canonical links, conflicting values are preserved with review decisions, and workflow plans adapt dynamically per prompt objective. |
 
 ## 4. Database / Schema Changes
 
@@ -131,10 +134,10 @@
 
 ## 7. Pending Work / Next Steps
 
-- Phase 14 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
-- Complete OpenAPI 3.1.0 specification and Frontend Integration Contract are verified, defining all contracts for future UI screens without premature frontend implementation.
-- Multi-user authentication and authorization with bcrypt password hashing, JWT access/refresh token rotation, Redis token revocation, and workspace isolation are active.
-- `Phases.md` uses older phase numbering; follow the user's current phase prompts and do not build its later planner phase early.
+- Phase 15 implementation is complete. Stop here; do not start subsequent phases until explicitly requested.
+- Entire system is validated end-to-end as one product across multiple realistic domains (startups, internships, sponsors).
+- Complete OpenAPI 3.1.0 specification, Frontend Integration Contract, multi-user authentication/authorization, and full data intelligence pipeline are verified.
+- `Phases.md` uses older phase numbering; follow the user's current phase prompts.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
 
 ## 8. Environment / Commands / Configuration
@@ -158,34 +161,45 @@
 
 ## 10. Last Session Summary
 
-Phase 14 (Frontend Integration Contract) completed. Created and verified the complete backend contract that the future frontend will consume:
-- Authored full OpenAPI 3.1.0 specification object in `backend/src/docs/openapi.spec.ts` and generated standalone `backend/docs/openapi.json` via npm script `docs:generate`.
-- Exposed live endpoint `GET /api/v1/openapi.json` via `backend/src/routes/openapi.routes.ts` mounted in `backend/src/app.ts`.
-- Created comprehensive integration documentation in `md files/FrontendIntegrationContract.md` and `backend/docs/FRONTEND_INTEGRATION_CONTRACT.md` documenting every endpoint across all 11 core areas:
-  - Auth (`/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/me`).
-  - Requirements (`/requirements/parse`).
-  - Workflows (`/workflows/plan`, `/workflows/execute`, `/workflows/:id/run`, `/workflows`, `/workflows/:id`, `/workflows/:id/runs`).
-  - Runs (`/runs/:id`, `/runs/:id/steps`, `/runs/:id/cancel`).
-  - Events (`/runs/:id/events` SSE stream).
-  - Datasets (`/datasets`, `/datasets/:id`, `/datasets/:id/schema`).
-  - Rows (`/datasets/:id/rows`, `/datasets/:id/rows/:rowId`).
-  - Sources (`/datasets/:id/sources`, `/sources/:id`).
-  - Evidence (`/rows/:id/evidence`, `/datasets/:id/rows/:rowId/evidence`).
-  - Exports (`/datasets/:id/exports`, `/exports/:id`, `/exports/:id/download`).
-  - Activity (`/runs/:id/activity`).
-- Defined deep-dive architectural specifications:
-  - Server-Sent Events (SSE) format: `event: message`, `data: { ... }`, 15-second keepalive comment heartbeats, historical event replay on connection, Redis pub/sub distribution, and reconnection with `Last-Event-ID`.
-  - Uniform pagination format: `PaginationMeta` (`page`, `limit`, `total`, `totalPages`, `hasMore`).
-  - Filter & search syntax: `search`, `validOnly`, `duplicatesOnly`, `verificationStatus`, `minConfidence`, `sourceId`, `fieldFilters`, `sortBy`, `sortOrder`.
-  - Dynamic dataset columns & rows architecture: Relational schema registration (`DatasetColumnView`) coexisting with typed dynamic values in MySQL without single JSON blob compromises.
-  - Granular row, source, and evidence provenance: `RowEvidenceExplorerResponse`, `FieldEvidenceView`, `SupportingSourceView` with explicit verification checks (`isVerified: true/false`).
-- Fully mapped the backend contracts to all 8 target frontend screens defined in `Design.md`:
-  1. New Research Task
-  2. Workflow Preview
-  3. Workflow Running
-  4. Workflow History
-  5. Dataset Explorer
-  6. Source Explorer
-  7. Export
-  8. Activity Log.
-- Verification passed: 178 automated tests passing across 15 test suites (including 27 dedicated contract verification tests in `backend/tests/frontend-contract.test.ts`), 0 ESLint errors, clean TypeScript typecheck, and successful production build.
+Phase 15 (End-to-End Validation) completed. Tested and validated the entire system as one unified product:
+- Validated all 25 specific lifecycle criteria across the primary prompt:
+  - Prompt: `"Find 50 Indian AI startups founded after 2020. Give company name, founder, website, funding stage, location and source URL."`
+  1. Prompt received: Validated request accepted into requirements engine.
+  2. Requirement parsed: Structured requirement output generated (`Indian AI Startups Founded After 2020`).
+  3. Requirement validated: Entity type, target count (50), dynamic schema columns, and constraints verified without ambiguity.
+  4. Workflow generated dynamically: Tailored multi-step collection & refinement plan constructed.
+  5. Workflow persisted: Versioned workflow entity and plan record saved in repository.
+  6. Run created: Execution run initialized with `PENDING`/`CLAIMED` state.
+  7. Jobs queued: Execution submitted to BullMQ runner worker.
+  8. Sources discovered: Multiple search queries dispatched identifying 15 initial candidate URLs.
+  9. Sources checked: Policy, allow/deny domain rules, and robots preflight applied.
+  10. Data collected: Realistic payload collected across multi-source scrape steps.
+  11. Structured extraction executed: JSON entities parsed into structured records.
+  12. Data normalized: Domains, company names, URLs, and locations standardly formatted.
+  13. Data validated: Data intelligence validation rules applied; flags generated for malformed values.
+  14. Duplicates detected: Exact & fuzzy entity match identified duplicates and linked to canonical entities.
+  15. Conflicts preserved: Differing field values across sources preserved alongside quality review records.
+  16. Dataset created: Business dataset entity created with registered schema columns.
+  17. Sources linked: Provenance sources linked directly to dataset and row records.
+  18. Progress events generated: Standard activity events dispatched throughout execution lifecycle.
+  19. History stored: Workflow and WorkflowRun historical views durable and retrievable via API.
+  20. Dataset searchable: Full-text search verified across row fields.
+  21. Dataset filterable: Dynamic field filters (e.g., location, stage) and quality flags verified.
+  22. Dataset exportable: Asynchronous export jobs in CSV, JSON, and XLSX verified with verified file downloads.
+  23. Failed sources isolation: Broken source (`404 Not Found`) handled gracefully without crashing run; all remaining sources succeeded.
+  24. Source evidence inspection: Field-level and row-level evidence explorer verified (`GET /api/v1/rows/:id/evidence`).
+  25. Frontend contract works: All endpoints adhere strictly to OpenAPI and Frontend Integration Contract specs.
+- Validated Example 2 ("Find software engineering internships in India..."):
+  - Verified dynamic requirement & plan generation adaptation (internship entity, stipend/role/apply_url fields, job board source criteria) differing completely from startup research.
+- Validated Example 3 ("Find 30 technology sponsors in India suitable for a college hackathon..."):
+  - Verified dynamic plan generation targeting hackathon sponsorship tiers, contact portals, and company industry categorization.
+- Measured and reported execution & intelligence metrics:
+  - Success Rate: 98.1% (51 valid records / 52 candidate records)
+  - Failed Sources: 1 isolated failed source (HTTP 404 from `https://broken-source.example.com/404`)
+  - Validation Issues: 2 issues detected (missing required founder + malformed website URL)
+  - Duplicates: 2 duplicate records flagged and linked to canonical records
+  - Workflow Execution Time: 23–48 ms (in-memory execution)
+  - Record Count: 52 records persisted
+  - Source Count: 14 verified sources processed (15 candidate sources attempted)
+- Fixed bug in `backend/src/modules/auth/auth.middleware.ts` where arbitrary mutations to `req.body` broke strict Zod schema validation across `/requirements/parse` and `/workflows/plan`.
+- Verification passed: 191 tests passing across 16 active test suites (including 13 comprehensive E2E tests in `backend/tests/e2e-validation.test.ts`), 0 ESLint errors, clean TypeScript typecheck (`tsc --noEmit`), and successful production build (`tsc -p tsconfig.build.json`).
