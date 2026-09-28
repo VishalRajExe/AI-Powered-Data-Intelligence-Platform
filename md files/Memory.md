@@ -4,7 +4,7 @@
 
 ## 1. Current Status
 
-- **Current Phase:** Phase 7 — Workflow execution engine complete.
+- **Current Phase:** Phase 8 — Reference-repository usage audit complete; Phase 8 data-intelligence services are not implemented.
 - **Last updated:** 2026-09-28.
 - **App runnable end-to-end:** Prompt parsing, plan generation/persistence, BullMQ-backed run execution, Firecrawl step adapters, source governance, step/event persistence, and evidence-backed dataset saving are wired. Live provider verification is opt-in.
 - **Git state:** `origin` is configured for `main`; phase work is pushed per the project request.
@@ -19,6 +19,8 @@
 - [x] Phase 5 — `FirecrawlAgentAdapter`, `MockAgentAdapter`, event/result normalization, Firecrawl configuration health check, `POST /api/v1/workflows/execute`, workflow run persistence, and prompt-to-agent end-to-end mock coverage.
 - [x] Phase 6 — Plan allow/deny domain rules, URL normalization/validation, robots policy checks, Redis sliding-window rate limits, bounded request timeout/retry, source lifecycle/reason persistence, and safe alternative-source continuation.
 - [x] Phase 7 — BullMQ workflow runs, dependency-ordered safe step runner, per-step status/retry/timing/source references, cancellation requests, activity events, evidence-backed dataset persistence, run/step APIs, worker error handling, and runner tests.
+- [x] Phase 8 audit-only — Verified actual imports, workflow integration, source files, and licenses for all four local reference repositories. No application code or data-intelligence services were changed in this audit.
+- [ ] Phase 8 implementation — Dedicated normalization, field/schema validation, source verification state, persisted deduplication decisions, entity resolution, and data-quality orchestration remain pending.
 - [ ] Later product phases — Not started. Follow the user's explicit phase prompts; do not infer authorization to implement later work.
 
 ## 3. Key Architectural Decisions Log
@@ -42,6 +44,7 @@
 | 2026-09-28 | Enqueue workflow runs in BullMQ and execute validated plan steps sequentially. | Enforces declared dependencies before downstream work starts; plan text is never evaluated as code. Step retries are bounded by the saved retry policy. |
 | 2026-09-28 | Make cancellation durable and cooperative at workflow step boundaries. | Current Agent Core `RunParams` has no run-level abort signal; cancellation is persisted immediately and prevents later steps while a bounded in-flight collection call finishes. |
 | 2026-09-28 | Persist row-level source evidence rather than inventing field-level citations. | Agent results provide source URLs per record, not independently verified per-field source mappings. |
+| 2026-09-28 | Keep Firecrawl Agent Core as the only directly vendored reference implementation; use Web Research Agent and Anakin as behavior/design references, and do not copy TheAgentic Browser code without legal review. | Firecrawl and Web Research Agent are MIT; Anakin is AGPL-3.0; TheAgentic Community License excludes competing online services. Current backend imports no code from the latter three repositories. |
 
 ## 4. Database / Schema Changes
 
@@ -62,6 +65,7 @@
 - Phase 6 source services are under `backend/src/modules/sources/`: `SourcePolicyService`, `SourceValidator`, `RobotsPolicyService`, `RateLimitService`, and `RetryPolicy`. `WorkflowSourceRepository` persists source lifecycle records in MySQL and deduplicates normalized URLs by run hash.
 - Added migration `20260928121300_source_governance` with source states `ALLOWED`, `QUEUED`, `PROCESSING`, `COLLECTED`, policy/robots reasons and timestamps, attempt count, metadata JSON, and a workspace/status index. Legacy `FETCHED` remains supported; dataset evidence accepts both `FETCHED` and `COLLECTED`.
 - Added migration `20260928140000_phase7_workflow_execution` for run cancellation requests and step retry count, duration, and source ID references. Run and step transitions are persisted as workspace `ActivityEvent` records.
+- Phase 8 audit made no schema or migration changes. The current schema does not yet persist field-level verification/confidence, entity-resolution decisions, or a dedicated data-quality pipeline run.
 - Workflow plan `sourcePolicy.allowedDomains` is optional and defaults to an empty (unrestricted) allowlist. `blockedDomains` takes precedence; rules match exact domains and subdomains. Search result candidates are checked/persisted and excluded from agent-visible search output when disallowed.
 - Robots policy uses a bounded native HTTP fetch, parses user-agent groups, allow/disallow specificity, and crawl delay, and caches per origin. Robots fetch errors/HTTP access failures fail closed. Redis Lua sliding-window limits are checked for each actual request attempt, including retries. Timeout/retry settings come from the validated workflow step.
 - Source records preserve title/snippet metadata, normalized/canonical URL/hash, lifecycle state, reason/error code, robots result/check time, request attempt count/time, and retrieval time. Full web page bodies are not saved.
@@ -81,15 +85,25 @@
 - No `.env` file exists. `.env.example` contains placeholders.
 - The requested remote is configured as `origin`; no credential values are stored in project files.
 
-## 6. Pending Work / Next Steps
+## 6. Phase 8 — Reference Repository Usage Audit (Audit Only)
 
-- Stop after Phase 7 as requested; wait for the next phase prompt.
-- Deploy migration `20260928140000_phase7_workflow_execution` and run MySQL integration tests against a disposable migrated database when local MySQL is available.
+- Firecrawl is genuinely integrated through the local npm workspace package `@aidp/firecrawl-agent-core` (`packages/firecrawl-agent-core/`), sourced from `githubrepos/web-agent-main/agent-core`. Hash comparison found 54 upstream files, 46 common paths, 43 byte-identical files, and three modified common files (`package.json`, `tsconfig.json`, `src/types.ts`); the local package is renamed/versioned `@aidp/firecrawl-agent-core` and `src/types.ts` includes the configured Firecrawl API URL pass-through. `UPSTREAM.md` records MIT provenance but no upstream commit because the local snapshot has no Git metadata.
+- Direct Firecrawl imports are in `backend/src/agent/FirecrawlAgentAdapter.ts` (`createAgent`, `buildFirecrawlToolkit`, core types), `AgentResultNormalizer.ts` (`parseToolResult`, run/step types), `AgentEventMapper.ts` (event type and tool parsing), `types.ts` (event type), and `backend/src/modules/requirements/provider.ts` plus `backend/src/modules/planner/provider.ts` (`resolveModel`, `ModelConfig`). Adapter-specific safety, workflow-step gating, source policy, output schema and platform event/result contracts are platform code, not upstream source.
+- The real runtime path is `backend/src/routes/workflows.routes.ts` → `backend/src/modules/workflows/workflow-execution.service.ts` (`RequirementParser.parse` → `WorkflowPlanner.plan` → BullMQ enqueue) → `backend/src/server.ts` (wires `FirecrawlAgentAdapter` into `WorkflowRunner` and starts the worker) → `backend/src/modules/workflows/workflow-runner.ts` (dispatches SEARCH/SCRAPE/INTERACT/EXTRACT steps) → `backend/src/agent/FirecrawlAgentAdapter.ts` (`buildFirecrawlToolkit`, `createAgent`, `agent.stream`, JSON schema, `structured-extraction` skill) → `AgentResultNormalizer` and `AgentEventMapper`. Search, Scrape, and Interact are selected from the validated plan and gated per current step. The normal end-to-end test path uses mocks; `backend/tests/agent.integration.test.ts` is opt-in, and live-provider operation was not verified in this audit.
+- Web Research Agent (`githubrepos/web-research-agent-master`, MIT) is not imported. Audited implementations include `utils/web_scraper.py` (`allowed_to_scrape`, `fetch_page`, exponential retries), `utils/get_relevant_urls.py` (`get_relevant_urls`, embedding-based relevance/deduplication), `utils/analyze_query.py` (`analyze_query`), and `tools/result_aggregator_tool.py` (`run_result_aggregator_tool`). The backend independently implements source policy/robots/retry in `backend/src/modules/sources/`; it does not yet use the reference relevance-ranking or query-analysis implementation. Future native TypeScript equivalents can borrow those concepts; the Python modules and their dependencies are not wired into this Node service.
+- TheAgentic Browser (`githubrepos/TheAgenticBrowser-main`) is not imported. Its Planner → Browser → Critique loop is visible in `core/agents/planner_agent.py`, `core/agents/browser_agent.py`, `core/agents/critique_agent.py`, and `core/orchestrator.py` (`Orchestrator`). This is architecture reference only. Its Community License Agreement §1.1 excludes competing SaaS/platform/infrastructure or similar online services; do not copy or adapt source code for this product absent explicit legal approval. Any future reliability loop should be designed independently around the product's fixed safe workflow vocabulary and permission controls.
+- Anakin (`githubrepos/anakin-master`, AGPL-3.0) is not imported. Its worker/job and persistence patterns are in `server/internal/worker/worker.go` (`Pool`, `Start`, `Submit`, `Drain`), `server/internal/processor/processor.go` (`Processor.ProcessJob`, `processScrapeJob`, `handleFailure`), `server/internal/store/store.go` (`JobStore`) and `server/internal/store/postgres.go`; job states/types are in `server/internal/models/types.go`, HTTP APIs in `server/internal/http/handlers/scraper.go` and `server/internal/http/router/router.go`. The current app independently uses BullMQ and Prisma/MySQL (`backend/src/queue/workflowQueue.ts`, `backend/src/server.ts`, and `backend/src/db/repositories/workflow-execution.repository.ts`). AGPL obligations may apply to network-accessible modified/derivative software; retain as reference-only unless legal review approves reuse.
+- No application imports, package dependencies, or source copies from Web Research Agent, TheAgentic Browser, or Anakin were found. Their repositories remain reference-only. Future use means independently implementing suitable ideas in the current TypeScript/MySQL/BullMQ stack, subject to license review.
+- Phase 8 gap found: no dedicated `NormalizationService`, `ValidationService`, `DeduplicationService`, `EntityResolutionService`, or `DataQualityService` exists. `backend/src/modules/workflows/workflow-runner.ts` currently contains inline `applyTransformations`, `validateRecords`, and `deduplicateRecords` helpers. They cover a limited set of transformations and required/type/URL/email/date/source-evidence checks; RANGE/CUSTOM rules are reported as warnings, and `FUZZY_REVIEW` is skipped. Deterministic dedup currently merges same computed exact/normalized keys and aggregates source URLs; it does not persist decision events in this runner path, resolve entities, support URL duplicates as a dedicated strategy, or track field-level confidence/verification. This is partial execution support, not completion of the Phase 8 pipeline.
+
+## 7. Pending Work / Next Steps
+
+- Phase 8 audit is complete. Stop here and wait for the next phase prompt; Phase 8 data-intelligence implementation remains pending.
 - Authentication is not implemented. For now `createdById` is supplied by the caller and checked against active workspace membership; a future auth phase must bind it to an authenticated principal.
 - `Phases.md` uses older phase numbering; follow the user's current phase prompts and do not build its later planner phase early.
 - Before syncing Firecrawl Agent Core, establish and record the exact upstream commit/tag and review its diff/license.
 
-## 7. Environment / Commands / Configuration
+## 8. Environment / Commands / Configuration
 
 - **Requirements:** Node.js 20+, npm, MySQL 8+; Docker Compose provides local MySQL 8.4 and Redis 7 when available.
 - **Local setup:** `Copy-Item .env.example .env`; `docker compose up -d`; `npm install`; `npm run db:generate`; `npm run db:migrate --workspace @aidp/backend -- --name init`; `npm run db:seed`; `npm run dev`.
@@ -100,13 +114,13 @@
 - **API:** `GET /health`, `GET /ready`, `GET /health/firecrawl`, `POST /api/v1/requirements/parse`, `POST /api/v1/workflows/plan`, `POST /api/v1/workflows/execute`, `POST /api/v1/workflows/:id/run`, `POST /api/v1/runs/:id/cancel`, `GET /api/v1/runs/:id`, and `GET /api/v1/runs/:id/steps`. Long runs are queued; `SAVE` persists datasets, rows, and row-level evidence through `DatasetRepository`. Auth is not active.
 - **Data services:** `docker-compose.yml` defines local MySQL 8.4 and Redis 7.
 
-## 8. Notes for the Next AI Session
+## 9. Notes for the Next AI Session
 
 - Read `PRD.md`, `Architecture.md`, `Rules.md`, `Phases.md`, `Design.md`, and this memory before starting new phase work.
 - Backend sources are under `backend/src/`; Prisma schema, migrations, and seed are under `backend/prisma/`.
 - Dataset row persistence must go through `DatasetRepository.insertRowWithEvidence` to preserve the source-evidence invariant.
 - Frontend is separate and must not be implemented unless specifically requested.
 
-## 9. Last Session Summary
+## 10. Last Session Summary
 
-Completed Phase 7. Added BullMQ queueing and a worker that executes each persisted, Zod-revalidated plan in sequential dependency order. Firecrawl steps receive source/record context from previous steps and expose only the current collection tool. Deterministic transform, validation, normalized deduplication, provenance aggregation, and evidence-backed Save handlers run in the worker. Run/step status, retries, duration, errors, source IDs, activity events, cancellation requests, and progress are persisted. Run enqueue, saved-workflow run, cancellation, status, and step-history APIs are available. Cancellation prevents later steps and is acknowledged after any bounded in-flight Agent Core call completes; current Agent Core `RunParams` exposes no run-level abort signal. Export reports `SKIPPED` pending its dedicated phase. Typecheck, lint, schema validation, build, and unit tests passed (56 passed, 7 skipped); all six MySQL integration tests passed after applying migration `20260928140000_phase7_workflow_execution` to `aidp_dev`. Stop and wait for the next phase.
+Phase 8 request was handled as an audit-only task. Verified the Firecrawl Agent Core package and real queued execution path, the three other repositories' actual relevant modules, and all four licenses. Firecrawl is vendored/imported; the other repositories are not imported. No application code was changed. The current worker has inline partial transformation/validation/deduplication helpers; the dedicated Phase 8 data-intelligence services and richer persisted quality/provenance decisions remain unimplemented. No tests or builds were run because this was an inspection-only request. `Memory.md` was updated with the audit findings. Stop and wait for the next phase.
