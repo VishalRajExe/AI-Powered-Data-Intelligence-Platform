@@ -392,7 +392,7 @@ function seedUrls(plan: WorkflowPlan, blockedDomains = plan.sourcePolicy.blocked
 
 function getProviderKey(config: AppConfig): string | undefined {
   return {
-    google: config.GOOGLE_GENERATIVE_AI_API_KEY,
+    google: config.GOOGLE_GENERATIVE_AI_API_KEY ?? config.GEMINI_API_KEY,
     anthropic: config.ANTHROPIC_API_KEY,
     openai: config.OPENAI_API_KEY,
     gateway: config.AI_GATEWAY_API_KEY,
@@ -401,8 +401,15 @@ function getProviderKey(config: AppConfig): string | undefined {
 }
 
 function secrets(config: AppConfig): string[] {
-  return [config.FIRECRAWL_API_KEY, config.GOOGLE_GENERATIVE_AI_API_KEY, config.ANTHROPIC_API_KEY, config.OPENAI_API_KEY, config.AI_GATEWAY_API_KEY, config.CUSTOM_OPENAI_API_KEY]
-    .filter((value): value is string => Boolean(value));
+  return [
+    config.FIRECRAWL_API_KEY,
+    config.GOOGLE_GENERATIVE_AI_API_KEY,
+    config.GEMINI_API_KEY,
+    config.ANTHROPIC_API_KEY,
+    config.OPENAI_API_KEY,
+    config.AI_GATEWAY_API_KEY,
+    config.CUSTOM_OPENAI_API_KEY,
+  ].filter((value): value is string => Boolean(value));
 }
 
 function redactSecrets(message: string, keys: string[]): string {

@@ -24,6 +24,7 @@ export function createLogger(level: string, environment: string): Logger {
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "GOOGLE_GENERATIVE_AI_API_KEY",
+        "GEMINI_API_KEY",
         "AI_GATEWAY_API_KEY",
         "CUSTOM_OPENAI_API_KEY",
         "JWT_ACCESS_SECRET",

@@ -5,7 +5,12 @@ import { WorkflowPlannerRepository } from "../../db/repositories/workflow-planne
 import { AiSdkWorkflowPlanProvider } from "./provider.js";
 import { WorkflowPlannerService } from "./planner.service.js";
 
+import { DemoWorkflowPlanProvider } from "../demo/demo-plan.provider.js";
+
 export function createWorkflowPlanner(config: AppConfig, logger: Logger, prisma: PrismaClient): WorkflowPlannerService {
+  if (config.DEMO_MODE) {
+    return new WorkflowPlannerService(new DemoWorkflowPlanProvider(), new WorkflowPlannerRepository(prisma), logger);
+  }
   return new WorkflowPlannerService(new AiSdkWorkflowPlanProvider(config, logger), new WorkflowPlannerRepository(prisma), logger);
 }
 

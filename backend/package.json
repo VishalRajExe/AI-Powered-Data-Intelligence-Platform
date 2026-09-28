@@ -19,7 +19,9 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "prisma db seed",
     "test:db": "vitest run tests/database.integration.test.ts",
-    "docs:generate": "tsx src/scripts/export-openapi.ts"
+    "docs:generate": "tsx src/scripts/export-openapi.ts",
+    "demo": "tsx src/scripts/run-demo.ts",
+    "demo:all": "tsx src/scripts/run-demo.ts --all"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.69",

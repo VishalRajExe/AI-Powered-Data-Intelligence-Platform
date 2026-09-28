@@ -9,6 +9,7 @@ import { createWorkflowQueue, createWorkflowWorker } from "./queue/workflowQueue
 import { createRequirementParser } from "./modules/requirements/index.js";
 import { createWorkflowPlanner } from "./modules/planner/index.js";
 import { FirecrawlAgentAdapter } from "./agent/FirecrawlAgentAdapter.js";
+import { DemoAgentAdapter } from "./modules/demo/demo-agent.adapter.js";
 import { WorkflowExecutionRepository } from "./db/repositories/workflow-execution.repository.js";
 import { WorkflowExecutionService } from "./modules/workflows/workflow-execution.service.js";
 import { WorkflowRunner } from "./modules/workflows/workflow-runner.js";
@@ -50,7 +51,14 @@ const sourcePolicy = new SourcePolicyService(
   new WorkflowSourceRepository(prisma),
   logger,
 );
-const agentAdapter = new FirecrawlAgentAdapter(config, logger, undefined, undefined, sourcePolicy);
+
+const agentAdapter = config.DEMO_MODE
+  ? new DemoAgentAdapter(logger)
+  : new FirecrawlAgentAdapter(config, logger, undefined, undefined, sourcePolicy);
+
+if (config.DEMO_MODE) {
+  logger.warn("⚡ [DEMO MODE ACTIVE] Backend running in deterministic judge demonstration mode. Live web scraping disabled. Simulated datasets clearly marked.");
+}
 const workflowRepository = new WorkflowExecutionRepository(prisma, eventBroadcaster);
 const datasetQueryRepository = new DatasetQueryRepository(prisma);
 const workflowRunner = new WorkflowRunner(workflowRepository, agentAdapter, logger);

@@ -33,6 +33,7 @@ const environmentSchema = z.object({
   LLM_PROVIDER: z.enum(["google", "anthropic", "openai", "gateway", "custom-openai"]).default("google"),
   LLM_MODEL_ID: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   GOOGLE_GENERATIVE_AI_API_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
+  GEMINI_API_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   ANTHROPIC_API_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   OPENAI_API_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
   AI_GATEWAY_API_KEY: z.preprocess(emptyToUndefined, z.string().min(1).optional()),
@@ -40,6 +41,7 @@ const environmentSchema = z.object({
   CUSTOM_OPENAI_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   JWT_ACCESS_SECRET: optionalSecret,
   JWT_REFRESH_SECRET: optionalSecret,
+  DEMO_MODE: z.preprocess((val) => val === true || val === "true" || val === "1", z.boolean().default(false)),
 }).superRefine((env, context) => {
   if (env.DATABASE_URL) {
     try {
@@ -88,6 +90,12 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): AppConfi
   }
 
   const env = parsed.data;
+  const googleKey = env.GOOGLE_GENERATIVE_AI_API_KEY ?? env.GEMINI_API_KEY;
+  if (googleKey) {
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY = googleKey;
+    process.env.GEMINI_API_KEY = googleKey;
+  }
+
   const databaseUrl = env.DATABASE_URL ?? buildMysqlUrl({
     host: env.MYSQL_HOST!,
     port: env.MYSQL_PORT!,
@@ -96,7 +104,12 @@ export function loadEnvConfig(source: NodeJS.ProcessEnv = process.env): AppConfi
     database: env.MYSQL_DATABASE!,
   });
 
-  return { ...env, DATABASE_URL: databaseUrl };
+  return {
+    ...env,
+    GOOGLE_GENERATIVE_AI_API_KEY: googleKey,
+    GEMINI_API_KEY: googleKey,
+    DATABASE_URL: databaseUrl,
+  };
 }
 
 function buildMysqlUrl(parts: { host: string; port: number; user: string; password: string; database: string }): string {
@@ -107,13 +120,15 @@ function buildMysqlUrl(parts: { host: string; port: number; user: string; passwo
 }
 
 export function assertAgentCredentials(config: AppConfig): void {
+  if (config.DEMO_MODE) return;
   if (!config.FIRECRAWL_API_KEY) throw new Error("FIRECRAWL_API_KEY is required to execute a collection run");
   assertLlmCredentials(config);
 }
 
 export function assertLlmCredentials(config: AppConfig): void {
+  if (config.DEMO_MODE) return;
   const providerKey = {
-    google: config.GOOGLE_GENERATIVE_AI_API_KEY,
+    google: config.GOOGLE_GENERATIVE_AI_API_KEY ?? config.GEMINI_API_KEY,
     anthropic: config.ANTHROPIC_API_KEY,
     openai: config.OPENAI_API_KEY,
     gateway: config.AI_GATEWAY_API_KEY,

@@ -6,17 +6,22 @@
   "workspaces": ["backend", "packages/firecrawl-agent-core"],
   "scripts": {
     "dev": "npm run dev --workspace @aidp/backend",
+    "dev:frontend": "npm run dev --prefix PirateAgentUI",
     "start": "npm run start --workspace @aidp/backend",
     "typecheck": "npm run typecheck --workspace @aidp/firecrawl-agent-core && npm run typecheck --workspace @aidp/backend",
     "lint": "eslint backend/src backend/tests",
+    "lint:frontend": "npm run lint --prefix PirateAgentUI",
     "test": "npm run test --workspace @aidp/backend",
     "build": "npm run build --workspace @aidp/firecrawl-agent-core && npm run build --workspace @aidp/backend",
+    "build:frontend": "npm run build --prefix PirateAgentUI",
     "db:generate": "npm run db:generate --workspace @aidp/backend",
     "db:validate": "npm run db:validate --workspace @aidp/backend",
     "db:migrate": "npm run db:migrate --workspace @aidp/backend",
     "db:deploy": "npm run db:deploy --workspace @aidp/backend",
     "db:seed": "npm run db:seed --workspace @aidp/backend",
-    "test:db": "npm run test:db --workspace @aidp/backend"
+    "test:db": "npm run test:db --workspace @aidp/backend",
+    "demo": "npm run demo --workspace @aidp/backend",
+    "demo:all": "npm run demo:all --workspace @aidp/backend"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

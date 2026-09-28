@@ -7,3 +7,6 @@ coverage/
 !.env.example
 *.log
 backend/prisma/*.db
+backend/demo-exports/
+.next/
+**/.next/
