@@ -1,4 +1,4 @@
-import { SourceStatus, type Prisma, type PrismaClient } from "@prisma/client";
+import { SourceStatus, type Prisma, type PrismaClient, type RecordVerificationStatus } from "@prisma/client";
 
 export interface EvidenceInput {
   sourceId: string;
@@ -16,6 +16,10 @@ export interface InsertDatasetRowInput {
   values: Prisma.InputJsonValue;
   confidence?: number;
   isValid?: boolean;
+  rawValues?: Prisma.InputJsonValue;
+  qualityMetadata?: Prisma.InputJsonValue;
+  verificationStatus?: RecordVerificationStatus;
+  duplicateOfId?: string;
   collectedAt?: Date;
   evidence: EvidenceInput[];
 }
@@ -58,8 +62,12 @@ export class DatasetRepository {
           workspaceId: input.workspaceId,
           datasetId: input.datasetId,
           values: input.values,
+          ...(input.rawValues === undefined ? {} : { rawValues: input.rawValues }),
+          ...(input.qualityMetadata === undefined ? {} : { qualityMetadata: input.qualityMetadata }),
           ...(input.confidence === undefined ? {} : { confidence: input.confidence }),
+          verificationStatus: input.verificationStatus ?? "UNSUPPORTED",
           isValid,
+          ...(input.duplicateOfId === undefined ? {} : { duplicateOfId: input.duplicateOfId }),
           ...(input.collectedAt === undefined ? {} : { collectedAt: input.collectedAt }),
         },
       });

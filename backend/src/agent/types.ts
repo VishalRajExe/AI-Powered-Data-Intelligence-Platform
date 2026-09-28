@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@aidp/firecrawl-agent-core";
 import type { WorkflowPlan } from "../modules/planner/workflow-plan.schema.js";
+import type { DataQualityAssessment, RecordQualityMetadata } from "../modules/data-intelligence/types.js";
 
 export type AgentExecutionStatus = "COMPLETED" | "PARTIAL" | "FAILED";
 
@@ -27,9 +28,11 @@ export interface AgentSourceMetadata {
 
 export interface AgentRecord {
   values: Record<string, unknown>;
+  rawValues?: Record<string, unknown>;
   sourceUrls: string[];
   isValid?: boolean;
   validationIssues?: Array<{ fieldKey?: string; ruleCode: string; severity: "ERROR" | "WARNING"; message: string }>;
+  quality?: RecordQualityMetadata;
 }
 
 export interface AgentExecutionError {
@@ -60,6 +63,7 @@ export interface AgentResult {
   execution: AgentExecutionMetadata;
   events: AgentExecutionEvent[];
   errors: AgentExecutionError[];
+  dataQuality?: DataQualityAssessment;
 }
 
 export interface AgentConfigurationHealth {

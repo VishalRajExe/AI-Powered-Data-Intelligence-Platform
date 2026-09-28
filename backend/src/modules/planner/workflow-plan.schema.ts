@@ -43,6 +43,7 @@ const ExtractionPropertySchema = z.object({
   type: z.enum(["string", "number", "integer", "boolean", "array", "object"]),
   description: z.string().trim().min(1).max(500),
   format: z.enum(["date", "date-time", "uri", "email"]).optional(),
+  enum: z.array(JsonValue).max(100).optional(),
 }).strict();
 
 export const ExtractionSchema = z.object({
@@ -88,7 +89,7 @@ const TransformationSchema = z.object({
 
 const ValidationRuleSchema = z.object({
   fieldKey: FieldKey.nullable(),
-  rule: z.enum(["REQUIRED", "TYPE", "URL", "EMAIL", "DATE", "RANGE", "SOURCE_EVIDENCE", "CUSTOM"]),
+  rule: z.enum(["REQUIRED", "TYPE", "URL", "EMAIL", "DATE", "ENUM", "COUNTRY", "RANGE", "SOURCE_EVIDENCE", "CUSTOM"]),
   severity: z.enum(["ERROR", "WARNING"]),
   description: z.string().trim().min(1).max(500),
 }).strict();

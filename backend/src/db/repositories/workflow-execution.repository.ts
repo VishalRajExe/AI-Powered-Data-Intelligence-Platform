@@ -4,6 +4,7 @@ import type { WorkflowPlan } from "../../modules/planner/workflow-plan.schema.js
 import { WorkflowPlanSchema } from "../../modules/planner/workflow-plan.schema.js";
 import type { AgentResult } from "../../agent/types.js";
 import { SourceValidator } from "../../modules/sources/SourceValidator.js";
+import { DataQualityService } from "../../modules/data-intelligence/DataQualityService.js";
 import { DatasetRepository } from "./dataset.repository.js";
 
 export interface WorkflowExecutionStore {
@@ -24,6 +25,7 @@ export interface ExecutionRunContext {
 export class WorkflowExecutionRepository implements WorkflowExecutionStore {
   private readonly sourceValidator = new SourceValidator();
   private readonly datasetRepository: DatasetRepository;
+  private readonly dataQualityService = new DataQualityService();
   constructor(private readonly prisma: PrismaClient) { this.datasetRepository = new DatasetRepository(prisma); }
 
   async createRun(input: { workspaceId: string; createdById: string; workflowId: string; planVersion?: number }): Promise<{ id: string }> {
@@ -126,10 +128,10 @@ export class WorkflowExecutionRepository implements WorkflowExecutionStore {
     return !run || run.status === "CANCELLED" || run.cancelRequestedAt !== null;
   }
 
-  async finishRun(runId: string, status: "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED", error?: { code: string; message: string }, counts?: { records: number; sources: number; duplicates?: number }): Promise<void> {
+  async finishRun(runId: string, status: "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED", error?: { code: string; message: string }, counts?: { records: number; validRecords?: number; sources: number; duplicates?: number }): Promise<void> {
     await this.prisma.workflowRun.update({ where: { id: runId }, data: {
       status, ...(status === "COMPLETED" ? { progress: 100 } : {}),
-      ...(counts ? { recordsFound: counts.records, recordsValid: counts.records, sourcesProcessed: counts.sources, ...(counts.duplicates === undefined ? {} : { duplicateCount: counts.duplicates }) } : {}),
+      ...(counts ? { recordsFound: counts.records, recordsValid: counts.validRecords ?? counts.records, sourcesProcessed: counts.sources, ...(counts.duplicates === undefined ? {} : { duplicateCount: counts.duplicates }) } : {}),
       errorCode: error?.code ?? null, errorMessage: error?.message.slice(0, 1000) ?? null, finishedAt: new Date(),
     } });
     await this.event(runId, `workflow_run.${status.toLowerCase()}`, { status, ...counts, errorCode: error?.code });
@@ -196,9 +198,10 @@ export class WorkflowExecutionRepository implements WorkflowExecutionStore {
     return rows.map(({ id }) => id);
   }
 
-  async persistDataset(context: ExecutionRunContext, result: AgentResult): Promise<{ datasetId: string; recordCount: number; sourceCount: number }> {
+  async persistDataset(context: ExecutionRunContext, inputResult: AgentResult): Promise<{ datasetId: string; recordCount: number; sourceCount: number }> {
     const existing = await this.prisma.dataset.findUnique({ where: { workflowRunId: context.id }, select: { id: true, recordCount: true, sourceCount: true } });
     if (existing) return { datasetId: existing.id, recordCount: existing.recordCount, sourceCount: existing.sourceCount };
+    const result = inputResult.dataQuality ? inputResult : this.dataQualityService.process(inputResult, context.plan);
     const sourceHashes = result.sources.filter((source) => source.verifiedByTool).map((source) => this.sourceValidator.normalize(source.url)).filter((value): value is { canonicalUrl: string; domain: string; hash: string } => "hash" in value).map(({ hash }) => hash);
     const sourceRows = await this.prisma.source.findMany({ where: {
       workspaceId: context.workspaceId, workflowRunId: context.id, status: { in: ["COLLECTED", "FETCHED"] }, canonicalUrlHash: { in: sourceHashes },
@@ -221,28 +224,81 @@ export class WorkflowExecutionRepository implements WorkflowExecutionStore {
     });
     let inserted = 0;
     let validInserted = 0;
+    let duplicateInserted = 0;
+    const rowIdsByIndex = new Map<number, string>();
     try {
-      for (const record of result.records) {
+      for (const [recordIndex, record] of result.records.entries()) {
         const evidenceSources = record.sourceUrls.map((url) => sourceByHash.get(sourceHashByUrl.get(url) ?? "")).filter((source): source is NonNullable<typeof source> => Boolean(source));
         if (!evidenceSources.length) continue;
         const retrievedAt = evidenceSources.reduce((latest, source) => !latest || (source.retrievedAt && source.retrievedAt > latest) ? source.retrievedAt : latest, null as Date | null) ?? new Date();
         const row = await this.datasetRepository.insertRowWithEvidence({
-          workspaceId: context.workspaceId, datasetId: dataset.id, values: asJson(record.values), isValid: record.isValid ?? true, collectedAt: retrievedAt,
-          evidence: evidenceSources.map((source) => ({ sourceId: source.id, retrievedAt: source.retrievedAt ?? retrievedAt })),
+          workspaceId: context.workspaceId,
+          datasetId: dataset.id,
+          values: asJson(record.values),
+          rawValues: asJson(record.rawValues ?? record.values),
+          qualityMetadata: asJson(record.quality ?? {}),
+          verificationStatus: record.quality?.verificationState ?? "UNSUPPORTED",
+          ...(record.quality?.confidence === undefined ? {} : { confidence: record.quality.confidence }),
+          isValid: record.isValid ?? true,
+          ...(record.quality?.duplicateOfIndex === undefined || !rowIdsByIndex.has(record.quality.duplicateOfIndex)
+            ? {}
+            : { duplicateOfId: rowIdsByIndex.get(record.quality.duplicateOfIndex)! }),
+          collectedAt: retrievedAt,
+          evidence: evidenceSources.map((source) => ({
+            sourceId: source.id, retrievedAt: source.retrievedAt ?? retrievedAt,
+            ...(record.quality?.confidence === undefined ? {} : { confidence: record.quality.confidence }),
+          })),
         });
+        rowIdsByIndex.set(recordIndex, row.id);
+        if (record.quality?.duplicateOfIndex !== undefined && row.duplicateOfId) duplicateInserted += 1;
         if (record.validationIssues?.length) await this.prisma.validationIssue.createMany({ data: record.validationIssues.map((issue) => ({
           workspaceId: context.workspaceId, datasetId: dataset.id, datasetRowId: row.id, fieldKey: issue.fieldKey ?? null,
           ruleCode: issue.ruleCode, severity: issue.severity, message: issue.message,
         })) });
         inserted += 1;
-        if (record.isValid !== false) validInserted += 1;
+        if (record.isValid !== false && record.quality?.duplicateOfIndex === undefined) validInserted += 1;
       }
     } catch (error) {
       await this.prisma.dataset.update({ where: { id: dataset.id }, data: { status: inserted ? "PARTIAL" : "FAILED", sourceCount: sourceRows.length } });
       throw error;
     }
     const status = inserted === result.records.length ? "READY" : inserted > 0 ? "PARTIAL" : "FAILED";
-    await this.prisma.dataset.update({ where: { id: dataset.id }, data: { status, recordCount: inserted, validCount: validInserted, sourceCount: sourceRows.length } });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.dataset.update({ where: { id: dataset.id }, data: {
+        status, recordCount: inserted, validCount: validInserted, duplicateCount: duplicateInserted, sourceCount: sourceRows.length,
+      } });
+      const assessment = result.dataQuality;
+      if (assessment) {
+        const events = assessment.deduplicationEvents.flatMap((event) => {
+          const canonicalRowId = rowIdsByIndex.get(event.canonicalIndex);
+          const duplicateRowId = rowIdsByIndex.get(event.duplicateIndex);
+          return canonicalRowId && duplicateRowId && canonicalRowId !== duplicateRowId
+            ? [{ event, canonicalRowId, duplicateRowId }]
+            : [];
+        });
+        if (events.length) await tx.deduplicationEvent.createMany({ data: events.map(({ event, canonicalRowId, duplicateRowId }) => ({
+          workspaceId: context.workspaceId, datasetId: dataset.id, workflowRunId: context.id,
+          canonicalRowId, duplicateRowId, decision: event.decision, confidence: event.confidence,
+          matchedFields: asJson(event.matchedFields), reason: event.reason.slice(0, 1000),
+        })) });
+        const metrics = assessment.metrics;
+        await tx.dataQualityReport.create({ data: {
+          workspaceId: context.workspaceId, datasetId: dataset.id, workflowRunId: context.id,
+          rawRecordCount: metrics.rawRecordCount, normalizedRecordCount: metrics.normalizedRecordCount,
+          validRecordCount: metrics.validRecordCount, invalidRecordCount: metrics.invalidRecordCount,
+          duplicateCount: metrics.duplicateCount, reviewRequiredCount: metrics.reviewRequiredCount,
+          conflictCount: metrics.conflictCount, sourceBackedCount: metrics.sourceBackedRecordCount,
+          qualityScore: metrics.qualityScore, metrics: asJson(metrics), computedAt: new Date(assessment.computedAt),
+        } });
+        await tx.workflowRun.update({ where: { id: context.id }, data: {
+          recordsFound: metrics.rawRecordCount, recordsValid: metrics.validRecordCount, duplicateCount: metrics.duplicateCount,
+        } });
+        await tx.activityEvent.create({ data: {
+          workspaceId: context.workspaceId, action: "dataset.quality_assessed", entityType: "dataset", entityId: dataset.id,
+          details: asJson({ datasetId: dataset.id, workflowRunId: context.id, metrics }),
+        } });
+      }
+    });
     if (inserted === 0 && result.records.length > 0) throw new AppError("No verified source evidence could be linked to the extracted records", 422, "SOURCE_EVIDENCE_REQUIRED");
     return { datasetId: dataset.id, recordCount: inserted, sourceCount: sourceRows.length };
   }

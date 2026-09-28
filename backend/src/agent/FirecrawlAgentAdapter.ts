@@ -9,6 +9,7 @@ import { AgentResultNormalizer } from "./AgentResultNormalizer.js";
 import type { AgentAdapter, AgentConfigurationHealth, AgentExecutionEvent, AgentExecutionInput, AgentResult } from "./types.js";
 import type { SourcePolicyService } from "../modules/sources/SourcePolicyService.js";
 import type { SourceExecutionPolicy, SourcePolicyContext } from "../modules/sources/source-governance.types.js";
+import { RelevantSourceSelector, sourceCandidate } from "../modules/sources/RelevantSourceSelector.js";
 
 interface StreamableFirecrawlAgent {
   stream(params: RunParams): AsyncGenerator<AgentEvent>;
@@ -240,20 +241,23 @@ function buildExecutionPolicy(plan: WorkflowPlan, enabled: Set<string>): string 
 
 function gateToolkit(base: Toolkit, plan: WorkflowPlan, logger: Logger, sourcePolicy?: SourcePolicyService, execution?: AgentExecutionInput): Toolkit {
   const recentRequests = new Map<string, number[]>();
+  const relevantSourceSelector = new RelevantSourceSelector();
   const blocked = plan.sourcePolicy.blockedDomains.map((domain) => domain.toLowerCase().replace(/^\*\./, ""));
   const maxPerMinute = plan.sourcePolicy.maxRequestsPerDomainPerMinute;
   const wrapToolset = (tools: Toolkit["tools"]): Toolkit["tools"] => {
     const wrapped = { ...tools } as Record<string, unknown>;
     const search = wrapped.search as { execute?: (input: unknown, options?: unknown) => Promise<unknown> } | undefined;
-    if (search?.execute && sourcePolicy && execution?.workspaceId && execution.runId) {
+    if (search?.execute) {
       const execute = search.execute.bind(search);
       wrapped.search = {
         ...search,
         execute: async (input: unknown, options?: unknown) => {
           const result = await execute(input, options);
-          return registerAndFilterSearchResults(result, sourcePolicy, {
-            workspaceId: execution.workspaceId!, workflowRunId: execution.runId!, plan,
-          });
+          return registerFilterAndRankSearchResults(result, plan, relevantSourceSelector,
+            sourcePolicy,
+            sourcePolicy && execution?.workspaceId && execution.runId
+              ? { workspaceId: execution.workspaceId, workflowRunId: execution.runId, plan }
+              : undefined);
         },
       };
     }
@@ -304,21 +308,33 @@ function gateToolkit(base: Toolkit, plan: WorkflowPlan, logger: Logger, sourcePo
   };
 }
 
-async function registerAndFilterSearchResults(result: unknown, sourcePolicy: SourcePolicyService, context: SourcePolicyContext): Promise<unknown> {
+async function registerFilterAndRankSearchResults(
+  result: unknown,
+  plan: WorkflowPlan,
+  selector: RelevantSourceSelector,
+  sourcePolicy?: SourcePolicyService,
+  context?: SourcePolicyContext,
+): Promise<unknown> {
   const process = async (value: unknown): Promise<unknown> => {
     if (Array.isArray(value)) {
-      const output: unknown[] = [];
-      for (const item of value) {
-        if (isSearchResult(item)) {
-          const decision = await sourcePolicy.discover(item.url ?? item.link!, context, {
-            ...(typeof item.title === "string" ? { title: item.title } : {}),
-            ...(typeof item.description === "string" ? { snippet: item.description } : typeof item.snippet === "string" ? { snippet: item.snippet } : {}),
-          });
-          if (!decision.allowed) continue;
+      const candidates = value.filter((item) => sourceCandidate(item) !== undefined);
+      if (candidates.length) {
+        const allowed: unknown[] = [];
+        for (const item of candidates) {
+          const candidate = sourceCandidate(item)!;
+          if (sourcePolicy && context && !(await sourcePolicy.discover(candidate.url, context, { title: candidate.title, snippet: candidate.snippet })).allowed) continue;
+          allowed.push(item);
         }
-        output.push(await process(item));
+        const ranked = new Set(selector.rank(allowed, plan, plan.searchStrategy.maximumSourceCount));
+        const output: unknown[] = [];
+        for (const item of value) {
+          if (sourceCandidate(item)) {
+            if (ranked.has(item)) output.push(item);
+          } else output.push(await process(item));
+        }
+        return output;
       }
-      return output;
+      return Promise.all(value.map(process));
     }
     if (!value || typeof value !== "object") return value;
     const output: Record<string, unknown> = {};
@@ -326,11 +342,6 @@ async function registerAndFilterSearchResults(result: unknown, sourcePolicy: Sou
     return output;
   };
   return process(result);
-}
-
-function isSearchResult(value: unknown): value is { url?: string; link?: string; title?: string; description?: string; snippet?: string } {
-  const record = asRecord(value);
-  return typeof record.url === "string" || typeof record.link === "string";
 }
 
 function retryPolicy(input: WorkflowPlan["steps"][number]["retryPolicy"] | undefined): SourceExecutionPolicy {

@@ -36,6 +36,7 @@ function fakeStore(cancel = false) {
   const statuses = new Map<string, string>();
   const calls: string[] = [];
   let requested = cancel;
+  let savedResult: AgentResult | undefined;
   const store = {
     getExecutionContext: async () => createContext(), markRunStarted: async () => { calls.push("run-started"); return true; },
     startStep: async (_run: string, id: string, retry: number) => { calls.push(`start:${id}:${retry}`); },
@@ -43,8 +44,12 @@ function fakeStore(cancel = false) {
     setRunProgress: async () => undefined, isCancellationRequested: async () => requested,
     finishRun: async (_run: string, status: string) => { calls.push(`run:${status}`); },
     getStepsBySequence: async (_run: string, sequence: number) => `step-${sequence}`,
-    resolveSourceIds: async () => ["source-1"], persistDataset: async () => ({ datasetId: "dataset-1", recordCount: 1, sourceCount: 1 }),
-    statuses, calls, cancel: () => { requested = true; },
+    resolveSourceIds: async () => ["source-1"],
+    persistDataset: async (_context: ExecutionRunContext, result: AgentResult) => {
+      savedResult = result;
+      return { datasetId: "dataset-1", recordCount: 1, sourceCount: 1 };
+    },
+    statuses, calls, cancel: () => { requested = true; }, saved: () => savedResult,
   };
   return store;
 }
@@ -57,6 +62,8 @@ describe("WorkflowRunner", () => {
     expect(adapter.inputs.map((input) => input.stepType)).toEqual(["SEARCH", "SCRAPE", "EXTRACT"]);
     expect(store.calls.filter((call) => call.startsWith("finish:")).map((call) => call.split(":")[2])).toEqual(Array(6).fill("COMPLETED"));
     expect(store.calls.at(-1)).toBe("run:COMPLETED");
+    expect(store.saved()?.dataQuality?.metrics).toMatchObject({ rawRecordCount: 3, validRecordCount: 1, duplicateCount: 2, sourceBackedRecordCount: 3 });
+    expect(store.saved()?.records[0]?.rawValues).toEqual({ name: "Acme" });
   });
 
   it("retries a transient failure and skips all dependent steps after permanent failure", async () => {

@@ -4,6 +4,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { DatasetRepository } from "../src/db/repositories/dataset.repository.js";
 import { WorkflowExecutionRepository } from "../src/db/repositories/workflow-execution.repository.js";
 import { WorkflowSourceRepository } from "../src/db/repositories/workflow-source.repository.js";
+import { DataQualityService } from "../src/modules/data-intelligence/DataQualityService.js";
+import type { WorkflowPlan as ApplicationWorkflowPlan } from "../src/modules/planner/workflow-plan.schema.js";
+import type { AgentResult } from "../src/agent/types.js";
 
 const databaseTestsEnabled = process.env.RUN_DATABASE_TESTS === "true" && Boolean(process.env.DATABASE_URL);
 const prisma = new PrismaClient();
@@ -25,6 +28,7 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
       await prisma.sourceEvidence.deleteMany({ where: { workspaceId } });
       await prisma.validationIssue.deleteMany({ where: { workspaceId } });
       await prisma.deduplicationEvent.deleteMany({ where: { workspaceId } });
+      await prisma.dataQualityReport.deleteMany({ where: { workspaceId } });
       await prisma.workflowStep.deleteMany({ where: { workspaceId } });
       await prisma.source.deleteMany({ where: { workspaceId } });
       await prisma.datasetRow.deleteMany({ where: { workspaceId } });
@@ -47,10 +51,10 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
     const applied = await prisma.$queryRaw<Array<{ migration_name: string }>>`
       SELECT migration_name
       FROM _prisma_migrations
-      WHERE (migration_name LIKE '%_phase2_domain_model' OR migration_name LIKE '%_workspace_membership_state' OR migration_name LIKE '%_workflow_planning_state' OR migration_name LIKE '%_source_governance')
+      WHERE (migration_name LIKE '%_phase2_domain_model' OR migration_name LIKE '%_workspace_membership_state' OR migration_name LIKE '%_workflow_planning_state' OR migration_name LIKE '%_source_governance' OR migration_name LIKE '%_phase8_data_quality')
         AND finished_at IS NOT NULL
     `;
-    expect(applied).toHaveLength(4);
+    expect(applied).toHaveLength(5);
   });
 
   it("persists workflows, plans, runs, rows, validation and field-level source provenance", async () => {
@@ -240,6 +244,61 @@ describe.skipIf(!databaseTestsEnabled)("MySQL domain persistence", () => {
       evidence: [{ sourceId: fixture.source.id, fieldKey: "company", retrievedAt: fixture.source.retrievedAt! }],
     });
     expect(row.sourceEvidence[0]?.source.status).toBe(SourceStatus.COLLECTED);
+  });
+
+  it("persists normalized values, raw values, duplicate links, conflicts, provenance, and quality metrics", async () => {
+    const fixture = await createFixture("quality-pipeline");
+    await prisma.source.update({ where: { id: fixture.source.id }, data: { datasetId: null } });
+    await prisma.dataset.delete({ where: { id: fixture.dataset.id } });
+    const plan = {
+      version: 1, objective: "Collect companies", requirement: { requiredFields: ["company_name"] },
+      constraints: [], sourcePolicy: { preferredDomains: [] },
+      searchStrategy: { queries: [], maximumSourceCount: 10 }, steps: [],
+      extractionSchema: {
+        type: "object", required: ["company_name"], additionalProperties: false,
+        properties: { company_name: { type: "string", description: "Company name" }, founder: { type: "string", description: "Founder" } },
+      },
+      transformations: [], validationRules: [],
+      deduplicationRules: [{ keys: ["company_name"], strategy: "NORMALIZED", confidenceThreshold: 0.95, ambiguousMatchAction: "KEEP_SEPARATE", rationale: "Normalize company names." }],
+      completionCriteria: {}, outputConfiguration: {},
+    } as unknown as ApplicationWorkflowPlan;
+    const sourceUrl = fixture.source.canonicalUrl;
+    const now = new Date().toISOString();
+    const rawResult: AgentResult = {
+      status: "COMPLETED", data: null,
+      records: [
+        { values: { company_name: "Example Acme", founder: "Founder A" }, sourceUrls: [sourceUrl] },
+        { values: { company_name: " example   acme ", founder: "Founder B" }, sourceUrls: [sourceUrl] },
+      ],
+      sources: [{ url: sourceUrl, canonicalUrl: sourceUrl, domain: fixture.source.domain, sourceType: "scrape", retrievedAt: fixture.source.retrievedAt!.toISOString(), verifiedByTool: true }],
+      execution: { provider: "mock", model: "mock", startedAt: now, finishedAt: now, durationMs: 1, inputTokens: 0, outputTokens: 0, totalTokens: 0, toolCallCount: 0, toolsUsed: [] },
+      events: [], errors: [],
+    };
+    const processed = new DataQualityService().process(rawResult, plan);
+    const executions = new WorkflowExecutionRepository(prisma);
+    const saved = await executions.persistDataset({
+      id: fixture.run.id, workspaceId: fixture.workspace.id, workflowId: fixture.workflow.id, createdById: fixture.user.id,
+      requirement: "Collect companies", plan, cancelRequestedAt: null,
+    }, processed);
+    const dataset = await prisma.dataset.findUniqueOrThrow({
+      where: { id: saved.datasetId },
+      include: {
+        rows: { include: { sourceEvidence: true } },
+        dataQualityReport: true,
+        deduplicationEvents: true,
+      },
+    });
+    const canonical = dataset.rows.find((row) => row.duplicateOfId === null);
+    const duplicate = dataset.rows.find((row) => row.duplicateOfId !== null);
+    expect(dataset.rows).toHaveLength(2);
+    expect(duplicate?.duplicateOfId).toBe(canonical?.id);
+    expect(canonical?.rawValues).toEqual({ company_name: "Example Acme", founder: "Founder A" });
+    expect(canonical?.qualityMetadata).toMatchObject({ verificationState: "CONFLICTED" });
+    expect(dataset.deduplicationEvents).toHaveLength(1);
+    expect(dataset.deduplicationEvents[0]?.decision).toBe("MERGED");
+    expect(dataset.dataQualityReport).toHaveLength(1);
+    expect(dataset.dataQualityReport[0]?.metrics).toMatchObject({ duplicateCount: 1, conflictCount: 1, rawRecordCount: 2 });
+    expect(dataset.rows.every((row) => row.sourceEvidence.length > 0)).toBe(true);
   });
 
   it("enforces version and column uniqueness plus workspace boundaries", async () => {

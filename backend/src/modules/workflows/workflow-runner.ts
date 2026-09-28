@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import type { AgentAdapter, AgentResult } from "../../agent/types.js";
 import type { ExecutionRunContext } from "../../db/repositories/workflow-execution.repository.js";
 import type { WorkflowStep } from "../planner/workflow-plan.schema.js";
+import { DataQualityService } from "../data-intelligence/DataQualityService.js";
 
 export interface WorkflowRunnerStore {
   getExecutionContext(runId: string): Promise<ExecutionRunContext>;
@@ -10,7 +11,7 @@ export interface WorkflowRunnerStore {
   finishStep(runId: string, stepId: string, input: { status: "COMPLETED" | "FAILED" | "SKIPPED" | "BLOCKED" | "CANCELLED"; startedAt: Date; output?: unknown; errorCode?: string; errorMessage?: string; sourceIds?: string[]; retryCount: number }): Promise<void>;
   setRunProgress(runId: string, progress: number): Promise<void>;
   isCancellationRequested(runId: string): Promise<boolean>;
-  finishRun(runId: string, status: "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED", error?: { code: string; message: string }, counts?: { records: number; sources: number }): Promise<void>;
+  finishRun(runId: string, status: "COMPLETED" | "PARTIAL" | "FAILED" | "CANCELLED", error?: { code: string; message: string }, counts?: { records: number; validRecords?: number; sources: number; duplicates?: number }): Promise<void>;
   getStepsBySequence(runId: string, sequence: number): Promise<string>;
   resolveSourceIds(runId: string, sourceUrls: string[]): Promise<string[]>;
   persistDataset(context: ExecutionRunContext, result: AgentResult): Promise<{ datasetId: string; recordCount: number; sourceCount: number }>;
@@ -20,7 +21,12 @@ type StepStatus = "COMPLETED" | "FAILED" | "SKIPPED" | "BLOCKED" | "CANCELLED";
 
 /** Executes a persisted, schema-validated plan in dependency order; parallel execution is intentionally disabled. */
 export class WorkflowRunner {
-  constructor(private readonly store: WorkflowRunnerStore, private readonly agent: AgentAdapter, private readonly logger: Logger) {}
+  constructor(
+    private readonly store: WorkflowRunnerStore,
+    private readonly agent: AgentAdapter,
+    private readonly logger: Logger,
+    private readonly dataQuality = new DataQualityService(),
+  ) {}
 
   async run(runId: string): Promise<void> {
     const context = await this.store.getExecutionContext(runId);
@@ -54,7 +60,7 @@ export class WorkflowRunner {
       }
       const result = await this.executeStep(context, step, index, runId, finalResult);
       completed.set(step.id, result.status);
-      if (result.agentResult) finalResult = mergeResults(finalResult, result.agentResult);
+      if (result.agentResult) finalResult = isAgentStep(step.type) ? mergeResults(finalResult, result.agentResult) : result.agentResult;
       if (result.agentResult?.status === "PARTIAL") partialResult = true;
       if (result.status === "FAILED" || result.status === "BLOCKED") failed = true;
       if (result.status === "SKIPPED") skipped = true;
@@ -67,14 +73,14 @@ export class WorkflowRunner {
       await this.store.finishRun(runId, "CANCELLED", undefined, { records: finalResult?.records.length ?? 0, sources: finalResult?.sources.length ?? 0 });
     } else if (failed) {
       const partial = (finalResult?.records.length ?? 0) > 0;
-      await this.store.finishRun(runId, partial ? "PARTIAL" : "FAILED", { code: "WORKFLOW_STEP_FAILED", message: "One or more workflow steps failed; inspect step errors for details." }, { records: finalResult?.records.length ?? 0, sources: finalResult?.sources.length ?? 0 });
+      await this.store.finishRun(runId, partial ? "PARTIAL" : "FAILED", { code: "WORKFLOW_STEP_FAILED", message: "One or more workflow steps failed; inspect step errors for details." }, runCounts(finalResult));
     } else if (skipped) {
-      await this.store.finishRun(runId, "PARTIAL", { code: "WORKFLOW_STEPS_SKIPPED", message: "One or more planned steps were skipped; inspect step details for reasons." }, { records: finalResult?.records.length ?? 0, sources: finalResult?.sources.length ?? 0 });
+      await this.store.finishRun(runId, "PARTIAL", { code: "WORKFLOW_STEPS_SKIPPED", message: "One or more planned steps were skipped; inspect step details for reasons." }, runCounts(finalResult));
     } else if (partialResult) {
       const firstError = finalResult?.errors[0];
-      await this.store.finishRun(runId, "PARTIAL", firstError ? { code: firstError.code, message: firstError.message } : { code: "AGENT_PARTIAL_RESULT", message: "The agent returned incomplete results; inspect source and step details." }, { records: finalResult?.records.length ?? 0, sources: finalResult?.sources.length ?? 0 });
+      await this.store.finishRun(runId, "PARTIAL", firstError ? { code: firstError.code, message: firstError.message } : { code: "AGENT_PARTIAL_RESULT", message: "The agent returned incomplete results; inspect source and step details." }, runCounts(finalResult));
     } else {
-      await this.store.finishRun(runId, "COMPLETED", undefined, { records: finalResult?.records.length ?? 0, sources: finalResult?.sources.length ?? 0 });
+      await this.store.finishRun(runId, "COMPLETED", undefined, runCounts(finalResult));
     }
   }
 
@@ -104,20 +110,24 @@ export class WorkflowRunner {
           output = { recordCount: agentResult.records.length, sourceCount: agentResult.sources.length, toolCallCount: agentResult.execution.toolCallCount, toolsUsed: agentResult.execution.toolsUsed };
         }
         if (step.type === "TRANSFORM" && priorResult) {
-          applyTransformations(priorResult.records, context.plan.transformations);
-          output = { recordCount: priorResult.records.length, transformationCount: context.plan.transformations.length };
+          agentResult = this.dataQuality.normalize(priorResult, context.plan);
+          output = { recordCount: agentResult.records.length, transformationCount: context.plan.transformations.length, normalized: true };
         } else if (step.type === "VALIDATE" && priorResult) {
-          const issues = validateRecords(priorResult.records, context.plan.validationRules, context.plan.extractionSchema.properties, context.plan.requirement.requiredFields);
-          output = { recordCount: priorResult.records.length, validationRules: context.plan.validationRules.length, issueCount: issues, invalidRecordCount: priorResult.records.filter((record) => record.isValid === false).length };
+          const validated = this.dataQuality.validate(priorResult, context.plan);
+          agentResult = validated.result;
+          output = { recordCount: agentResult.records.length, validationRules: context.plan.validationRules.length, issueCount: validated.issueCount, invalidRecordCount: validated.invalidRecordCount };
         } else if (step.type === "DEDUPLICATE" && priorResult) {
-          const before = priorResult.records.length;
-          deduplicateRecords(priorResult.records, context.plan.deduplicationRules);
-          output = { recordCount: priorResult.records.length, duplicateCount: before - priorResult.records.length };
+          const deduplicated = this.dataQuality.deduplicate(priorResult, context.plan);
+          agentResult = deduplicated.result;
+          output = { recordCount: agentResult.records.length, duplicateCount: deduplicated.duplicateCount, conflictCount: deduplicated.conflictCount, decisions: deduplicated.events.length };
         } else if (step.type === "MERGE" && priorResult) {
-          output = { recordCount: priorResult.records.length, provenanceSources: priorResult.sources.length };
+          agentResult = this.dataQuality.process(priorResult, context.plan);
+          output = { recordCount: agentResult.records.length, provenanceSources: agentResult.sources.length, ...(agentResult.dataQuality?.metrics ?? {}) };
         } else if (step.type === "SAVE") {
           if (!priorResult?.records.length) throw Object.assign(new Error("No extracted records are available to save."), { code: "NO_RECORDS_TO_SAVE", retryable: false });
-          output = await this.store.persistDataset(context, priorResult);
+          agentResult = this.dataQuality.process(priorResult, context.plan);
+          const saved = await this.store.persistDataset(context, agentResult);
+          output = { ...saved, ...(agentResult.dataQuality?.metrics ?? {}) };
         } else if (step.type === "EXPORT") {
           await this.store.finishStep(runId, stepRowId, { status: "SKIPPED", startedAt, retryCount, errorCode: "EXPORT_NOT_IN_PHASE", errorMessage: "Export execution is provided by the exports phase." });
           return { status: "SKIPPED" };
@@ -177,97 +187,15 @@ function mergeResults(previous: AgentResult | undefined, next: AgentResult): Age
   if (!previous) return next;
   const sources = new Map(previous.sources.map((source) => [source.canonicalUrl, source]));
   for (const source of next.sources) sources.set(source.canonicalUrl, source);
-  const records = [...previous.records];
-  for (const record of next.records) {
-    const signature = JSON.stringify(Object.fromEntries(Object.entries(record.values).sort(([left], [right]) => left.localeCompare(right))));
-    const existing = records.find((candidate) => JSON.stringify(Object.fromEntries(Object.entries(candidate.values).sort(([left], [right]) => left.localeCompare(right)))) === signature);
-    if (existing) existing.sourceUrls = [...new Set([...existing.sourceUrls, ...record.sourceUrls])];
-    else records.push(record);
-  }
+  const records = [...previous.records, ...next.records];
   return { ...next, records, sources: [...sources.values()], errors: [...previous.errors, ...next.errors], events: [...previous.events, ...next.events] };
 }
 
-function applyTransformations(records: AgentResult["records"], transformations: ExecutionRunContext["plan"]["transformations"]): void {
-  for (const record of records) for (const transform of transformations) {
-    if (!transform.fieldKey) continue;
-    const value = record.values[transform.fieldKey];
-    if (typeof value !== "string") continue;
-    const trimmed = value.trim();
-    switch (transform.operation) {
-      case "TRIM_WHITESPACE": record.values[transform.fieldKey] = trimmed; break;
-      case "NORMALIZE_TEXT": record.values[transform.fieldKey] = trimmed.replace(/\s+/g, " "); break;
-      case "NORMALIZE_URL": try { const url = new URL(trimmed); url.hash = ""; record.values[transform.fieldKey] = url.toString(); } catch { record.values[transform.fieldKey] = trimmed; } break;
-      case "NORMALIZE_DATE": { const date = new Date(trimmed); if (!Number.isNaN(date.getTime())) record.values[transform.fieldKey] = date.toISOString(); break; }
-      case "PARSE_NUMBER": { const number = Number(trimmed.replace(/[^\d.+-]/g, "")); if (Number.isFinite(number)) record.values[transform.fieldKey] = number; break; }
-      case "NORMALIZE_CURRENCY": { const number = Number(trimmed.replace(/[^\d.+-]/g, "")); if (Number.isFinite(number)) record.values[transform.fieldKey] = number; break; }
-      case "NORMALIZE_PHONE": record.values[transform.fieldKey] = trimmed.replace(/[^\d+]/g, ""); break;
-    }
-  }
-}
-
-function deduplicateRecords(records: AgentResult["records"], rules: ExecutionRunContext["plan"]["deduplicationRules"]): void {
-  const canonical = new Map<string, AgentResult["records"][number]>();
-  const retained: AgentResult["records"] = [];
-  for (const record of records) {
-    const deterministicRules = rules.filter((rule) => rule.strategy !== "FUZZY_REVIEW");
-    if (deterministicRules.length === 0) { retained.push(record); continue; }
-    const key = deterministicRules.map((rule) => `${rule.strategy}:${rule.keys.map((field) => rule.strategy === "NORMALIZED" ? normalizeDuplicateValue(record.values[field]) : exactDuplicateValue(record.values[field])).join("|")}`).join(";#");
-    if (!key || key.includes("undefined")) { retained.push(record); continue; }
-    const existing = canonical.get(key);
-    if (!existing) { canonical.set(key, record); retained.push(record); continue; }
-    existing.sourceUrls = [...new Set([...existing.sourceUrls, ...record.sourceUrls])];
-    for (const [field, value] of Object.entries(record.values)) if (existing.values[field] == null && value != null) existing.values[field] = value;
-  }
-  records.splice(0, records.length, ...retained);
-}
-
-function normalizeDuplicateValue(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLocaleLowerCase().replace(/\s+/g, " ") : value == null ? "undefined" : JSON.stringify(value);
-}
-function exactDuplicateValue(value: unknown): string { return value == null ? "undefined" : JSON.stringify(value); }
-
-function validateRecords(records: AgentResult["records"], rules: ExecutionRunContext["plan"]["validationRules"], properties: ExecutionRunContext["plan"]["extractionSchema"]["properties"], requiredFields: string[]): number {
-  let count = 0;
-  for (const record of records) {
-    const issues: NonNullable<AgentResult["records"][number]["validationIssues"]> = [];
-    for (const rule of rules) {
-      const field = rule.fieldKey ?? undefined;
-      const value = field ? record.values[field] : undefined;
-      let message: string | undefined;
-      switch (rule.rule) {
-        case "REQUIRED": if (value === undefined || value === null || value === "") message = rule.description; break;
-        case "TYPE": {
-          if (field && value != null) {
-            const expected = properties[field]?.type;
-            const valid = expected === "string" ? typeof value === "string" : expected === "number" ? typeof value === "number" && Number.isFinite(value) : expected === "integer" ? typeof value === "number" && Number.isInteger(value) : expected === "boolean" ? typeof value === "boolean" : expected === "array" ? Array.isArray(value) : expected === "object" ? Boolean(value && typeof value === "object" && !Array.isArray(value)) : true;
-            if (!valid) message = rule.description;
-          }
-          break;
-        }
-        case "URL": if (field && value != null && !isHttpUrl(value)) message = rule.description; break;
-        case "EMAIL": if (field && value != null && (typeof value !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value))) message = rule.description; break;
-        case "DATE": if (field && value != null && (typeof value !== "string" || Number.isNaN(Date.parse(value)))) message = rule.description; break;
-        case "SOURCE_EVIDENCE": if (record.sourceUrls.length === 0) message = rule.description; break;
-        case "RANGE": case "CUSTOM": message = `Rule was not executed because this plan rule has no safe machine-readable parameters: ${rule.description}`; break;
-      }
-      if (message) issues.push({ ...(field ? { fieldKey: field } : {}), ruleCode: rule.rule, severity: rule.rule === "CUSTOM" || rule.rule === "RANGE" ? "WARNING" : rule.severity, message: message.slice(0, 1000) });
-    }
-    for (const fieldKey of requiredFields) {
-      if (record.values[fieldKey] === undefined || record.values[fieldKey] === null || record.values[fieldKey] === "") {
-        if (!issues.some((issue) => issue.fieldKey === fieldKey && issue.ruleCode === "REQUIRED")) issues.push({ fieldKey, ruleCode: "REQUIRED", severity: "ERROR", message: "Required field is missing." });
-      }
-    }
-    if (record.sourceUrls.length === 0 && !issues.some((issue) => issue.ruleCode === "SOURCE_EVIDENCE")) {
-      issues.push({ ruleCode: "SOURCE_EVIDENCE", severity: "ERROR", message: "Record has no source URL observed from an enabled collection tool." });
-    }
-    record.validationIssues = issues;
-    record.isValid = issues.every((issue) => issue.severity !== "ERROR");
-    count += issues.length;
-  }
-  return count;
-}
-
-function isHttpUrl(value: unknown): boolean {
-  if (typeof value !== "string") return false;
-  try { const url = new URL(value); return url.protocol === "http:" || url.protocol === "https:"; } catch { return false; }
+function runCounts(result: AgentResult | undefined): { records: number; validRecords: number; sources: number; duplicates: number } {
+  return {
+    records: result?.dataQuality?.metrics.rawRecordCount ?? result?.records.length ?? 0,
+    validRecords: result?.dataQuality?.metrics.validRecordCount ?? result?.records.filter((record) => record.isValid !== false).length ?? 0,
+    sources: result?.sources.filter((source) => source.verifiedByTool).length ?? 0,
+    duplicates: result?.dataQuality?.metrics.duplicateCount ?? 0,
+  };
 }

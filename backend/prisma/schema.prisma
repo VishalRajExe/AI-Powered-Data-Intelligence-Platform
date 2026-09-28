@@ -96,6 +96,12 @@ enum DatasetColumnType {
   JSON
 }
 
+enum RecordVerificationStatus {
+  SOURCE_CITED_UNVERIFIED
+  UNSUPPORTED
+  CONFLICTED
+}
+
 enum SourceStatus {
   DISCOVERED
   ALLOWED
@@ -271,6 +277,7 @@ model WorkflowRun {
   sources             Source[]
   dataset             Dataset?
   deduplicationEvents DeduplicationEvent[]
+  dataQualityReport   DataQualityReport[]
 
   @@unique([workspaceId, id], map: "workflow_runs_workspace_id_uq")
   @@index([workspaceId, status, createdAt, id], map: "workflow_runs_workspace_status_created_idx")
@@ -329,6 +336,7 @@ model Dataset {
   sourceEvidence      SourceEvidence[]
   validationIssues    ValidationIssue[]
   deduplicationEvents DeduplicationEvent[]
+  dataQualityReport   DataQualityReport[]
   exports             ExportJob[]
 
   @@unique([workspaceId, id], map: "datasets_workspace_id_uq")
@@ -369,7 +377,10 @@ model DatasetRow {
   workspaceId   String   @map("workspace_id") @db.Char(36)
   datasetId     String   @map("dataset_id") @db.Char(36)
   values        Json     @map("values")
+  rawValues     Json?    @map("raw_values")
+  qualityMetadata Json?  @map("quality_metadata")
   confidence    Decimal? @db.Decimal(5, 4)
+  verificationStatus RecordVerificationStatus @default(UNSUPPORTED) @map("verification_status")
   isValid       Boolean  @default(true) @map("is_valid")
   duplicateOfId String?  @map("duplicate_of_id") @db.Char(36)
   collectedAt   DateTime @default(now()) @map("collected_at") @db.DateTime(3)
@@ -495,6 +506,32 @@ model DeduplicationEvent {
   @@unique([workflowRunId, duplicateRowId], map: "dedup_events_run_duplicate_uq")
   @@index([workspaceId, datasetId, createdAt], map: "dedup_events_workspace_dataset_created_idx")
   @@map("deduplication_events")
+}
+
+model DataQualityReport {
+  id                    String   @id @default(uuid()) @db.Char(36)
+  workspaceId           String   @map("workspace_id") @db.Char(36)
+  datasetId             String   @unique(map: "data_quality_reports_dataset_uq") @map("dataset_id") @db.Char(36)
+  workflowRunId         String   @unique(map: "data_quality_reports_run_uq") @map("workflow_run_id") @db.Char(36)
+  rawRecordCount        Int      @default(0) @map("raw_record_count") @db.UnsignedInt
+  normalizedRecordCount Int      @default(0) @map("normalized_record_count") @db.UnsignedInt
+  validRecordCount      Int      @default(0) @map("valid_record_count") @db.UnsignedInt
+  invalidRecordCount    Int      @default(0) @map("invalid_record_count") @db.UnsignedInt
+  duplicateCount        Int      @default(0) @map("duplicate_count") @db.UnsignedInt
+  reviewRequiredCount   Int      @default(0) @map("review_required_count") @db.UnsignedInt
+  conflictCount         Int      @default(0) @map("conflict_count") @db.UnsignedInt
+  sourceBackedCount     Int      @default(0) @map("source_backed_count") @db.UnsignedInt
+  qualityScore          Decimal? @map("quality_score") @db.Decimal(5, 4)
+  metrics               Json
+  computedAt            DateTime @default(now()) @map("computed_at") @db.DateTime(3)
+  createdAt             DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  dataset Dataset     @relation(fields: [workspaceId, datasetId], references: [workspaceId, id], onDelete: Cascade)
+  run     WorkflowRun @relation(fields: [workspaceId, workflowRunId], references: [workspaceId, id], onDelete: Cascade)
+
+  @@unique([workspaceId, id], map: "data_quality_reports_workspace_id_uq")
+  @@index([workspaceId, computedAt], map: "data_quality_reports_workspace_computed_idx")
+  @@map("data_quality_reports")
 }
 
 model ExportJob {
