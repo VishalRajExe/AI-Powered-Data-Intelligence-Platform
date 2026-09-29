@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.curation.robots import StaticRobots
 from app.firecrawl.client import FakeInteractiveWeb, FakeWeb, Interaction, Page, SearchHit
 from app.llm.client import LlmError, RecordingLlm
 from app.main import create_app
@@ -36,13 +37,24 @@ RECORDS = {"jobs": [{"company": "Acme", "role": "Frontend Engineer",
 KEY = "test-only-shared-key-value-0123456789abcdef"
 
 
+def allow_robots():
+    """An API-level test asks about routing and payloads, not about robots.txt.
+
+    Left to the default gate these runs would try to fetch `https://acme.test/robots.txt` for
+    real, fail DNS, and refuse every source — which is correct production behaviour and
+    irrelevant noise here. The refusal behaviour is covered deliberately in
+    `tests/test_curation.py`.
+    """
+    return lambda: StaticRobots()
+
+
 def build_client(settings: Settings, payloads: list) -> TestClient:
     web = FakeWeb(
         search_results=[[SearchHit(url="https://acme.test/jobs/1", title="Acme hiring")]],
         pages={"https://acme.test/jobs/1": Page(url="https://acme.test/jobs/1",
                                                 markdown="Remote frontend role at Acme.", status_code=200)},
     )
-    return TestClient(create_app(settings, llm=RecordingLlm(payloads), web=web))
+    return TestClient(create_app(settings, llm=RecordingLlm(payloads), web=web, robots=allow_robots()))
 
 
 def request_body(**overrides) -> dict:
@@ -136,7 +148,8 @@ def test_health_stays_public_while_research_is_gated(settings):
 
 
 def build_client_with(web, settings: Settings, payloads: list) -> TestClient:
-    return TestClient(create_app(settings, llm=RecordingLlm(payloads), web=web))
+    return TestClient(create_app(settings, llm=RecordingLlm(payloads), web=web,
+                                 robots=allow_robots()))
 
 
 def interactive_web() -> FakeInteractiveWeb:

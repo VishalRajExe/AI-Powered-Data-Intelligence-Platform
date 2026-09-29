@@ -56,6 +56,18 @@ services:
       MAX_INTERACT_CONCURRENCY: ${MAX_INTERACT_CONCURRENCY:-2}
       MAX_INTERACTIONS_PER_RUN: ${MAX_INTERACTIONS_PER_RUN:-3}
       SKILLS_DIR: ${SKILLS_DIR:-skills/definitions}
+      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
+      RETRY_BASE_DELAY_SECONDS: ${RETRY_BASE_DELAY_SECONDS:-1}
+      RETRY_MAX_DELAY_SECONDS: ${RETRY_MAX_DELAY_SECONDS:-20}
+      # robots.txt is read from this container's own egress, which is not necessarily the
+      # network position Firecrawl's crawler sees. Override to `allow` only deliberately.
+      ROBOTS_ENABLED: ${ROBOTS_ENABLED:-true}
+      ROBOTS_TIMEOUT_SECONDS: ${ROBOTS_TIMEOUT_SECONDS:-5}
+      ROBOTS_USER_AGENT: ${ROBOTS_USER_AGENT:-finalagent-research}
+      ROBOTS_ON_ERROR: ${ROBOTS_ON_ERROR:-restrict}
+      MIN_RELEVANCE_SCORE: ${MIN_RELEVANCE_SCORE:-0.0}
+      MAX_SOURCES_PER_DOMAIN: ${MAX_SOURCES_PER_DOMAIN:-2}
+      MAX_CANDIDATES_PER_SEARCH: ${MAX_CANDIDATES_PER_SEARCH:-8}
     expose:
       - "8000"
     depends_on:

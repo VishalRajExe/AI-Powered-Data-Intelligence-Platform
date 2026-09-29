@@ -38,7 +38,13 @@ public record ResearchRequest(
              * {@code ALLOWED_WEB_TOOLS}, so a caller can narrow the set but never widen it:
              * {@code interact} is enabled by an operator, not by a request.
              */
-            List<String> allowedTools
+            List<String> allowedTools,
+            /** The kind of thing being collected. Used to score candidates, never defaulted. */
+            String entityType,
+            List<String> preferredDomains,
+            Integer maxSourcesPerDomain,
+            Double minRelevanceScore,
+            Integer desiredSources
     ) {
     }
 }

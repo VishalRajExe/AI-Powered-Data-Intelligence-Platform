@@ -101,7 +101,16 @@ class StubFirecrawl:
 
 def web_for(stub: StubFirecrawl, **overrides) -> FirecrawlWeb:
     settings = build_settings(**overrides)
-    return FirecrawlWeb(settings, app=stub)
+    # Backoff is recorded, never waited on: these tests are about the session lifecycle, and a
+    # retrying search would otherwise make the suite sleep for seconds at a time.
+    return FirecrawlWeb(settings, app=stub, sleeper=_record_sleep)
+
+
+SLEEPS: list[float] = []
+
+
+async def _record_sleep(seconds: float) -> None:
+    SLEEPS.append(seconds)
 
 
 # ------------------------------------------------------------------ lifecycle

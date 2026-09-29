@@ -15,6 +15,7 @@ import os
 import pytest
 
 from app.config import get_settings
+from app.curation.robots import build_robots_gate
 from app.firecrawl.client import FirecrawlWeb
 from app.llm.client import GeminiLlm
 from app.research.graph import ResearchGraph
@@ -50,7 +51,10 @@ SCHEMA = {
 @pytest.mark.asyncio
 async def test_live_research_run_produces_evidenced_records():
     settings = get_settings()
-    graph = ResearchGraph(llm=GeminiLlm(settings), web=FirecrawlWeb(settings), settings=settings)
+    # The same robots gate the HTTP path builds, so this spike measures what production does —
+    # including the cost of a `robots.txt` fetch per origin, which no offline test can price.
+    graph = ResearchGraph(llm=GeminiLlm(settings), web=FirecrawlWeb(settings), settings=settings,
+                          robots=build_robots_gate(settings))
 
     outcome = await graph.run(
         topic="find five popular YouTube channels that teach Python",

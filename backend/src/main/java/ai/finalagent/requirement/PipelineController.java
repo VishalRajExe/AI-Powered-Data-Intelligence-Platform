@@ -18,6 +18,7 @@ import ai.finalagent.aiclient.dto.ResearchRequest;
 import ai.finalagent.aiclient.dto.ResearchResult;
 import ai.finalagent.common.ErrorResponse;
 import ai.finalagent.research.ExtractionSchemaValidator;
+import ai.finalagent.research.SourceCurationPolicy;
 import ai.finalagent.research.WebToolPolicy;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -83,8 +84,10 @@ public class PipelineController {
 
     private RequirementAnalysisDto analysedAndValidated(PromptRequest request) {
         // Checked before anything is spent: a request that names a tool this build does not
-        // have, or a session budget it did not ask for, is the caller's mistake to fix.
+        // have, a session budget it did not ask for, or a curation bound that cannot mean
+        // anything is the caller's mistake to fix.
         WebToolPolicy.validate(request.limits());
+        SourceCurationPolicy.validate(request.limits());
 
         RequirementAnalysisDto analysis;
         try {
@@ -116,6 +119,12 @@ public class PipelineController {
     @ExceptionHandler(WebToolPolicy.InvalidWebToolRequestException.class)
     public ErrorResponse handleInvalidWebTools(WebToolPolicy.InvalidWebToolRequestException e) {
         return ErrorResponse.of("INVALID_WEB_TOOLS", e.getMessage());
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(SourceCurationPolicy.InvalidCurationRequestException.class)
+    public ErrorResponse handleInvalidCuration(SourceCurationPolicy.InvalidCurationRequestException e) {
+        return ErrorResponse.of("INVALID_CURATION_REQUEST", e.getMessage());
     }
 
     @ExceptionHandler(AiServiceClient.AiServiceException.class)

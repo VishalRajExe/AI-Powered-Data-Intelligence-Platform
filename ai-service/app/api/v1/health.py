@@ -81,4 +81,22 @@ def ready(request: Request) -> dict[str, Any]:
             "rejected": len(request.app.state.skills.rejected),
             "sitePlaybooks": sum(len(skill.site_playbooks) for skill in request.app.state.skills.skills),
         },
+        "curation": {
+            # An operator needs to see the three knobs that decide what gets fetched, because
+            # each one can make a run come back short for a reason that is not the web's fault.
+            "robots": {
+                "enabled": settings.robots_enabled,
+                "userAgent": settings.robots_user_agent,
+                "onError": settings.robots_on_error,
+                "timeoutSeconds": settings.robots_timeout_seconds,
+            },
+            "retry": {
+                "maxAttempts": settings.retry_max_attempts,
+                "baseDelaySeconds": settings.retry_base_delay_seconds,
+                "maxDelaySeconds": settings.retry_max_delay_seconds,
+            },
+            "minRelevanceScore": settings.min_relevance_score,
+            "maxSourcesPerDomain": settings.max_sources_per_domain,
+            "maxCandidatesPerSearch": settings.max_candidates_per_search,
+        },
     }

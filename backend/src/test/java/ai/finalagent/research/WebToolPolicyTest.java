@@ -20,7 +20,7 @@ class WebToolPolicyTest {
 
     private static ResearchRequest.Limits limits(List<String> tools, Integer interactions) {
         return new ResearchRequest.Limits(null, null, null, null, interactions, null,
-                List.of(), List.of(), tools);
+                List.of(), List.of(), tools, null, List.of(), null, null, null);
     }
 
     @Test

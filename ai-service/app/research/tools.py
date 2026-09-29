@@ -9,20 +9,30 @@ replaced by Firecrawl and four of its defects closed:
   the model as content and later cited as evidence. A non-2xx status or an empty body is
   now an error outcome.
 * They deduplicated nothing, so the same URL could be re-scraped until the budget ran
-  out. Repeat URLs are refused here.
+  out. Repeat URLs are refused here — by page identity, not by string equality
+  (`app/curation/canonical.py`), so a `?utm_source=` variant is recognised as the same page.
 * They injected `__state` into every tool's arguments (`tools.ts:108-114`) while their
   own tool schema declared `additionalProperties: false`, and nothing read it. Not
   reproduced.
 
 Per-call error isolation and concurrent execution from their `toolNode` are kept: one bad
 URL must not abort a run.
+
+Phase 5 added the curation stage between "the tool returned results" and "the model is told
+about them": domain policy, robots policy, relevance ranking, per-domain diversity and
+duplicate collapse. Every drop is recorded on the state, because
+`web-research-agent-master`'s scraper logs and skips (`web_scraper_tool.py:10,22`) and leaves
+the caller unable to distinguish "the site said no" from "we never asked".
 """
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from urllib.parse import urlparse
 
+from app.curation.canonical import canonical_key
+from app.curation.policy import SourcePolicy
+from app.curation.ranking import rank_hits
+from app.curation.relevance import RelevanceTarget
 from app.firecrawl.client import (
     Interaction,
     Page,
@@ -44,36 +54,28 @@ class ToolOutcome:
     error: str | None = None
 
 
-def _host(url: str) -> str:
-    try:
-        return (urlparse(url).netloc or "").lower()
-    except ValueError:
-        return ""
+def _format_candidates(candidates, dropped) -> str:
+    """Ranked search results, with what was excluded and why shown alongside them.
 
-
-def domain_allowed(url: str, allowed: list[str], blocked: list[str]) -> bool:
-    host = _host(url)
-    if not host:
-        return False
-    root = host.removeprefix("www.")
-    if any(root == blocked_host or root.endswith("." + blocked_host) for blocked_host in
-           (d.lower() for d in blocked if d)):
-        return False
-    if allowed:
-        return any(root == allowed_host or root.endswith("." + allowed_host) for allowed_host in
-                   (d.lower() for d in allowed if d))
-    return True
-
-
-def _format_hits(hits: list[SearchHit]) -> str:
+    The order is the point — a model handed ten undifferentiated URLs scrapes whichever it
+    reads first. The exclusions are the other point: telling it "three results were the same
+    page, one was below the relevance floor" stops it re-requesting them.
+    """
     entries: list[str] = []
-    for index, hit in enumerate(hits, start=1):
-        entry = f"{index}. {hit.url}"
-        if hit.title:
-            entry += f"\n   title: {hit.title}"
-        if hit.snippet:
-            entry += f"\n   snippet: {hit.snippet[:300]}"
+    for index, candidate in enumerate(candidates, start=1):
+        entry = f"{index}. {candidate.url}"
+        if candidate.title:
+            entry += f"\n   title: {candidate.title}"
+        if candidate.snippet:
+            entry += f"\n   snippet: {candidate.snippet[:300]}"
+        entry += f"\n   relevance: {candidate.score.value:.2f} ({'; '.join(candidate.score.reasons[:2])})"
         entries.append(entry)
+
+    if dropped:
+        summary = "\n".join(f"- {item.code}: {item.url} — {item.reason}" for item in dropped[:8])
+        entries.append(
+            "Excluded from this search (do not treat these as available sources):\n" + summary
+        )
     return "\n\n".join(entries)
 
 
@@ -101,8 +103,16 @@ async def run_search(
     web: WebTool,
     query: str,
     *,
-    include_scraped: set[str] | None = None,
+    policy: SourcePolicy,
+    target: RelevanceTarget,
 ) -> ToolOutcome:
+    """Search, then curate: domain policy first, then dedupe, rank and cap.
+
+    The curated list is what the model sees, and only those URLs are recorded as observed.
+    Everything excluded is stated in the tool output with its reason, so the model cannot be
+    told "here are 8 results" about a search that returned 12 without learning that four were
+    the same page three times.
+    """
     if not query.strip():
         return ToolOutcome(name="search", ok=False, content="", error="search requires a query")
     if not state.budget.search_allowed():
@@ -119,28 +129,55 @@ async def run_search(
         return ToolOutcome(name="search", ok=False, content="", error=str(exc))
 
     state.budget.note_search()
-    usable = [hit for hit in hits if domain_allowed(hit.url, state.limits.allowed_domains, state.limits.blocked_domains)]
+    if not hits:
+        return ToolOutcome(name="search", ok=False, content="",
+                           error=f"search for {query!r} returned no results")
 
-    if not usable:
+    permitted: list[SearchHit] = []
+    for hit in hits:
+        decision = policy.check_domain(hit.url)
+        if decision.allowed:
+            permitted.append(hit)
+        else:
+            state.refuse(hit.url, decision.code, decision.reason)
+
+    ranking = rank_hits(
+        permitted,
+        target,
+        already_observed=state.observed_canonicals(),
+        min_score=state.limits.min_relevance_score,
+        top_n=state.limits.max_candidates_per_search,
+        max_per_domain=state.limits.max_sources_per_domain,
+    )
+
+    for dropped in ranking.dropped:
+        state.note_dropped(dropped.url, dropped.code, dropped.reason, dropped.score)
+        if dropped.code in ("duplicate-url", "already-observed"):
+            state.duplicates_collapsed += 1
+
+    if not ranking.candidates:
         return ToolOutcome(
             name="search",
             ok=False,
             content="",
-            error="search returned no results that passed the domain policy",
+            error=f"no usable results for {query!r}: {len(ranking.dropped)} candidate(s) dropped"
+                  f" ({ranking.summary() or 'see dropped list'})",
         )
 
-    for hit in usable:
-        state.observe(hit.url, title=hit.title, snippet=hit.snippet, source_type="search")
+    for candidate in ranking.candidates:
+        state.observe(candidate.url, title=candidate.title, snippet=candidate.snippet,
+                      source_type="search")
 
     return ToolOutcome(
         name="search",
         ok=True,
-        content=f"Search results for {query!r}:\n\n{_format_hits(usable)}",
-        observed_urls=[hit.url for hit in usable],
+        content=(f"Search results for {query!r}, ranked against this contract:\n\n"
+                 + _format_candidates(ranking.candidates, ranking.dropped)),
+        observed_urls=[candidate.url for candidate in ranking.candidates],
     )
 
 
-async def run_scrape(state: ResearchState, web: WebTool, url: str) -> ToolOutcome:
+async def run_scrape(state: ResearchState, web: WebTool, url: str, *, policy: SourcePolicy) -> ToolOutcome:
     try:
         target = validated_http_url(url)
     except WebError as exc:
@@ -153,14 +190,16 @@ async def run_scrape(state: ResearchState, web: WebTool, url: str) -> ToolOutcom
             content="",
             error=f"scrape budget exhausted ({state.budget.max_scrapes})",
         )
-    if not domain_allowed(target, state.limits.allowed_domains, state.limits.blocked_domains):
-        return ToolOutcome(name="scrape", ok=False, content="", error="url is outside the domain policy")
 
-    already = next((message for message in state.messages
-                    if message.name == "scrape" and message.status == "success"
-                    and f"URL: {target}" in message.content), None)
-    if already is not None:
+    page_id = canonical_key(target)
+    if page_id in state.scraped_pages:
         return ToolOutcome(name="scrape", ok=False, content="", error=f"already retrieved: {target}")
+
+    decision = await policy.check_fetch(target)
+    if not decision.allowed:
+        state.refuse(target, decision.code, decision.reason)
+        return ToolOutcome(name="scrape", ok=False, content="",
+                           error=f"refused before fetching: {decision.reason or decision.code}")
 
     try:
         page = await web.scrape(target)
@@ -179,6 +218,7 @@ async def run_scrape(state: ResearchState, web: WebTool, url: str) -> ToolOutcom
     if not page.markdown.strip():
         return ToolOutcome(name="scrape", ok=False, content="", error=f"no readable content at {target}")
 
+    state.scraped_pages.add(page_id)
     state.observe(target, title=page.title, source_type="scrape")
     return ToolOutcome(
         name="scrape",
@@ -188,14 +228,17 @@ async def run_scrape(state: ResearchState, web: WebTool, url: str) -> ToolOutcom
     )
 
 
-async def run_interact(state: ResearchState, web: WebTool, url: str, prompt: str) -> ToolOutcome:
+async def run_interact(state: ResearchState, web: WebTool, url: str, prompt: str, *,
+                       policy: SourcePolicy) -> ToolOutcome:
     """Drive a page in a browser session — the only action that acts rather than reads.
 
-    Three gates the read tools do not need:
+    Four gates the read tools do not need, or need less strictly:
 
     * the tool must be enabled for this run at all (`allowed_tools`), mirroring upstream's
       filtered toolkit (`toolkit.ts:188-204`) — the model is not offered an action it
       cannot take;
+    * the source policy must allow the URL, robots included: a session can reach what a
+      disallowed path would hide from a crawler;
     * the URL must already have been retrieved by search or scrape this run. An agent that
       can click anything can reach anything, so interact inherits the same evidence rule
       the submission gate enforces, one layer earlier;
@@ -227,8 +270,12 @@ async def run_interact(state: ResearchState, web: WebTool, url: str, prompt: str
             content="",
             error=f"interaction budget exhausted ({state.budget.max_interactions} browser sessions)",
         )
-    if not domain_allowed(target, state.limits.allowed_domains, state.limits.blocked_domains):
-        return ToolOutcome(name="interact", ok=False, content="", error="url is outside the domain policy")
+    decision = await policy.check_fetch(target)
+    if not decision.allowed:
+        state.refuse(target, decision.code, decision.reason)
+        return ToolOutcome(name="interact", ok=False, content="",
+                           error=f"refused before opening a session: {decision.reason or decision.code}")
+
     if target not in state.observed_urls():
         return ToolOutcome(
             name="interact",
@@ -254,7 +301,8 @@ async def run_interact(state: ResearchState, web: WebTool, url: str, prompt: str
     return ToolOutcome(name="interact", ok=True, content=_format_interaction(result), observed_urls=[target])
 
 
-async def execute_action(state: ResearchState, web: WebTool, action: dict) -> list[ToolOutcome]:
+async def execute_action(state: ResearchState, web: WebTool, action: dict, *,
+                         policy: SourcePolicy, target: RelevanceTarget) -> list[ToolOutcome]:
     """Run the single action the model chose.
 
     Returns a list for signature parity with the template's concurrent `toolNode`; the
@@ -264,15 +312,18 @@ async def execute_action(state: ResearchState, web: WebTool, action: dict) -> li
     """
     kind = action.get("action")
     if kind == "search":
-        return [await run_search(state, web, str(action.get("query", "")))]
+        return [await run_search(state, web, str(action.get("query", "")),
+                                 policy=policy, target=target)]
     if kind == "scrape":
-        return [await run_scrape(state, web, str(action.get("url", "")))]
+        return [await run_scrape(state, web, str(action.get("url", "")), policy=policy)]
     if kind == "interact":
-        return [await run_interact(state, web, str(action.get("url", "")), str(action.get("prompt", "")))]
+        return [await run_interact(state, web, str(action.get("url", "")),
+                                   str(action.get("prompt", "")), policy=policy)]
     return []
 
 
-async def execute_many(state: ResearchState, web: WebTool, calls: list[tuple[str, str]]) -> list[ToolOutcome]:
+async def execute_many(state: ResearchState, web: WebTool, calls: list[tuple[str, str]], *,
+                       policy: SourcePolicy, target: RelevanceTarget) -> list[ToolOutcome]:
     """Concurrent execution with per-call isolation, kept for batch phases.
 
     `interact` is refused here on principle: upstream gives parallel workers search and
@@ -288,7 +339,8 @@ async def execute_many(state: ResearchState, web: WebTool, calls: list[tuple[str
         for kind, _ in calls if kind == "interact"
     ]
     tasks = [
-        run_search(state, web, value) if kind == "search" else run_scrape(state, web, value)
+        run_search(state, web, value, policy=policy, target=target)
+        if kind == "search" else run_scrape(state, web, value, policy=policy)
         for kind, value in calls if kind != "interact"
     ]
     return list(await asyncio.gather(*tasks)) + refused

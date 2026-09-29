@@ -1,6 +1,8 @@
-"""Opt-in live Firecrawl test — real search, scrape and browser session, no model.
+"""Opt-in live Firecrawl test — real search, scrape, robots.txt and browser session, no model.
 
-Two gates, because the two things cost different resources:
+Settles **G2** (is Firecrawl's Python `interact` sufficient?) and measures gate **Q2** (how often
+a real `robots.txt` is unreadable, which is what the fail-closed default costs). Two gates on the
+run, because the two things cost different resources:
 
     RUN_LIVE_FIRECRAWL_TESTS=true FIRECRAWL_API_KEY=fc-... \\
         pytest -q tests/test_live_firecrawl.py -s
@@ -49,6 +51,35 @@ async def test_live_scrape_reads_a_page_and_reports_its_status():
     assert page.markdown.strip()
     assert page.status_code is None or 200 <= page.status_code < 400
     assert "asyncio" in page.markdown.lower()
+
+
+@pytest.mark.asyncio
+async def test_live_robots_fetch_is_fast_enough_and_the_default_policy_survives_it():
+    """The gate **Q2** has to be decided on: how often is `robots.txt` unreadable in practice?
+
+    Asserted on the decision's shape, not its verdict — a site is allowed to change its rules.
+    What this measures is latency and whether the response is usable, which is what the
+    5-second bound and the `restrict` default were chosen without knowing.
+    """
+    import time
+
+    from app.curation.robots import HttpRobots
+
+    settings = get_settings()
+    gate = HttpRobots(user_agent=settings.robots_user_agent,
+                      timeout_seconds=settings.robots_timeout_seconds,
+                      on_error=settings.robots_on_error)
+
+    started = time.perf_counter()
+    decision = await gate.check(TARGET)
+    elapsed = time.perf_counter() - started
+
+    assert decision.state in {"allowed", "no-rules", "restricted", "unreachable"}, decision.state
+    print(f"\nrobots.txt {decision.state} for {TARGET} in {elapsed:.2f}s; "
+          f"fetches={gate.fetches}; reason={decision.reason}")
+    if decision.state == "unreachable":
+        pytest.skip(f"robots.txt unreadable here: {decision.reason} — this is the Q2 measurement")
+    assert elapsed < settings.robots_timeout_seconds + 2.0
 
 
 @pytest.mark.asyncio

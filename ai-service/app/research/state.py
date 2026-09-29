@@ -32,6 +32,17 @@ class ResearchLimits:
     # agent's tool set from an allowlist — a tool the model is not shown is one it cannot
     # invent a call for.
     allowed_tools: list[str] = field(default_factory=lambda: ["search", "scrape"])
+    # --- curation (Phase 5). All request-derived: nothing here names a domain or an entity. ---
+    entity_type: str | None = None
+    preferred_domains: list[str] = field(default_factory=list)
+    max_sources_per_domain: int = 0
+    min_relevance_score: float = 0.0
+    max_candidates_per_search: int = 8
+    desired_sources: int | None = None
+    # Source preferences the user stated that are not hostnames — "the company's own site",
+    # "news coverage". They cannot become a domain rule, so they are carried through and
+    # reported instead of being quietly dropped or, worse, guessed at.
+    source_preference_notes: list[str] = field(default_factory=list)
     model_id: str | None = None
 
 
@@ -144,6 +155,16 @@ class ResearchState:
     # Site playbooks whose navigation guidance was injected into a turn, recorded so a
     # reviewer can tell whether the run used a playbook that was wrong.
     playbooks_used: list[str] = field(default_factory=list)
+    # Curation outcomes the caller is entitled to see: what was refused, and what was dropped
+    # before it ever became a candidate. A run that quietly skipped eight sources and read two
+    # is indistinguishable from one that found only two.
+    refusals: list[dict[str, str]] = field(default_factory=list)
+    dropped_candidates: list[dict[str, Any]] = field(default_factory=list)
+    duplicates_collapsed: int = 0
+    scraped_pages: set[str] = field(default_factory=set)
+    # The query plan the run actually used, recorded by the graph so metadata can show what
+    # was dropped for duplication or budget.
+    search_strategy: dict[str, Any] | None = None
 
     budget: StepBudget = field(default=None)  # type: ignore[assignment]
 
@@ -179,6 +200,24 @@ class ResearchState:
 
     def observed_urls(self) -> set[str]:
         return set(self.sources)
+
+    def observed_canonicals(self) -> set[str]:
+        """Identity keys of every page this run has already been given, so a second URL for the
+        same page is recognised as a duplicate rather than a new source."""
+        from app.curation.canonical import canonical_key
+
+        return {canonical_key(url) for url in self.sources}
+
+    def refuse(self, url: str, code: str, reason: str | None) -> None:
+        entry = {"url": url, "code": code, "reason": reason or code}
+        if entry not in self.refusals:
+            self.refusals.append(entry)
+
+    def note_dropped(self, url: str, code: str, reason: str, score: float | None = None) -> None:
+        entry: dict[str, Any] = {"url": url, "code": code, "reason": reason}
+        if score is not None:
+            entry["score"] = round(score, 3)
+        self.dropped_candidates.append(entry)
 
     def has_tool_data(self) -> bool:
         """Gate 2's precondition: at least one data tool returned something."""

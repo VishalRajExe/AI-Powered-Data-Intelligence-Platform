@@ -28,6 +28,8 @@
 | `DEMO_MODE` | The demo layer is dropped entirely. Tests use mocks; production has one code path |
 | `GOOGLE_GENERATIVE_AI_API_KEY` **and** `GEMINI_API_KEY` (both were set) | Standardize on `GEMINI_API_KEY`. Note the mismatch that would otherwise bite: PydanticAI's `google-gla` convention expects `GOOGLE_API_KEY`, the Vercel AI SDK expects `GOOGLE_GENERATIVE_AI_API_KEY`, and the old project set both. Our Python service reads `GEMINI_API_KEY` and maps it explicitly to the SDK — one name, one mapping, no guessing |
 | `LLM_PROVIDER` multi-provider switch | v1 is Gemini-only. Keep the internal `LlmClient` interface so a second provider can be added deliberately, never as a silent default swap |
+| Google Custom Search (`GOOGLE_SEARCH_API_KEY`, `GOOGLE_CSE_ID`) | Not introduced, and not inherited from `web-research-agent-master`, which searches with Google CSE (`web_search_tool.py:7-14`). Firecrawl is the only web engine; a second search stack is what Phase 5 explicitly refused |
+| An embedding provider (`text-embedding-3-small`, `chromadb`, per-request vector stores) | Not introduced. That repo ranks relevance by embedding cosine; ours is lexical (`app/curation/relevance.py`), because a second AI provider whose only job is ranking is a second system. Gate **Q1** is the honest open question |
 | Insecure literal fallbacks for `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | `server.ts:83-86` and `docker-compose.yml` both defaulted to guessable strings, making tokens forgeable. Now: absent ⇒ refuse to start |
 
 ## K.2 Root / shared
@@ -94,6 +96,15 @@
 | `MAX_INTERACTIONS_PER_RUN` | no | `3` | Per-run cap on browser sessions, clamped downward from this value by the same request rule. `0` disables interact even when the ceiling allows it |
 | `MAX_LOOPS` / `MAX_SEARCH_RESULTS` / `MAX_SEARCHES_PER_RUN` / `MAX_SCRAPES_PER_RUN` | no | `6` / `5` / `8` / `12` | Research-graph bounds; every one is checked before the tool runs, not only at the router |
 | `SKILLS_DIR` | no | `skills/definitions` | Root of `SKILL.md` site playbooks. Relative paths resolve against the `ai-service` directory. **A missing or empty directory is valid** — the run simply has no playbooks; see `ai-service/skills/README.md` and gate **S1** |
+| `RETRY_MAX_ATTEMPTS` | no | `3` | Bounded 1-5, the same range `app.contracts.RetryPolicy` enforces. Applies to web **reads** only |
+| `RETRY_BASE_DELAY_SECONDS` / `RETRY_MAX_DELAY_SECONDS` | no | `1` / `20` | Exponential backoff with jitter into [0.5×, 1.5×], capped. The cap is the part `web-research-agent-master` omitted; its ceiling may not be below the first delay, or it would be silently ignored |
+| `ROBOTS_ENABLED` | no | `true` | Reading robots.txt before a scrape or a browser session is the default, not an option |
+| `ROBOTS_TIMEOUT_SECONDS` | no | `5` | Per-origin `robots.txt` GET, stdlib `urllib` on a worker thread; 64 KiB read cap |
+| `ROBOTS_USER_AGENT` | no | `finalagent-research` | **One word required.** robots rules match on user-agent substrings, so a phrase would match unpredictably — and it is the token we identify ourselves with |
+| `ROBOTS_ON_ERROR` | no | `restrict` | `restrict` refuses an unreadable robots file and reports it; `allow` fetches anyway and marks the run as having proceeded without a readable policy. 401/403/404/405 mean *no rules* (RFC 9309 §2.3.1), not an error — gate **Q2** asks whether `restrict` stays |
+| `MIN_RELEVANCE_SCORE` | no | `0.0` | 0.0 ranks without dropping anything, so the scrape budget decides how many pages are read. Lexical scale, saturating at four matched terms — not a probability; gate **Q1** |
+| `MAX_SOURCES_PER_DOMAIN` | no | `2` | Candidates per publisher per search batch; 0 disables the rule. `root_domain()` is a last-two-labels heuristic, documented as one |
+| `MAX_CANDIDATES_PER_SEARCH` | no | `8` | How many ranked candidates the tool result shows the model; the rest are reported as excluded, not hidden |
 | `MARKDOWN_TRUNCATE_CHARS` | no | `4000` | `2000` when an extract is present |
 | `ALLOWED_HOSTS` | no | `localhost` | defense in depth; the service should never be public |
 
@@ -137,6 +148,10 @@ Startup validation, as implemented and verified in Phase 1:
 | Every timeout, `SEARCH_TIMEOUT_SECONDS` included, must be > 0 | `app/config.py` | unit-tested; upstream's "`<= 0` means no deadline" for interact is refused here on purpose |
 | A request cannot widen the tool ceiling or buy more sessions than it | `resolve_limits()` in `app/api/v1/research.py`, `WebToolPolicy` in Java | `test_the_intersection_is_reported_back_to_the_caller`, `WebToolPolicyTest` |
 | `SKILLS_DIR` may point at a missing directory | `SkillLibrary` / `discover_skills` | unit-tested — an absent root is an empty library, not an error |
+| `RETRY_MAX_ATTEMPTS` 1-5, backoff ceiling ≥ first delay | `app/config.py` + `RetryPolicy` | unit-tested |
+| `ROBOTS_USER_AGENT` is a single non-blank token; `ROBOTS_ON_ERROR` ∈ {restrict, allow} | `app/config.py` | unit-tested — a phrase agent is refused, `ignore` is refused |
+| `MIN_RELEVANCE_SCORE` ∈ [0,1], `MAX_SOURCES_PER_DOMAIN` ∈ [0,10], `MAX_CANDIDATES_PER_SEARCH` ∈ [1,20] | `app/config.py` | unit-tested |
+| Java refuses an impossible curation request before calling Python | `SourceCurationPolicy.java` | `SourceCurationPolicyTest` (10), `ResearchControllerTest.anImpossibleRelevanceFloorIsRejectedLocally` |
 | Placeholder values rejected (`REPLACE_ME`, `changeme`, `insecure-default`, …) | both services | unit-tested |
 | Every problem reported at once; values never echoed into the message | both services | unit-tested |
 | The two `AI_SERVICE_API_KEY` values agree | `X-API-Key` constant-time compare | **401 observed** |

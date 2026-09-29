@@ -8,10 +8,12 @@ FIRECRAWL_API_KEY quietly routed every collection through a simulated adapter wh
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from app.contracts import RetryPolicy
 
 MIN_SHARED_SECRET_LENGTH = 32
 MIN_PROVIDER_KEY_LENGTH = 12
@@ -116,6 +118,27 @@ class Settings(BaseSettings):
     # An empty or missing directory is a valid state — the graph runs with no playbooks.
     skills_dir: str = "skills/definitions"
 
+    # --- source curation (Phase 5) ---
+    # Retry is bounded by the same RetryPolicy contract the workflow plan uses; without these
+    # the contract is decoration. `web-research-agent-master` shipped retries=3 in its README
+    # while calling fetch_page(url, 1), i.e. none — the bound is set here and read there.
+    retry_max_attempts: int = 3
+    retry_base_delay_seconds: float = 1.0
+    retry_max_delay_seconds: float = 20.0
+
+    robots_enabled: bool = True
+    robots_timeout_seconds: float = 5.0
+    robots_user_agent: str = "finalagent-research"
+    # What to do when robots.txt cannot be read (5xx, DNS failure, timeout). "restrict" refuses
+    # the source and says why; "allow" fetches it and marks the run as having proceeded blind.
+    robots_on_error: Literal["restrict", "allow"] = "restrict"
+
+    max_sources_per_domain: int = 2
+    # 0.0 means rank-only: the scrape budget decides how many pages are read, and nothing is
+    # dropped for vocabulary mismatch unless an operator sets a floor.
+    min_relevance_score: float = 0.0
+    max_candidates_per_search: int = 8
+
     @field_validator("allowed_web_tools", mode="before")
     @classmethod
     def _split_tools(cls, value):
@@ -180,6 +203,28 @@ class Settings(BaseSettings):
             problems.append("ALLOWED_WEB_TOOLS must list at least one web tool; with none enabled "
                             "the research graph cannot gather evidence.")
 
+        if not 1 <= self.retry_max_attempts <= 5:
+            problems.append("RETRY_MAX_ATTEMPTS must be between 1 and 5; it bounds the RetryPolicy "
+                            "contract the workflow plan already carries.")
+        if self.retry_base_delay_seconds <= 0:
+            problems.append("RETRY_BASE_DELAY_SECONDS must be greater than zero.")
+        if self.retry_max_delay_seconds < self.retry_base_delay_seconds:
+            problems.append("RETRY_MAX_DELAY_SECONDS must be at least RETRY_BASE_DELAY_SECONDS; "
+                            "a cap below the first wait would be silently ignored.")
+        if not 0 <= self.min_relevance_score <= 1:
+            problems.append("MIN_RELEVANCE_SCORE must be between 0 and 1 (0 ranks without dropping).")
+        if not 0 <= self.max_sources_per_domain <= 10:
+            problems.append("MAX_SOURCES_PER_DOMAIN must be between 0 (no rule) and 10.")
+        if not 1 <= self.max_candidates_per_search <= 20:
+            problems.append("MAX_CANDIDATES_PER_SEARCH must be between 1 and 20.")
+        if self.robots_timeout_seconds <= 0:
+            problems.append("ROBOTS_TIMEOUT_SECONDS must be greater than zero.")
+        if not self.robots_user_agent.strip():
+            problems.append("ROBOTS_USER_AGENT must name the token we ask robots.txt about.")
+        if len(self.robots_user_agent.split()) != 1:
+            problems.append("ROBOTS_USER_AGENT must be a single token; robots.txt rules match on "
+                            "user-agent substrings, and a phrase would match unpredictably.")
+
         if problems:
             raise ConfigurationError(
                 "FINALAIAGENT ai-service refused to start. Fix the following configuration "
@@ -191,6 +236,10 @@ class Settings(BaseSettings):
     def gemini_configured(self) -> bool:
         return bool(self.gemini_api_key.strip())
 
+    @property
+    def retry_policy(self) -> "RetryPolicy":
+        """The single source of the retry bound the web layer obeys."""
+        return RetryPolicy(max_attempts=self.retry_max_attempts, strategy="exponential")
     @property
     def firecrawl_configured(self) -> bool:
         return bool(self.firecrawl_api_key.strip())

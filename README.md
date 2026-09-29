@@ -6,11 +6,10 @@ A user describes a data requirement in plain English; the system understands it,
 collection workflow, gathers data from permitted web sources, cleans and validates it, and
 produces a source-traceable dataset that can be searched, filtered and exported.
 
-**Status: Phase 4 complete — the research graph now runs Firecrawl's web tools, including an
-opt-in browser session.**
-Prompt → AI requirement → data contract → extraction schema → research graph → Firecrawl
-(`search` → `scrape` → `interact` when enabled) → structured records + sources + validation
-state, with Spring validating the model's answer and the tool request before collection starts.
+**Status: Phase 5 complete — the run is curated before it collects.**
+Requirement → search strategy → relevant sources → source policy (domains, robots.txt, duplicates,
+relevance) → Firecrawl (`search` → `scrape` → `interact` when enabled) → structured records with
+per-source citations and every refusal reported. One web engine, one LLM, no embedding provider.
 Still nothing persisted: no schema, no dataset storage, no authentication.
 
 ---
@@ -25,7 +24,8 @@ Still nothing persisted: no schema, no dataset storage, no authentication.
 | Database | MySQL 8.4+ |
 | Async | MySQL-backed job table + Spring `ThreadPoolTaskExecutor` — **no Redis, no BullMQ** |
 
-Three runtimes. No Node backend, no vendored TypeScript agent core.
+Three runtimes. No Node backend, no vendored TypeScript agent core, **one web engine**
+(Firecrawl) and **one AI provider** (Gemini) — no embedding provider and no second search stack.
 
 ---
 
@@ -109,15 +109,25 @@ The response is the parsed requirement plus the extraction schema derived from i
 so two different prompts produce two different schemas. Spring validates that answer — a contract
 the model itself is inconsistent about stops there with `INVALID_REQUIREMENT` and no collection run.
 
-## Verified (Phases 2–4, executed 2026-09-29)
+## Verified (Phases 2–5, executed 2026-09-29)
 
 Every row is a command run in that session, with counts, not an assertion.
 
 | Check | Result |
 |---|---|
-| `mvn test` | **68 passed**, 0 failures (54 through Phase 3, +14 at Phase 4) |
-| `pytest` | **174 passed**, 7 gated live tests skipped by design (was 98 passed / 4 skipped; 79 cases added at Phase 4) |
+| `mvn test` | **80 passed**, 0 failures (54 through Phase 3, 68 through Phase 4, +12 at Phase 5) |
+| `pytest` | **242 passed**, 8 gated live tests skipped by design (was 98 / 174; +68 cases at Phase 5) |
 | `scripts/verify.sh` | backend tests ok, backend package ok, ai tests ok, frontend typecheck / lint / build ok |
+| **Irrelevant sources** | ranked last and named in `Excluded from this search`; with `MIN_RELEVANCE_SCORE` set they are dropped with a reason and counted in `metadata.candidatesDropped`; with no floor nothing is dropped for vocabulary |
+| **Blocked source** | refused by `SourcePolicy` before any fetch — `web.scrape_calls == []` is asserted — and reported in `validation.refusedSources` with the host and the rule that stopped it |
+| **Duplicate source** | `?utm_source=`, `#fragment`, `www.`, default port and a trailing slash collapse to one page identity; a second search for the same page reports `duplicate-url`, `metadata.duplicateSourcesCollapsed` counts it, and a re-scrape is refused as already retrieved |
+| **Retry** | 429/5xx/timeouts retried with capped jittered backoff inside `RetryPolicy` (a contract that existed since Phase 0 and had no reader); `404` and other permanent kinds stop after one attempt; `metadata.retriesAttempted` reports the cost; **browser sessions are never retried** |
+| **robots restriction** | `Disallow` honoured for our own UA token; one file fetched per origin per run; 401/403/404 mean *no rules* while 5xx/unreachable follow `ROBOTS_ON_ERROR` — refused and reported by default |
+| Refused robots ≠ silent permission | the reference implementation parsed a 500 error page as robots text and answered "allowed"; a test pins the corrected behaviour |
+| Aggregation | sources in first-observed order with `citedByRecords` counts; a record citing a page no tool returned lands in `recordsWithoutEvidence` and `unverifiedUrls` and is **still returned**, never dropped |
+| The planning turn sees retrieved material | 42+12 tests: **a Phase 2 porting defect found here** — the transcript reached only the submission prompt, so the model chose its next action blind |
+| Java refuses an unusable curation request | `INVALID_CURATION_REQUEST` for a floor outside 0..1, a non-hostname "domain", a blank or absurd entity type (`SourceCurationPolicyTest`, 10 cases) |
+| No new dependency | robots fetching is stdlib `urllib` on a worker thread; no embedding provider, no second search engine, nothing installed from the reference repo |
 | Prompt → requirement → schema: three different requests, three distinct field sets | passed offline (`test_the_three_requests_yield_three_distinct_schemas`); **live confirmation blocked by free-tier quota**, see `docs/control/Memory.md` §2 |
 | Spring rejects an inconsistent AI requirement and blocks collection | passed — `research` never called (`verify(..., never())`) |
 | Needs-clarification returns without collecting | passed on both services |
@@ -137,7 +147,7 @@ Every row is a command run in that session, with counts, not an assertion.
 | Browser → Next → Spring → FastAPI health chain | passed (`aiService: UP`) |
 | Actuator liveness stays `UP` while MySQL is down | passed |
 | Real MySQL round-trip (`/ready` → 200) | **not achieved** — still needs a matching database user |
-| **Real Firecrawl execution** | **not performed.** `FIRECRAWL_API_KEY` has length 0 in both the shell and the root `.env`; `tests/test_live_firecrawl.py` skips all three cases and prints the reason. Gated behind `RUN_LIVE_FIRECRAWL_TESTS=true` |
+| **Real Firecrawl execution** | **not performed.** `FIRECRAWL_API_KEY` has length 0 in both the shell and the root `.env`; `tests/test_live_firecrawl.py` skips all four cases and prints the reason. Gated behind `RUN_LIVE_FIRECRAWL_TESTS=true` |
 | Live Gemini research run | **not performed** — a call would bill a free-tier key already at its 20 requests/day ceiling. Gated behind `RUN_LIVE_PROVIDER_TESTS=true` |
 
 ## Deliberately deferred out of Phase 1
@@ -219,6 +229,15 @@ is kept, adapted or dropped.
 - **S1 — site playbooks.** The loader works and is tested; the platform ships **zero** `SKILL.md`
   playbooks, and upstream's were not copied. Writing our own means observing real sites, which
   needs the key above. `ai-service/skills/README.md` documents the format and the rules.
+- **Q1 — is lexical relevance good enough?** `app/curation/relevance.py` counts requested
+  vocabulary in a title, snippet and URL path, saturating at four matched terms. The reference repo
+  used embedding cosine similarity; adding an embedding provider purely for ranking was declined.
+  Judge against live result sets, then decide between keeping it, setting `MIN_RELEVANCE_SCORE`, or
+  adding one Gemini rerank over the ~8 ranked candidates.
+- **Q2 — should an unreadable robots.txt keep refusing the source?** `ROBOTS_ON_ERROR=restrict` is
+  the default and refuses rather than fetches blind; the cost (a host with a flaky robots endpoint
+  yields no data) is unmeasured because no robots fetch has ever run here. Refusals are reported in
+  `validation.refusedSources` either way.
 - **A MySQL user the app can actually connect as.** Phase 1 verified configuration binding and
   the probe reaching the server, but `/ready` cannot return 200 until `MYSQL_USER`/`MYSQL_PASSWORD`
   match a real account with `finalagent_dev` granted.
@@ -234,7 +253,7 @@ is kept, adapted or dropped.
 |---|---|---|
 | `../AI-Powerd Data Intelligence` | proprietary | Primary reference: schema, contracts, quality pipeline, governance, UI design |
 | `../web-agent-main` | MIT | Firecrawl agent core: gates, prompts, toolkit discipline |
-| `../web-research-agent-master` | MIT | Prompts, ranking algorithm, retry formula |
+| `../web-research-agent-master` | MIT (LICENSE present) | Ranking/robots/retry/aggregation shapes, taken at Phase 5 with the mechanism changed (`docs/audit/C-repository-reuse-map.md` §C.3.1). Its Google CSE search and Azure embeddings were declined |
 | `../TheAgenticBrowser-main` | Community License — **no copying** | Critique/verification pattern only |
 | `../anakin-master` | AGPL-3.0 — **no copying** | Job lifecycle patterns only |
 | `../data-enrichment-js-main` | **MIT declared in `package.json` only — no licence text present** | Critique-gate pattern, graph bounds discipline (see `O`) |

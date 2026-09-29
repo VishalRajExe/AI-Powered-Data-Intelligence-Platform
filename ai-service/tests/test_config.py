@@ -128,3 +128,55 @@ def test_search_and_interact_have_their_own_timeouts():
     """They were one setting before Phase 4: a slow search was governed by a browser deadline."""
     settings = construct()
     assert settings.search_timeout_seconds != settings.interact_timeout_seconds
+
+
+# ------------------------------------------------------------------ curation, Phase 5
+
+
+def test_curation_defaults_are_conservative_but_not_blocking():
+    settings = construct()
+    assert settings.robots_enabled is True, "reading robots.txt is the default, not an option"
+    assert settings.robots_on_error == "restrict"
+    assert settings.min_relevance_score == 0.0, "a floor that drops sources must be chosen, not implied"
+    assert settings.retry_max_attempts == 3
+
+
+def test_the_retry_contract_is_built_from_settings_not_invented_per_call():
+    policy = construct(retry_max_attempts=2).retry_policy
+    assert policy.max_attempts == 2
+    assert policy.strategy == "exponential"
+    assert set(policy.retryable_errors) == {"TIMEOUT", "RATE_LIMIT", "TRANSIENT_NETWORK", "SERVER_ERROR"}
+
+
+def test_an_attempt_count_outside_the_contract_range_stops_startup():
+    """`RetryPolicy` bounds maxAttempts to 1-5; settings must not let a value escape that bound."""
+    with pytest.raises(ConfigurationError, match="RETRY_MAX_ATTEMPTS"):
+        construct(retry_max_attempts=0)
+    with pytest.raises(ConfigurationError, match="RETRY_MAX_ATTEMPTS"):
+        construct(retry_max_attempts=6)
+
+
+def test_a_backoff_ceiling_below_the_first_delay_would_be_a_lie():
+    with pytest.raises(ConfigurationError, match="RETRY_MAX_DELAY_SECONDS"):
+        construct(retry_base_delay_seconds=5.0, retry_max_delay_seconds=1.0)
+
+
+def test_the_relevance_floor_is_a_probability():
+    with pytest.raises(ConfigurationError, match="MIN_RELEVANCE_SCORE"):
+        construct(min_relevance_score=1.5)
+    with pytest.raises(ConfigurationError, match="MIN_RELEVANCE_SCORE"):
+        construct(min_relevance_score=-0.1)
+
+
+def test_a_user_agent_phrase_is_refused_because_robots_rules_match_on_substrings():
+    with pytest.raises(ConfigurationError, match="ROBOTS_USER_AGENT"):
+        construct(robots_user_agent="FinalAgent research bot (contact: ops@example.test)")
+    with pytest.raises(ConfigurationError, match="ROBOTS_USER_AGENT"):
+        construct(robots_user_agent="   ")
+    assert construct(robots_user_agent="finalagent-research").robots_user_agent == "finalagent-research"
+
+
+def test_the_robots_error_policy_only_accepts_the_two_honest_options():
+    with pytest.raises(Exception):
+        construct(robots_on_error="ignore")
+    assert construct(robots_on_error="allow").robots_on_error == "allow"

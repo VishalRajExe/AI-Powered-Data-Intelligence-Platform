@@ -235,6 +235,24 @@ Verdict from inspection: **hackathon-grade prototype, ~350 lines of real logic.*
 of every scraped page* into a throwaway vector store. At ~10 pages × ~50 chunks that is the
 dominant token cost of the whole run for one `k=5` retrieval. We do not reproduce it.
 
+### C.3.1 What Phase 5 actually took (2026-09-29)
+
+The rows above were the plan. This is what landed, including three destinations that changed:
+
+| Planned in C.3 | Built at Phase 5 | Difference |
+|---|---|---|
+| URL relevance ranking (`get_relevant_urls.py:3-24`), "ADAPT the embedding factory only if embeddings are needed" | `app/curation/relevance.py` + `ranking.py` | **Embeddings not adopted.** A second AI provider whose only job is ranking contradicts the one-LLM/one-engine architecture, so relevance is lexical and saturating with the mechanism stated in the module docstring. Ranking also gained the threshold upstream computed scores without ever using as a decision, and a per-domain diversity rule it lacked |
+| Retry backoff formula → `backend/.../governance/RetryPolicy.java` | `app/curation/retry.py` + `app/firecrawl/client.py` | **Different layer, on purpose.** The retry has to wrap the call that fails, which lives in Python. Java validates the *request shape* instead (`SourceCurationPolicy.java`). `app.contracts.RetryPolicy` — dead since Phase 0 — is now what the web client actually reads |
+| robots check (`web_scraper.py:18-31`), "re-fetches per URL" | `app/curation/robots.py` | Fixed as planned, plus HTTP-status handling: their code parsed a 500 error page as robots text and answered "allowed". Ours treats 401/403/404 as no rules (RFC 9309) and 5xx/unreachable as unknown, decided by `ROBOTS_ON_ERROR` |
+| Source aggregation (`result_aggregator_tool.py:25-40`), strikethrough for its `set()` ordering | `app/curation/aggregation.py` | Deterministic first-observed order, per-source citation counts, and records whose citation no tool retrieved are **flagged and returned**, never dropped |
+| Query-analysis prompt → "PORT the prompt" | `app/curation/queries.py` (dedupe + budget fitting only) | **The LLM call was not ported.** Phase 3's requirement analysis already emits `searchQueries` in the same structured call as the contract; a second model call to rewrite them is the duplicate search system Phase 5 was told not to build |
+| Chunking defaults → `app/extraction/chunking.py` | — | **Not built.** There is no chunking module in this project: pages arrive as Firecrawl markdown and are truncated by `MARKDOWN_TRUNCATE_CHARS`. Chunking only becomes necessary with an embedding or retrieval step, which was declined above |
+| CSE search, `test_mock.py` demo topics, hardcoded `gpt-4o-mini-2`/`M=10`/`k=5`, ephemeral Chroma, `print()` of page bodies | — | **No take**, as planned. Nothing in `ai-service` depends on any of it, and no `requirements.txt` from this repo is installed |
+
+Verified by: `tests/test_curation.py` (42), `tests/test_curation_pipeline.py` (12),
+`tests/test_canonical_urls.py` (7), plus 7 config cases. Every one runs on doubles — see
+`Memory.md` §5 for what that leaves unproven, and gates **Q1**/**Q2**.
+
 ---
 
 ## C.4 `TheAgenticBrowser-main` — **Community License: concepts only, no code**
@@ -314,7 +332,7 @@ adoption.
 |---|---|---|---|---|
 | Old project (`AI-Powerd Data Intelligence`) | proprietary (yours) | 0 files verbatim; schema + contracts + pipeline **ported** | ~40 components | entire `demo/` tree, silent fallbacks, fabricated route defaults, BullMQ/Redis layer, vendored TS core, hand-written OpenAPI, stale `Architecture.md`/`Design.md` |
 | `web-agent-main` | MIT (declared in `package.json`; no LICENSE file — risk **R2**) | **0 files copied.** The plan said "copy the `structured-extraction` SKILL.md and the prompt content"; neither happened. Prompts were rewritten around our own gates, and **no playbook content is copied at all** (gate **S1**) — see C.2.1 | `schema-validate`, the two enforcement gates, **toolkit gating and the interact timeout envelope + null-stripping (Phase 4)**, **the SKILL.md loader, domain match and traversal guard (Phase 4)**, event/tool-result shapes, compaction (deferred) | LangChain/deepagents harness, vendoring, `firecrawl-aisdk` (npm — would be a fourth runtime), subagents/workers/compaction, `bashExec`/`scrapeBash`, `map`/`crawl`/`extract`, Express template (kept as documented fallback) |
-| `web-research-agent-master` | MIT | 0 files verbatim | 2 prompts, retry backoff formula, chunking params, ranking algorithm (adapted) | ephemeral Chroma, scraper, aggregator code, Azure/CSE wiring, mock test |
+| `web-research-agent-master` | MIT | 0 files verbatim | **Taken at Phase 5:** relevance-ranking shape (lexical replacement), robots gate, retry formula (capped, jittered, actually used), source aggregation, query dedupe/budget-fitting. **Still owed:** conflict/citation prompt ideas for the quality phase. **Declined:** embeddings + Azure, Google CSE, the LLM query-analysis call, chunking defaults (no chunking exists here), ephemeral Chroma, hardcoded models/limits, demo fixtures |
 | `TheAgenticBrowser-main` | Community License | **0 — prohibited** | 8 patterns (critique loop, feedback→replan, termination thresholds, context hygiene, tool trace, task registry+SSE) | browser agent, DOM skills, Playwright manager, alpha pins |
 | `anakin-master` | AGPL-3.0 | **0 — prohibited** | 14 patterns (job schema information, lifecycle, pool/backpressure, `persistCtx`, executor flow, batch rollup, sync-poll UX, content detector, handler chain, SSRF, caching, shutdown ordering, sidecar watchdog, polling UX) | proxy bandit, memory store, telemetry |
 

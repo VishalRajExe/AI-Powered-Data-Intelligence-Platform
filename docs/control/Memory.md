@@ -12,16 +12,17 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 4 — Firecrawl web execution inside the research graph. **COMPLETE, with the
-  real-provider half unmeasured** (no `FIRECRAWL_API_KEY`; see §2 and §5). Phases 0, 1, 1.5, 2 and 3
-  are recorded above. The graph now runs `search`, `scrape` and an opt-in `interact` through one
-  Firecrawl seam, with per-run tool allowlists and site playbooks; nothing is persisted yet.
+- **Current Phase:** 5 — research quality integration. **COMPLETE, live-verified by nothing**
+  (see §2 and §5): every case ran on doubles, because there is still no `FIRECRAWL_API_KEY`.
+  Requirement → search strategy → relevant sources → source policy → Firecrawl → extraction is
+  now one connected path over one web engine. Phases 0-4 are recorded above; nothing is persisted.
 - **Last updated:** 2026-09-29
 - **Application code written:** three independent processes.
-  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 24 main source files, 10 test classes.
-  - `ai-service/` — FastAPI on Python. `config.py` (fail-loud settings), `contracts.py` (Pydantic
-    wire contracts), `security.py` (`X-API-Key`, constant-time), `logging_setup.py` (JSON +
-    masking), `api/v1/health.py`.
+  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 25 main source files, 11 test classes.
+  - `ai-service/` — FastAPI on Python 3.14 (3.12 pinned for deployment), 36 modules: config,
+    contracts, security, logging, `api/v1/{health,research,requirements}`, `llm/`, `firecrawl/`,
+    `extraction/`, `requirements/`, `research/` (graph, tools, state, prompts, skills, contracts)
+    and `curation/` (canonical, relevance, ranking, policy, robots, retry, queries, aggregation).
   - `frontend/` — Next.js 14.2.35. PirateAgentUI design foundation copied byte-identically
     (`diff -r` verified), 10 routes, `lib/api/` typed client.
   - Plus `database/`, `deploy/`, `scripts/`, `ai-service/skills/` (playbook loader docs), and the
@@ -29,13 +30,14 @@ existed, and that the system was production-ready — each contradicted by its o
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
   process; `scripts/verify.sh` runs every suite.
 - **Still not built:** the workflow planner and job engine, the MySQL schema and persistence, the
-  quality pipeline (normalize / validate / dedupe / entity-resolve), source governance (robots /
-  SSRF / host clearing before a URL is fetched *or driven*), SSE monitoring, exports, and
-  authentication. `POST /api/v1/research` runs the graph and returns the result, storing nothing.
+  quality pipeline (normalize / validate / dedupe / entity-resolve), host-resolution source
+  governance (SSRF and per-domain rate — robots *is* now enforced at fetch time), SSE monitoring,
+  exports, and authentication. `POST /api/v1/research` runs the graph and returns the result,
+  storing nothing.
 - **Repository:** `FINALAIAGENT` is its own git repo, pushed to branch `implementjava` of
   `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git` after every phase, per the
   standing rule. Its history is independent of `main` (old project), which has never been touched
-  from here. Phase 4 is the next commit to make.
+  from here. Phase 5 is the next commit to make.
 - **Blocked on:** decisions **G1**, **G2**, **S1** and the **L1** licence ruling (§6); a MySQL
   account the app can connect as; Python 3.12 before the provider extra is installed.
 
@@ -264,6 +266,66 @@ existed, and that the system was production-ready — each contradicted by its o
   exposes them; the graph's budget model is page-evidence shaped and a crawl would outrun it),
   per-URL robots/SSRF clearing (Spring's source-governance phase), and provider backoff.
 
+- [x] **Phase 5 (2026-09-29) — research quality integration.** The run now goes
+  requirement → search strategy → relevant sources → source policy → Firecrawl → extraction.
+  One search system (Firecrawl), one policy path, and every excluded source carries a reason.
+
+  | New / changed | Purpose |
+  |---|---|
+  | `app/curation/canonical.py` | URL page-identity: fragment, campaign params, `www.`, default port, insignificant trailing slash collapsed; scheme preserved, meaningful params sorted |
+  | `app/curation/relevance.py` | lexical scoring of a Firecrawl result against vocabulary derived from **that request** (objective, entity type, schema field names/descriptions) plus the request's own preferred domains |
+  | `app/curation/ranking.py` | score → drop duplicates → optional floor → per-domain diversity → top-N, deterministically ordered; every drop keeps a code and a reason |
+  | `app/curation/policy.py` | `SourcePolicy` — domain allow/block and robots in one decision path; `domain_allowed` moved here from `research/tools.py`; `extract_hostnames()` turns prose source wishes into hosts *or* notes |
+  | `app/curation/robots.py` | `HttpRobots`: one `robots.txt` per origin per run, stdlib fetch, bounded timeout, RFC-9309 status handling, `restrict`/`allow` on unreadable; `StaticRobots` double for tests |
+  | `app/curation/retry.py` | classification (`TIMEOUT`/`RATE_LIMIT`/`TRANSIENT_NETWORK`/`SERVER_ERROR`/`PERMANENT`), capped jittered backoff, bounded attempts — driven by `RetryPolicy`, which had existed since Phase 0 unused |
+  | `app/curation/queries.py` | `SearchStrategy` built for real: deduplicated, budget-fitted query plan |
+  | `app/curation/aggregation.py` | first-observed source order, per-source citation counts, records with no retrieved citation flagged and kept |
+  | `FirecrawlWeb` | retry on reads only, `WebError.kind`, `search`/`scrape`/`interact` deadlines separated, `retry_attempts` counter, `sleeper` seam |
+  | `research/{state,tools,graph}.py` | per-run policy + target; ranked search output shown to the model; canonical duplicate refusal; robots gate before scrape and before session; refusal/drop accounting in metadata and validation |
+  | `app/research/prompts/research.md` | **the planning turn now contains what has been retrieved** (see P9) |
+  | `/ai/v1/ready` `curation` block, `resolve_limits()`, `ResearchLimitsRequest` | the knobs and the request fields, ceiling-clamped |
+  | `backend/.../research/SourceCurationPolicy.java` + `WebToolPolicy` + DTO fields | Java refuses an unusable shape (impossible floor, prose "hostname", blank entity type, over-large caps) before a round trip |
+
+  Measured with `scripts/verify.sh`: **backend 80 mvn tests passed** (was 68), `mvn package` ok,
+  **ai-service 242 pytest passed, 8 skipped** (was 174/7). 68 cases added: 42 in
+  `test_curation.py`, 12 in `test_curation_pipeline.py`, 7 in `test_canonical_urls.py`, 7 config
+  assertions; plus one gated live robots case that skips here. Frontend typecheck, lint and build
+  unchanged and passing. **No new dependency was added** — robots fetching is stdlib `urllib` on a
+  worker thread, and nothing from `web-research-agent-master` (`chromadb`, `httpx`, `numpy`,
+  BeautifulSoup, LangChain) is installed or imported.
+
+  Reuse records:
+
+  | Repository | Source file | Feature | Destination | Method |
+  |---|---|---|---|---|
+  | web-research-agent-master | `utils/get_relevant_urls.py:3-24` | score every result, dedupe, sort, take top M | `curation/relevance.py`, `curation/ranking.py` | **PORT (concept), different mechanism** — cosine over Azure snippet embeddings replaced by saturating lexical scoring; threshold added (upstream computed scores and never used them as a decision) |
+  | web-research-agent-master | `utils/web_scraper.py:18-31` | robots.txt gate wired into the fetch path | `curation/robots.py`, `curation/policy.py` | **PORT + FIX** — per-origin cache (upstream: one GET per URL), our own UA token (upstream: literal `*`), status-aware (upstream: parsed a 500 HTML page as "no rules" and allowed), refusal reported (upstream: log and skip) |
+  | web-research-agent-master | `utils/web_scraper.py:33-45` | exponential backoff | `curation/retry.py`, `FirecrawlWeb._call` | **PORT + FIX** — cap and jitter added; classification added; the reference path shipped `fetch_page(url, 1)`, i.e. zero retries, while its README claimed three |
+  | web-research-agent-master | `utils/analyze_query.py:15-33` | LLM decomposition of a topic into subqueries | `curation/queries.py` | **PARTIAL** — decomposition already exists (Phase 3 emits `searchQueries` in the same structured call), so only dedupe + budget-fitting is ported. **No second query-LLM call**: that would be the duplicate search system this phase forbids |
+  | web-research-agent-master | `tools/result_aggregator_tool.py:39` | build the final source list | `curation/aggregation.py` | **PORT + FIX** — first-observed order instead of set iteration; per-source citation counts; uncited records flagged not dropped |
+  | web-research-agent-master | `main.py:64,73`, `analyze_query.py:39`, `content_analyzer_tool.py:10-11,30-31` | hardcoded `num_results=10`, `M=10`, `k=5`, `chunk_size=1000`, model `gpt-4o-mini-2`, and `search_strategy` misused as the retrieval query | — | **NO TAKE** — all became settings or do not exist here; the `search_strategy`-as-query bug is a defect, not a feature |
+  | web-research-agent-master | `tools/web_search_tool.py:7-14` | Google Custom Search as the search engine | — | **REJECTED** — Firecrawl is the only web engine; adding Google CSE would be a second permanent search stack |
+  | web-research-agent-master | `test_mock.py:18-22,49` | demo topic ("air pollution in India") with three fixed URLs | — | **NOT COPIED** — a fixed source set is the defect class this rebuild removed |
+  | web-research-agent-master | `requirements.txt` (`chromadb`, `beautifulsoup4`, `numpy`, `httpx`, LangChain) | its runtime | — | **NO DEPENDENCY** — none of it is used; nothing in this project imports it |
+
+  Defects found and fixed while writing these tests:
+
+  | # | Defect | How it surfaced |
+  |---|---|---|
+  | P9 | **The planning turn never saw the retrieved material.** The Phase 2 port passed the transcript only to the submission prompt, so `plan_action` chose the next action blind — it could not tell "I have the salary" from "I have nothing". `data-enrichment-js` hands the whole message list to `callAgentModel` (`graph.ts:43-109`); the port dropped that. | `test_the_planning_turn_sees_what_has_already_been_retrieved` — the first assertion failed because the URL was simply not in the prompt |
+  | P10 | **Robots verdicts were cached per origin instead of the file.** My first `HttpRobots` cached the *decision*, so a disallowed path poisoned the host (or an allowed one masked a disallowance). Fixed to cache the file text and evaluate per URL. | `test_a_disallowed_path_is_not_cached_as_though_the_whole_host_were_closed` |
+  | P11 | **Relevance normalised by the size of the target**, so a page that matched four of ten requested terms scored 0.18 and any usable floor would have dropped everything. Changed to saturation at four matched terms, with the reference point named in the code. | Measured: printing the scores for a clearly relevant result before writing the floor test |
+
+  **Not verified, stated plainly:** every case here runs on doubles. `FIRECRAWL_API_KEY` is still
+  blank (length 0 in the shell and in `.env`), so no live search, scrape, session or `robots.txt`
+  fetch has ever been made from this project. Specifically unmeasured: how long a real robots GET
+  takes (bounded at 5 s by config, unproven), whether `restrict` on unreadable robots would in
+  practice block a large share of useful sources, and whether lexical ranking is *good enough* —
+  it can only be judged against real result sets, not against fixtures I wrote to agree with it.
+
+  Deliberate non-additions: no embedding provider, no second search engine, no `map`/`crawl`
+  budget model, no DNS-resolving SSRF guard (still Spring's, and now sharpened — see R32/R37).
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -313,6 +375,12 @@ existed, and that the system was production-ready — each contradicted by its o
 | 2026-09-29 | **Site playbooks load deterministically from observed URLs instead of being offered to the model as `load_skill` / `lookup_site_playbook` tools.** | Upstream needs two extra tool round trips and hopes the agent calls them. Here the match happens on `state.observed_urls()`, so guidance appears exactly when the run touches that domain, costs no model turn, spends no budget, and is recorded in `metadata.playbooksUsed` for the reviewer |
 | 2026-09-29 | **No SKILL.md content is copied, and the platform ships zero playbooks.** | `web-agent-main`'s six playbooks describe its own demo targets. Copying them would smuggle a hardcoded default source list back in — the defect class `00-FORENSIC-AUDIT.md` §4 was written about — and `data-enrichment-js`'s enrichment targets are licence-unresolved (**L1**). The loader is real and tested; the content is this deployment's to write and verify |
 | 2026-09-29 | **Java validates tool-request *shape*; the tool *ceiling* stays in the Python service.** | Two ceilings would be two places to keep in sync and would disagree in production. Java refuses names it cannot honour, an empty list, an out-of-range session budget, and a budget for a tool the request did not ask for; the service that runs the tools and spends the credits decides which tools exist, and reports the intersection back in `metadata.enabledTools` |
+| 2026-09-29 | **Relevance is lexical and saturating, not an embedding similarity — and no embedding provider is added.** | Upstream ranks by cosine-similating the query against Azure OpenAI snippet embeddings (`get_relevant_urls.py:7-12`). Adopting that means a second AI provider whose only job is ranking, in a project that has one LLM and one web engine. Lexical scoring is deterministic, costs nothing, explains itself in `score.reasons`, and can be tested — with its weakness named in the module docstring rather than hidden. If it proves too weak against live result sets, the upgrade path is a Gemini rerank over ~8 candidates, not a new provider (**Q1**) |
+| 2026-09-29 | **Query analysis is *not* ported as a second LLM call.** | `web-research-agent-master` decomposes the topic with an LLM (`analyze_query.py:15-33`); Phase 3 already emits `searchQueries` inside the same structured call that produces the contract. Calling a model again to rewrite queries is the duplicate search system this phase forbids, so only its dedupe and budget-fitting halves are ported (`curation/queries.py`) |
+| 2026-09-29 | **Unreadable robots.txt refuses the source by default.** | Upstream already fails closed on exception (`web_scraper.py:29-31`) but accidentally: it parses a 500 error page as "no rules" and allows everything. Deliberate `restrict` is the position that cannot be argued to have bypassed a site's stated wishes; the cost — a host whose robots endpoint is flaky yields no data — is made visible via `validation.refusedSources` and switchable with `ROBOTS_ON_ERROR=allow` |
+| 2026-09-29 | **The `RetryPolicy` and `SearchStrategy` contracts from Phase 0 are now actually consumed** rather than inventing parallel config. | Both were ported as contract classes with no producer or reader. `Settings.retry_policy` builds the former for the web layer; `curation/queries.build_strategy` is the sole producer of the second, and `metadata.searchStrategy` reports what ran. A contract nobody reads is how the old project's `maxInfoToolCalls` and `max_requests_per_domain_per_minute` came to exist unwired |
+| 2026-09-29 | **Curation lives in Python, request *shape* is validated in Java, and the ceiling stays in one place.** | Same division as Phase 4's tool ceiling: the service that fetches decides and reports; Spring refuses nonsense before paying for a round trip. A second policy implementation in Java would be a second place for the two to disagree |
+| 2026-09-29 | **`domain_allowed` moved from `research/tools.py` to `curation/policy.py`.** | One policy path: allow/block and robots are decided by the same call that every tool consults, so a scrape cannot pass a check the search stage skipped |
 
 ## 4. Database / Schema Changes
 
@@ -443,6 +511,17 @@ Environment limits affecting verification:
   checkout; `/ai/v1/ready` reports `skills.loaded: 0` rather than failing. This is a deliberate
   alternative to copying upstream's six playbooks, whose targets would become an unverified default
   source list.
+- **The curation stage has never seen a real result set.** Phase 5's ranking, floors, domain caps
+  and `min_relevance_score` defaults were tuned against fixtures I wrote, which is exactly the
+  condition in which a relevance heuristic looks better than it is. Two numbers are therefore
+  provisional, not findings: whether lexical scoring ranks real Firecrawl results usefully (**Q1**),
+  and whether `ROBOTS_ON_ERROR=restrict` blocks a tolerable or an unacceptable share of sources
+  (no `robots.txt` fetch has ever been made from this machine).
+- **robots.txt is read from our egress, not the crawler's.** Firecrawl fetches the page;
+  `HttpRobots` fetches `robots.txt` from *this process*, so the two can disagree — a host that
+  blocks Firecrawl's IP or serves different rules to its crawler gets a policy we did not read.
+  `ROBOTS_USER_AGENT` is our token, and we honour what it is told. R37 records this as a standing
+  limitation rather than a solved problem.
 - **No completed live provider call has been made.** Phase 3 sent real requests to Gemini and they
   were rejected before generation — first by our own schema bugs (now fixed), then by quota
   (`429 RESOURCE_EXHAUSTED`). Firecrawl has never been called: no `FIRECRAWL_API_KEY` exists here.
@@ -471,6 +550,8 @@ Environment limits affecting verification:
 are declared on `ResearchGraph.NODES` / `EDGES`, so the template's topology is preserved and a later
 swap stays mechanical |
 | **S1** | Site playbooks: `app/research/skills.py` loads `SKILL.md` files, but this deployment ships **none**. Who writes them, against which verified targets, and does the demonstration need any? Format and rules are documented in `ai-service/skills/README.md`. | **Open — created at Phase 4.** The loader is tested (24 tests) and `SKILLS_DIR` defaults to a directory that does not exist yet, which is a supported state. Upstream's six playbooks were not copied; writing our own requires observing real sites, which needs a Firecrawl key |
+| **Q1** | Is lexical relevance good enough? `curation/relevance.py` counts requested vocabulary in a result's title, snippet and URL path, saturating at four matched terms. Upstream used embedding cosine similarity instead, and this build rejected adding an embedding provider for a ranking step. The alternative that does not add a provider is one Gemini rerank over the ~8 ranked candidates per search. | **Open — created at Phase 5.** Untestable here: the numbers below were chosen against fixtures, and there is no `FIRECRAWL_API_KEY` to produce real result sets. Judge with `RUN_LIVE_FIRECRAWL_TESTS=true` on ~20 searches, then decide between "keep lexical", "set `MIN_RELEVANCE_SCORE`", and "add a rerank call" |
+| **Q2** | Should `ROBOTS_ON_ERROR` stay `restrict`? A host whose robots endpoint 5xxes or is unreachable currently yields no data, by design. | **Open — created at Phase 5.** Fails closed on purpose (see §3), but the cost is unmeasured because no robots fetch has ever run here. Revisit with real hosts; `validation.refusedSources` reports the occurrences either way |
 
 ## 7. Environment / How to Run
 
@@ -522,10 +603,12 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 **Awaiting authorization.** Phases have been directed out of `M-phase-plan.md` order: Phase 3
 delivered the plan's Phase 4 (requirement understanding) and part of Phase 5 (schema generation),
-Phase 4 delivered the plan's Phase 6 web-execution half (Firecrawl tools inside the graph), while
-the plan's Phase 3 (authentication) and Phase 6 job engine (MySQL-backed execution) have not been
-built. That is not a problem to hide — but the ordering drift means `M` should be reconciled with
-reality before another phase is chosen.
+Phase 4 delivered the plan's Phase 6 web-execution half (Firecrawl tools inside the graph), and
+Phase 5 delivered most of the plan's Phase 7 (source governance) **at fetch time** — robots,
+domain policy, ranking and dedupe — while the plan's Phase 3 (authentication), Phase 6 job engine
+and host-resolution SSRF/rate limits remain unbuilt. That drift is not a problem to hide: `M` now
+carries a delivery note under Phases 7 and 8, and should be reconciled before another phase is
+chosen.
 
 Most valuable next candidates, in dependency order:
 
@@ -536,20 +619,21 @@ Most valuable next candidates, in dependency order:
    an open instance is a billing risk as well as a data one. `interact` raises that again: a run can
    now drive a live browser session, so `ALLOWED_WEB_TOOLS` must never be opened up on an
    unauthenticated deployment.
-3. **Source governance — URL clearing before collection.** Spring must clear a URL for robots
-   policy, SSRF and per-domain rate before the web layer fetches it (**R32**, now sharper: the graph
-   can also *act* on a URL). Domain allow/block lists exist per request, but nothing resolves them
-   to hosts yet.
-4. **Close the two live verifications** once credentials allow: Gemini quota for
-   `RUN_LIVE_PROVIDER_TESTS=true pytest -q tests/test_live_requirements.py -s`, and a real
-   `FIRECRAWL_API_KEY` for `RUN_LIVE_FIRECRAWL_TESTS=true pytest -q tests/test_live_firecrawl.py -s`.
-5. **Provider backoff** for 429/503, which the free-tier ceiling makes a normal condition rather
-   than an edge case.
+3. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
+   fetch (private/link-local/loopback refusal), enforce per-domain request rate
+   (`SearchStrategy.max_requests_per_domain_per_minute` exists and is now produced, but nothing
+   consumes it), and decide **Q2** about the robots default with real hosts.
+4. **Judge the ranking** (**Q1**) against live result sets once a Firecrawl key exists, then either
+   set a relevance floor, add a Gemini rerank over ~8 candidates, or leave lexical as is.
+5. **Provider backoff at the LLM layer** for 429/503 — the web layer now retries
+   (`curation/retry.py`); the Gemini client still surfaces the error without retrying, which the
+   free-tier ceiling makes a normal condition rather than an edge case.
 
 Still open: **G1** (demonstration strategy), **G2** (needs a Firecrawl key — see §6 for what Phase 4
 settled and what it did not), **B1** (a MySQL user), **L1** (enrichment-repo licence position — see
-`docs/control/THIRD-PARTY.md`), and new **S1** (who writes site playbooks, and whether the platform
-needs any before the demonstration).
+`docs/control/THIRD-PARTY.md`), **S1** (who writes site playbooks), and the two new Phase 5 gates
+**Q1** (is lexical relevance adequate) and **Q2** (should unreadable robots keep refusing), both of
+which need live web access to answer.
 
 ### Carried forward from Phase 2, still true
 

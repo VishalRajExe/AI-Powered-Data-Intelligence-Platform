@@ -10,13 +10,14 @@ from __future__ import annotations
 import pytest
 
 from app.config import Settings
+from app.curation import relevance
+from app.curation.policy import SourcePolicy
 from app.firecrawl.client import (
     FakeInteractiveWeb,
     FakeWeb,
     Interaction,
     Page,
     SearchHit,
-    WebError,
 )
 from app.llm.client import RecordingLlm
 from app.research import prompts
@@ -36,8 +37,12 @@ SCHEMA = {
                 "properties": {
                     "company": {"type": "string"},
                     "salary": {"type": "string"},
+                    # What app/requirements/schema.py always adds: a record that cannot name
+                    # the page it came from is not evidence, and the run should say so.
+                    "source_url": {"type": "string",
+                                   "description": "The page this record's values were read from."},
                 },
-                "required": ["company", "salary"],
+                "required": ["company", "salary", "source_url"],
                 "additionalProperties": False,
             },
         }
@@ -46,7 +51,9 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
-RECORDS = {"roles": [{"company": "Acme", "salary": "₹18-24 LPA"}]}
+RECORDS = {"roles": [{"company": "Acme", "salary": "₹18-24 LPA", "source_url": URL}]}
+UNCITED_RECORDS = {"roles": [{"company": "Acme", "salary": "₹18-24 LPA",
+                              "source_url": "https://elsewhere.test/never-fetched"}]}
 SATISFIED = {"is_satisfactory": True, "reason": ["fields present", "urls observed", "one role"],
              "improvement_instructions": ""}
 
@@ -71,6 +78,33 @@ def interactive_web(**overrides) -> FakeInteractiveWeb:
     )
     base.update(overrides)
     return FakeInteractiveWeb(**base)
+
+
+# The graph builds a policy and a relevance target per run; these do the same for the
+# tool-level tests, so each test states only what it is actually about.
+
+def policy_for(state: ResearchState, robots=None) -> SourcePolicy:
+    return SourcePolicy(allowed_domains=state.limits.allowed_domains,
+                        blocked_domains=state.limits.blocked_domains,
+                        robots=robots)
+
+
+def target_for(state: ResearchState):
+    return relevance.target_from(topic=state.topic, entity_type=state.limits.entity_type,
+                                 extraction_schema=state.extraction_schema,
+                                 preferred_domains=state.limits.preferred_domains)
+
+
+async def search(state, web, query):
+    return await run_search(state, web, query, policy=policy_for(state), target=target_for(state))
+
+
+async def scrape(state, web, url):
+    return await run_scrape(state, web, url, policy=policy_for(state))
+
+
+async def interact(state, web, url, prompt):
+    return await run_interact(state, web, url, prompt, policy=policy_for(state))
 
 
 # ------------------------------------------------------------------ schema shape
@@ -116,9 +150,9 @@ def test_the_prompt_forbids_using_a_browser_session_to_reach_past_access_control
 @pytest.mark.asyncio
 async def test_interact_is_refused_when_the_run_did_not_enable_it():
     state = state_for(allowed_tools=["search", "scrape"])
-    await run_search(state, interactive_web(), "acme")
+    await search(state, interactive_web(), "acme")
 
-    outcome = await run_interact(state, interactive_web(), URL, "open the salary filter")
+    outcome = await interact(state, interactive_web(), URL, "open the salary filter")
 
     assert outcome.ok is False
     assert "not enabled" in (outcome.error or "")
@@ -129,9 +163,9 @@ async def test_interact_is_refused_when_the_run_did_not_enable_it():
 async def test_interact_is_refused_when_the_engine_cannot_do_it():
     """A web engine without browser sessions is a supported configuration, not a crash."""
     state = state_for()
-    await run_search(state, FakeWeb(search_results=[[SearchHit(url=URL)]]), "acme")
+    await search(state, FakeWeb(search_results=[[SearchHit(url=URL)]]), "acme")
 
-    outcome = await run_interact(state, FakeWeb(), URL, "open it")
+    outcome = await interact(state, FakeWeb(), URL, "open it")
 
     assert outcome.ok is False
     assert "no browser session support" in (outcome.error or "")
@@ -141,29 +175,30 @@ async def test_interact_is_refused_when_the_engine_cannot_do_it():
 async def test_a_url_must_be_retrieved_before_the_agent_can_drive_it():
     state = state_for()
 
-    outcome = await run_interact(state, interactive_web(), URL, "open the salary filter")
+    outcome = await interact(state, interactive_web(), URL, "open the salary filter")
 
     assert outcome.ok is False
     assert "has not been retrieved" in (outcome.error or "")
 
 
 @pytest.mark.asyncio
-async def test_the_domain_policy_applies_to_interact_as_it_does_to_scrape():
+async def test_the_source_policy_applies_to_interact_as_it_does_to_scrape():
     state = state_for(blocked_domains=["acme.test"])
-    await run_search(state, interactive_web(), "acme")
+    await search(state, interactive_web(), "acme")
 
-    outcome = await run_interact(state, interactive_web(), URL, "open it")
+    outcome = await interact(state, interactive_web(), URL, "open it")
 
     assert outcome.ok is False
-    assert "outside the domain policy" in (outcome.error or "")
+    assert "block list" in (outcome.error or "")
+    assert state.refusals, "a refusal has to be recorded, not just returned"
 
 
 @pytest.mark.asyncio
 async def test_an_empty_prompt_is_refused_without_spending_budget():
     state = state_for()
-    await run_search(state, interactive_web(), "acme")
+    await search(state, interactive_web(), "acme")
 
-    outcome = await run_interact(state, interactive_web(), URL, "  ")
+    outcome = await interact(state, interactive_web(), URL, "  ")
 
     assert outcome.ok is False
     assert state.budget.interactions_used == 0
@@ -173,11 +208,11 @@ async def test_an_empty_prompt_is_refused_without_spending_budget():
 async def test_the_interaction_budget_is_a_hard_stop():
     web = interactive_web()
     state = state_for(max_interactions_per_run=1)
-    await run_search(state, web, "acme")
-    await run_scrape(state, web, URL)
+    await search(state, web, "acme")
+    await scrape(state, web, URL)
 
-    first = await run_interact(state, web, URL, "one")
-    second = await run_interact(state, web, URL, "two")
+    first = await interact(state, web, URL, "one")
+    second = await interact(state, web, URL, "two")
 
     assert first.ok is True
     assert second.ok is False
@@ -191,10 +226,10 @@ async def test_the_interaction_budget_is_a_hard_stop():
 async def test_a_successful_interact_becomes_evidence_and_upgrades_the_source():
     web = interactive_web()
     state = state_for()
-    await run_search(state, web, "acme")
-    await run_scrape(state, web, URL)
+    await search(state, web, "acme")
+    await scrape(state, web, URL)
 
-    outcome = await run_interact(state, web, URL, "open the salary filter")
+    outcome = await interact(state, web, URL, "open the salary filter")
 
     assert outcome.ok is True
     assert "18-24 LPA" in outcome.content
@@ -208,10 +243,10 @@ async def test_a_timeout_is_reported_as_a_refusal_with_its_fallback_advice():
                             error="interact timed out after 60.0s; fall back to scrape.")
     web = interactive_web(interactions={URL: timed_out})
     state = state_for()
-    await run_search(state, web, "acme")
-    await run_scrape(state, web, URL)
+    await search(state, web, "acme")
+    await scrape(state, web, URL)
 
-    outcome = await run_interact(state, web, URL, "paginate")
+    outcome = await interact(state, web, URL, "paginate")
 
     assert outcome.ok is False
     assert "fall back to scrape" in (outcome.error or "")
@@ -222,10 +257,10 @@ async def test_a_timeout_is_reported_as_a_refusal_with_its_fallback_advice():
 async def test_an_sdk_failure_becomes_a_tool_error_rather_than_a_failed_run():
     web = interactive_web(fail_interact_urls={URL})
     state = state_for()
-    await run_search(state, web, "acme")
-    await run_scrape(state, web, URL)
+    await search(state, web, "acme")
+    await scrape(state, web, URL)
 
-    outcome = await run_interact(state, web, URL, "open it")
+    outcome = await interact(state, web, URL, "open it")
 
     assert outcome.ok is False
     assert "refused" in (outcome.error or "")
@@ -235,9 +270,10 @@ async def test_an_sdk_failure_becomes_a_tool_error_rather_than_a_failed_run():
 async def test_browser_sessions_are_not_available_in_parallel_batch_execution():
     """Upstream gives parallel workers search and scrape only (`worker/index.ts:61`)."""
     state = state_for()
-    await run_search(state, interactive_web(), "acme")
+    await search(state, interactive_web(), "acme")
 
-    outcomes = await execute_many(state, interactive_web(), [("interact", URL), ("scrape", URL)])
+    outcomes = await execute_many(state, interactive_web(), [("interact", URL), ("scrape", URL)],
+                                  policy=policy_for(state), target=target_for(state))
 
     refused = [outcome for outcome in outcomes if outcome.name == "interact"]
     assert len(refused) == 1 and refused[0].ok is False

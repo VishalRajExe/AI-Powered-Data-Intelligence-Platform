@@ -28,7 +28,8 @@ class ResearchWireContractTest {
                 Map.of("type", "object", "properties", Map.of("channels", Map.of("type", "array")),
                         "required", List.of("channels"), "additionalProperties", false),
                 new ResearchRequest.Limits(6, 5, 8, 12, 2, 20, List.of("youtube.com"),
-                        List.of("reddit.com"), List.of("search", "scrape", "interact")),
+                        List.of("reddit.com"), List.of("search", "scrape", "interact"),
+                        "youtube_channel", List.of("youtube.com"), 2, 0.35, 20),
                 List.of("best coding channels"));
 
         String json = mapper.writeValueAsString(request);
@@ -40,9 +41,17 @@ class ResearchWireContractTest {
                 .contains("\"maxInteractionsPerRun\"")
                 .contains("\"expectedRecords\"")
                 .contains("\"allowedTools\"")
+                .contains("\"entityType\"")
+                .contains("\"preferredDomains\"")
+                .contains("\"maxSourcesPerDomain\"")
+                .contains("\"minRelevanceScore\"")
+                .contains("\"desiredSources\"")
                 .doesNotContain("extraction_schema")
                 .doesNotContain("seed_queries")
-                .doesNotContain("allowed_tools");
+                .doesNotContain("allowed_tools")
+                .doesNotContain("entity_type")
+                .doesNotContain("preferred_domains")
+                .doesNotContain("min_relevance_score");
     }
 
     @Test

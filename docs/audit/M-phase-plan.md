@@ -233,6 +233,29 @@ crawl-delay; relevance ranking is deterministic and the score is persisted. **No
 fetched that governance did not clear** — asserted by a test that fails if Python receives an
 uncleared URL.
 
+### Partially delivered early — session Phase 5 (2026-09-29), **in Python, not Java**
+
+The plan placed this phase's logic in Spring. Phase 5 put the parts that must be decided at the
+moment of fetch in `ai-service/app/curation/` instead. That is a deliberate deviation and is
+recorded as one: the component that performs the request is the component that can guarantee the
+refusal, and a Java-side check on a URL string cannot speak for the address that URL resolves to
+or redirects through. Java keeps what it can genuinely enforce — request shape, tenancy, and once
+built, host pre-resolution before the call.
+
+| Planned | Built at Phase 5 | State |
+|---|---|---|
+| `RobotsPolicyService` — configurable UA, UA-group parsing, allow/disallow specificity, crawl-delay, per-origin cache, bounded response, fail closed | `app/curation/robots.py` + `policy.py` | **Mostly done, in Python.** UA token, per-origin cache, 64 KiB cap, status-aware fail-closed (`ROBOTS_ON_ERROR`), refusals recorded. **`crawl-delay` is not honoured** — `urllib.robotparser` does not expose it |
+| `SourceRelevanceRanker` — ported weights as configuration, score floor, zero-norm guard, domain diversity | `app/curation/{relevance,ranking}.py` | **Done, different mechanism:** lexical saturation instead of embedding cosine (**Q1**). Floor, per-domain cap, deterministic tie-break and the empty-target guard are all present |
+| Source lifecycle states with reasons | `state.refusals` → `validation.refusedSources`, `metadata.candidatesDropped`, `duplicateSourcesCollapsed`, `sourcesRefused` | Partial: every refusal and drop carries a code and a reason in the result, but **nothing is persisted**, so there is no `BLOCKED` row to query — there is still no schema |
+| `SsrfGuard` + DNS preflight against rebinding | — | **Not built.** Scheme/shape validation and domain allow/block only. R32 stays open and is now sharper: a run can also *act* on a URL |
+| `DomainRateLimiter` (Bucket4j, robots crawl-delay as floor) | — | **Not built.** `SearchStrategy.max_requests_per_domain_per_minute` now has a producer (`curation/queries.py`) and nothing consuming it; the per-origin robots cache is the only accidental throttle |
+| `source_domain_policy` resolution with platform defaults, 60s cache | per-request `allowedDomains`/`blockedDomains`; preference hosts extracted from the requirement | Partial, and the "platform default" tier is deliberately absent: a stored parent-domain→default table is how a hardcoded source list returns. The robots cache is per-run rather than 60s cross-run, so a site's edit takes effect on the next run |
+| `POST /ai/v1/collect/search`, `GET /api/v1/sources` | the policy travels with `POST /ai/v1/research` | Deferred with persistence: there is no dataset to list sources for |
+
+**Exit criteria still owed:** the SSRF guard with every address class tested, `crawl-delay`
+honoured, a real per-domain rate limiter, and the persistence that turns "no source is fetched
+that governance did not clear" from a runtime refusal into an auditable assertion.
+
 ---
 
 ## Phase 8 — Collection & extraction

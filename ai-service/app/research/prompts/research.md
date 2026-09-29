@@ -21,6 +21,10 @@ Reply with exactly one action, chosen from the ones this run enables:
 
 {playbooks}
 
+## What has been retrieved so far in this run
+
+{transcript}
+
 ## Rules
 
 1. Every value you will later submit must come from material retrieved during this run.

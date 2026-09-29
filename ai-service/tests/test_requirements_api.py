@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app.curation.robots import StaticRobots
 from app.firecrawl.client import FakeWeb, Page, SearchHit
 from app.llm.client import RecordingLlm
 from app.main import create_app
@@ -39,6 +40,9 @@ def client_with(settings, payloads, web=None) -> TestClient:
                                                       markdown="python tutorials channel",
                                                       status_code=200)},
         ),
+        # These tests follow the requirement → contract → collection chain. The robots gate is
+        # exercised deliberately in tests/test_curation.py, not as a DNS accident here.
+        robots=lambda: StaticRobots(),
     ))
 
 
@@ -115,7 +119,18 @@ def test_from_prompt_runs_the_graph_when_the_contract_is_complete(settings):
 
     body = response.json()
     assert response.status_code == 200
-    assert body["status"] in {"COMPLETED", "COMPLETED_WITH_WARNINGS"}, body.get("research")
+    # The fixture's requirement asks for 20 channels and the scripted run collects one, so
+    # `COMPLETED_WITH_WARNINGS` with a named shortfall is the correct answer. A run that fell
+    # short and reported plain success is the failure mode this project was rebuilt to remove.
+    assert body["status"] == "COMPLETED_WITH_WARNINGS", body.get("research")
     assert body["research"]["records"], "the pipeline must deliver records"
+    assert any("expected at least 20 records" in warning
+               for warning in body["research"]["validation"]["warnings"])
     assert web.search_calls == ["best coding youtube channels", "python tutorials channels"], \
         "the requirement's own search queries should seed collection"
+    # The requirement's search queries are what ran, and the record cites a URL this run
+    # actually retrieved — that is the whole evidence promise of the pipeline.
+    strategy = body["research"]["metadata"]["searchStrategy"]
+    assert strategy["queries"] == ["best coding youtube channels", "python tutorials channels"]
+    assert body["research"]["sources"][0]["verifiedByTool"] is True
+    assert body["research"]["validation"]["recordsWithoutEvidence"] == []

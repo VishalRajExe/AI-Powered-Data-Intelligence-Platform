@@ -228,4 +228,37 @@ class ResearchControllerTest {
                 "seedQueries", List.of(),
                 "limits", limits));
     }
+
+    @Test
+    void anImpossibleRelevanceFloorIsRejectedLocally() throws Exception {
+        mockMvc.perform(post("/api/v1/research")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyWithLimits(Map.of("minRelevanceScore", 1.5))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code", is("INVALID_CURATION_REQUEST")));
+
+        verifyNoInteractions(aiServiceClient);
+    }
+
+    @Test
+    void aCurationRequestWithinBoundsIsForwarded() throws Exception {
+        when(aiServiceClient.research(any(ResearchRequest.class))).thenReturn(sampleResult());
+
+        mockMvc.perform(post("/api/v1/research")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyWithLimits(Map.of(
+                                "entityType", "job",
+                                "preferredDomains", List.of("acme.test"),
+                                "maxSourcesPerDomain", 2,
+                                "minRelevanceScore", 0.2,
+                                "desiredSources", 25))))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<ResearchRequest> sent = ArgumentCaptor.forClass(ResearchRequest.class);
+        org.mockito.Mockito.verify(aiServiceClient).research(sent.capture());
+        assertThat(sent.getValue().limits().entityType()).isEqualTo("job");
+        assertThat(sent.getValue().limits().preferredDomains()).containsExactly("acme.test");
+        assertThat(sent.getValue().limits().minRelevanceScore()).isEqualTo(0.2);
+        assertThat(sent.getValue().limits().desiredSources()).isEqualTo(25);
+    }
 }

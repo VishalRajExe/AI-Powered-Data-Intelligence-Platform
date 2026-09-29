@@ -306,11 +306,55 @@ using a session to get past a login screen, CAPTCHA or paywall; session concurre
 below general concurrency. **None of that substitutes for source governance (R32) or authz — both
 still have to land before this is switched on in a deployment.**
 
-## L.9 Where the risk list came from
+## L.10 Added at Phase 5 — curation decisions nobody has measured yet
+
+**R36 — Lexical relevance can rank the wrong page first, and the run will spend budget on it.**
+Severity: Moderate. Likelihood: High against real result sets. `curation/relevance.py` counts
+requested vocabulary in a title, snippet and URL path; it has no notion of meaning, authority or
+recency, so a "10 best VR games" list can outrank developer documentation for a query containing
+*developer* if the list happens to use more of the requested words. Mitigation: scores and the
+matched/missed term list are returned in `droppedCandidates` and the tool output, so a wrong
+ranking is visible rather than silent; `MIN_RELEVANCE_SCORE` and `MAX_SOURCES_PER_DOMAIN` are
+operator-settable; the ranking is deterministic, so the same inputs give the same order. Gate
+**Q1** exists because the counterfactual — embedding cosine, as the reference repo does — was
+declined for architectural reasons and has never been compared on this project's data.
+
+**R37 — We read robots.txt from our own network position, not the crawler's.** Severity: High.
+Likelihood: Medium. Firecrawl fetches the page; `HttpRobots` fetches `robots.txt` from this
+process. A site can therefore answer us differently than it answers Firecrawl — geographically, by
+IP reputation, or by serving our user-agent a different file than the one its crawler honours. Our
+gate then records a permission the actual collector never sought. Mitigation: `ROBOTS_USER_AGENT`
+is a single honest token and is what we ask about; the refusal or permission is recorded per origin
+per run; `robots.txt` is never cached across runs, so a site's edit applies immediately. Unmet:
+asking Firecrawl to honour the policy itself (no such parameter is used or verified here), which
+is the only way to make the two positions identical.
+
+**R38 — `ROBOTS_ON_ERROR=restrict` can starve collection on hosts with flaky robots endpoints.**
+Severity: Moderate. Likelihood: Medium, unmeasured. A host whose `/robots.txt` returns 5xx, times
+out or is unreachable yields no data at all from this run — by design, because "we could not check"
+is not permission. On a target list where several sites have broken robots endpoints, a run returns
+few records and a caller may read that as "the data does not exist". Mitigation: every such case is
+a row in `validation.refusedSources` with `code: robots-unreachable` and the reason, plus a warning
+naming the count; `ROBOTS_ON_ERROR=allow` is one environment variable away and marks the run as
+having proceeded without a readable policy rather than pretending it was checked. Gate **Q2** asks
+whether the default survives contact with real hosts.
+
+**R39 — Retry turns one slow failure into up to three, inside a step that already has a budget.**
+Severity: Low. Likelihood: Low. `RETRY_MAX_ATTEMPTS=3` with a 1 s base and 20 s ceiling can add
+~3 s of waiting to a scrape, and a step that retries every failure can spend more wall-clock time
+than a plan budget expects. Mitigation: reads only — a browser session is never retried, because
+each attempt would create another billable session (`test_the_web_client_does_not_retry_a_browser_session`);
+`PERMANENT` classifications short-circuit after one attempt; attempts are counted in
+`metadata.retriesAttempted` so cost is visible; and the plan-level `timeoutMs` on `PlanStep` remains
+the outer bound once the job engine exists.
+
+## L.11 Where the risk list came from
 
 `R1`–`R27` are findings against the old project, read from source and measured where the claim was
 checkable. `R28`–`R32` are Phase 1.5 findings about the two enrichment repositories. `R33`–`R35`
 are Phase 4 findings about what this build can now do that it could not before: act on a page,
-load guidance written by someone else, and bill for a session nobody has timed.
+load guidance written by someone else, and bill for a session nobody has timed. `R36`–`R39` are
+Phase 5 findings about judgements made without data: how relevance is scored, who is asked about
+robots, what happens when the answer cannot be read, and how many times a failure is retried.
 
 Next: `M-phase-plan.md`.

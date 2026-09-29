@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.curation.policy import domain_allowed
 from app.firecrawl.client import WebError, normalize_page, normalize_search, validated_http_url
-from app.research.tools import domain_allowed
 
 
 def test_search_results_are_read_from_the_web_channel():

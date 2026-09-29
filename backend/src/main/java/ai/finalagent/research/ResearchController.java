@@ -41,6 +41,7 @@ public class ResearchController {
     public ResearchResult research(@Valid @RequestBody ResearchRequest request) {
         ExtractionSchemaValidator.validate(request.extractionSchema());
         WebToolPolicy.validate(request.limits());
+        SourceCurationPolicy.validate(request.limits());
         return aiServiceClient.research(request);
     }
 
@@ -54,6 +55,12 @@ public class ResearchController {
     @ExceptionHandler(WebToolPolicy.InvalidWebToolRequestException.class)
     public ErrorResponse handleInvalidWebTools(WebToolPolicy.InvalidWebToolRequestException e) {
         return ErrorResponse.of("INVALID_WEB_TOOLS", e.getMessage());
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(SourceCurationPolicy.InvalidCurationRequestException.class)
+    public ErrorResponse handleInvalidCuration(SourceCurationPolicy.InvalidCurationRequestException e) {
+        return ErrorResponse.of("INVALID_CURATION_REQUEST", e.getMessage());
     }
 
     @ExceptionHandler(AiServiceClient.AiServiceException.class)

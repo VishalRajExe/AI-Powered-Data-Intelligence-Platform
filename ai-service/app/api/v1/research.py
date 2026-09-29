@@ -14,6 +14,7 @@ from pydantic import Field, field_validator
 
 from app.config import Settings
 from app.contracts import CamelModel
+from app.curation.policy import extract_hostnames
 from app.llm.client import LlmError
 from app.research import prompts
 from app.research.contracts import ResearchLimitsRequest, ResearchRequest
@@ -36,6 +37,7 @@ async def research(payload: ResearchRequest, request: Request):
         web=request.app.state.web,
         settings=settings,
         skills=request.app.state.skills,
+        robots=request.app.state.robots(),
     )
 
     try:
@@ -105,7 +107,7 @@ async def research_from_prompt(payload: FromPromptRequest, request: Request):
 
     limits = analysis_limits(payload.limits, settings, analysis)
     graph = ResearchGraph(llm=request.app.state.llm, web=request.app.state.web, settings=settings,
-                          skills=request.app.state.skills)
+                          skills=request.app.state.skills, robots=request.app.state.robots())
     try:
         outcome = await graph.run(
             topic=analysis.brief,
@@ -123,7 +125,24 @@ async def research_from_prompt(payload: FromPromptRequest, request: Request):
 
 def analysis_limits(limits: ResearchLimitsRequest | None, settings: Settings,
                     analysis: RequirementAnalysis) -> ResearchLimits:
-    return resolve_limits(limits, settings, expected_records=expected_records(analysis.requirement))
+    """Resolve the request, then fold the requirement's own source wishes into the policy.
+
+    The user said what they want collected; that is where preferred and avoided domains come
+    from. Only host-shaped preferences become a domain rule — a prose one like "their own
+    website" is carried as a note and reported, because turning it into a guessed domain would
+    be inventing policy the user never stated.
+    """
+    resolved = resolve_limits(limits, settings, expected_records=expected_records(analysis.requirement))
+    requirement = analysis.requirement
+
+    preference_hosts, preference_notes = extract_hostnames(list(requirement.source_preferences))
+    restriction_hosts, restriction_notes = extract_hostnames(list(requirement.source_restrictions))
+
+    resolved.preferred_domains = list(dict.fromkeys(resolved.preferred_domains + preference_hosts))
+    resolved.blocked_domains = list(dict.fromkeys(resolved.blocked_domains + restriction_hosts))
+    resolved.entity_type = resolved.entity_type or requirement.entity_type
+    resolved.source_preference_notes = preference_notes + restriction_notes
+    return resolved
 
 
 def resolve_limits(payload: ResearchLimitsRequest | None, settings: Settings,
@@ -167,5 +186,14 @@ def resolve_limits(payload: ResearchLimitsRequest | None, settings: Settings,
         else expected_records,
         allowed_domains=list(resolved.allowed_domains),
         blocked_domains=list(resolved.blocked_domains),
+        entity_type=resolved.entity_type,
+        preferred_domains=list(resolved.preferred_domains),
+        max_sources_per_domain=(resolved.max_sources_per_domain
+                                if resolved.max_sources_per_domain is not None
+                                else settings.max_sources_per_domain),
+        min_relevance_score=(resolved.min_relevance_score if resolved.min_relevance_score is not None
+                             else settings.min_relevance_score),
+        max_candidates_per_search=settings.max_candidates_per_search,
+        desired_sources=resolved.desired_sources,
         model_id=settings.llm_model_id,
     )

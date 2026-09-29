@@ -30,6 +30,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import Settings
+from app.curation import queries, relevance
+from app.curation.aggregation import aggregate_sources
+from app.curation.policy import SourcePolicy
+from app.curation.robots import RobotsGate
 from app.extraction.schema_validate import field_checklist, validate_against_schema
 from app.firecrawl.client import WebTool
 from app.llm.client import LlmClient
@@ -86,13 +90,17 @@ class ResearchGraph:
     }
 
     def __init__(self, *, llm: LlmClient, web: WebTool, settings: Settings,
-                 skills: SkillLibrary | None = None) -> None:
+                 skills: SkillLibrary | None = None,
+                 robots: RobotsGate | None = None) -> None:
         self._llm = llm
         self._web = web
         self._settings = settings
         # None means "no playbooks", which is the shipped default until this deployment
         # writes its own. It is not a fallback to a built-in set: there is none.
         self._skills = skills
+        # One gate per run, so robots.txt is cached within a run but never goes stale across
+        # runs — a file fetched for a long-lived process would otherwise outlive the site's edit.
+        self._robots = robots
 
     async def run(
         self,
@@ -109,18 +117,38 @@ class ResearchGraph:
             max_scrapes_per_run=self._settings.max_scrapes_per_run,
             max_interactions_per_run=self._settings.max_interactions_per_run,
             allowed_tools=list(self._settings.allowed_web_tools),
+            max_sources_per_domain=self._settings.max_sources_per_domain,
+            min_relevance_score=self._settings.min_relevance_score,
+            max_candidates_per_search=self._settings.max_candidates_per_search,
             model_id=self._settings.llm_model_id,
         )
         state = ResearchState(topic=topic, extraction_schema=extraction_schema, limits=resolved)
         checklist = field_checklist(extraction_schema)
+        # Requirement → search strategy → relevant sources → source policy → Firecrawl.
+        strategy = queries.build_strategy(queries=(seed_queries or []),
+                                         max_queries=resolved.max_searches_per_run,
+                                         desired_sources=resolved.desired_sources)
+        policy = SourcePolicy(allowed_domains=resolved.allowed_domains,
+                              blocked_domains=resolved.blocked_domains,
+                              robots=self._robots)
+        target = relevance.target_from(topic=topic, entity_type=resolved.entity_type,
+                                       extraction_schema=extraction_schema,
+                                       preferred_domains=resolved.preferred_domains,
+                                       blocked_domains=resolved.blocked_domains)
         # A tool the ceiling removed is not offered to the model at all, so an attempt to
         # use it is a contract violation rather than a plausible-looking turn.
         enabled_tools = [tool for tool in prompts.DATA_ACTIONS if tool in set(resolved.allowed_tools)]
         valid_actions = (*enabled_tools, *prompts.CONTROL_ACTIONS)
         started = time.perf_counter()
 
-        for query in (seed_queries or [])[: resolved.max_searches_per_run]:
-            await self._collect(state, {"action": "search", "query": query})
+        for query in strategy.queries:
+            await self._collect(state, {"action": "search", "query": query}, policy=policy, target=target)
+        state.search_strategy = {
+            "queries": list(strategy.queries),
+            "requestedQueries": list(seed_queries or []),
+            "droppedQueries": queries.dropped_count(requested=list(seed_queries or []),
+                                                    strategy=strategy),
+        }
 
         while True:
             if not state.budget.model_allowed():
@@ -151,7 +179,7 @@ class ResearchGraph:
                 )
 
             if kind in enabled_tools:
-                outcome = await self._collect(state, action)
+                outcome = await self._collect(state, action, policy=policy, target=target)
                 if outcome is not None and not outcome.ok:
                     state.tool_errors.append(outcome.error or "tool failed")
                 continue
@@ -235,8 +263,10 @@ class ResearchGraph:
         state.add(Message(role="assistant", content=str(action), name="plan_action"))
         return action
 
-    async def _collect(self, state: ResearchState, action: dict[str, Any]):
-        outcomes = await tools.execute_action(state, self._web, action)
+    async def _collect(self, state: ResearchState, action: dict[str, Any], *,
+                       policy: SourcePolicy, target: relevance.RelevanceTarget):
+        outcomes = await tools.execute_action(state, self._web, action,
+                                             policy=policy, target=target)
         result = outcomes[0] if outcomes else None
         if result is None:
             return None
@@ -303,16 +333,13 @@ class ResearchGraph:
             return list(submitted[longest])
         return [submitted]
 
-    def _record_provenance(self, record: dict[str, Any], state: ResearchState) -> tuple[list[dict], list[str]]:
-        """Attach observed sources to a record; flag URLs it mentions that we never fetched."""
+    @staticmethod
+    def _mentioned_urls(record: dict[str, Any]) -> list[str]:
         mentioned: list[str] = []
         for value in record.values():
             if isinstance(value, str):
                 mentioned.extend(match.group(0) for match in _URL_IN_VALUE.finditer(value))
-
-        supported = [state.sources[url].as_dict() for url in dict.fromkeys(mentioned) if url in state.sources]
-        unverified = [url for url in dict.fromkeys(mentioned) if url not in state.sources]
-        return supported, unverified
+        return list(dict.fromkeys(mentioned))
 
     def _metadata(self, state: ResearchState, checklist: list[str], started: float) -> dict[str, Any]:
         return {
@@ -328,11 +355,20 @@ class ResearchGraph:
             "repairAttempts": state.repair_attempts,
             "sourceCount": len(state.sources),
             "schemaFieldCount": len(checklist),
+            # Curation accounting: what the search strategy planned, what was dropped before it
+            # became a candidate, what a policy refused, and how many extra provider attempts
+            # the retry layer spent. Without these a run that filtered 40 results down to 3 and
+            # a run that found 3 look identical from the outside.
+            "searchStrategy": state.search_strategy,
+            "candidatesDropped": len(state.dropped_candidates),
+            "duplicateSourcesCollapsed": state.duplicates_collapsed,
+            "sourcesRefused": len(state.refusals),
+            "retriesAttempted": getattr(self._web, "retry_attempts", 0),
             "durationMs": int((time.perf_counter() - started) * 1000),
         }
 
     def _validation(self, state: ResearchState, gate: dict[str, Any] | None, critique: _Critique | None,
-                    warnings: list[str], unverified: list[str]) -> dict[str, Any]:
+                    warnings: list[str], aggregation) -> dict[str, Any]:
         validation = {
             "schemaValid": bool(gate.get("ok")) if gate else True,
             "missingFields": gate.get("missing", []) if gate else [],
@@ -340,7 +376,12 @@ class ResearchGraph:
             "repairsUsed": state.repair_attempts,
             "critiqueSatisfactory": critique.satisfactory if critique else None,
             "critiqueReasons": critique.reasons if critique else [],
-            "unverifiedUrls": unverified,
+            "unverifiedUrls": list(aggregation.unverified_urls) if aggregation else [],
+            "recordsWithoutEvidence": (list(aggregation.record_indices_without_evidence)
+                                       if aggregation else []),
+            "duplicateSourcesCollapsed": aggregation.duplicates_collapsed if aggregation else 0,
+            "refusedSources": [dict(refusal) for refusal in state.refusals],
+            "droppedCandidates": list(state.dropped_candidates[-20:]),
             "warnings": warnings,
         }
         return validation
@@ -348,30 +389,53 @@ class ResearchGraph:
     def _completed(self, state: ResearchState, submitted: dict[str, Any], *, checklist: list[str],
                    started: float, validation: dict[str, Any], critique: _Critique) -> ResearchOutcome:
         records = self._derive_records(submitted)
-        all_unverified: list[str] = []
         enriched: list[dict[str, Any]] = []
+        citations: list[list[str]] = []
+        mentioned: list[list[str]] = []
         for record in records:
-            supported, unverified = self._record_provenance(record, state)
-            all_unverified.extend(unverified)
-            enriched.append({"values": record, "sources": supported})
+            urls = self._mentioned_urls(record)
+            observed = [url for url in urls if url in state.sources]
+            citations.append(observed)
+            mentioned.append(urls)
+            enriched.append({
+                "values": record,
+                "sources": [state.sources[url].as_dict() for url in observed],
+            })
+
+        aggregation = aggregate_sources(
+            state.sources,
+            citations_by_record=citations,
+            mentioned_by_record=mentioned,
+            duplicates_collapsed=state.duplicates_collapsed,
+        )
 
         warnings: list[str] = []
         if state.limits.expected_records and len(records) < state.limits.expected_records:
             warnings.append(
                 f"expected at least {state.limits.expected_records} records, collected {len(records)}"
             )
-        if all_unverified:
+        if aggregation.unverified_urls:
             warnings.append("some cited URLs were never retrieved by a tool this run")
+        if aggregation.record_indices_without_evidence:
+            warnings.append(
+                f"{len(aggregation.record_indices_without_evidence)} record(s) cite no source this "
+                "run retrieved — they are returned, not dropped, and are not evidence-backed"
+            )
         if state.tool_errors:
             warnings.append(f"{len(state.tool_errors)} tool call(s) failed during collection")
+        if state.refusals:
+            warnings.append(
+                f"{len(state.refusals)} source(s) were refused before fetching "
+                f"({', '.join(sorted({refusal['code'] for refusal in state.refusals}))})"
+            )
 
         status = STATUS_COMPLETED_WITH_WARNINGS if warnings else STATUS_COMPLETED
         return ResearchOutcome(
             status=status,
             records=enriched,
-            sources=[source.as_dict() for source in state.sources.values()],
+            sources=aggregation.sources,
             metadata=self._metadata(state, checklist, started),
-            validation=self._validation(state, validation, critique, warnings, all_unverified),
+            validation=self._validation(state, validation, critique, warnings, aggregation),
         )
 
     def _warn(self, state: ResearchState, submitted: dict[str, Any], *, checklist: list[str],
@@ -392,6 +456,6 @@ class ResearchGraph:
             records=[],
             sources=[source.as_dict() for source in state.sources.values()],
             metadata=self._metadata(state, checklist, started),
-            validation=self._validation(state, validation, None, [reason], []),
+            validation=self._validation(state, validation, None, [reason], None),
             failure_reason=reason,
         )

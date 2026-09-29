@@ -31,12 +31,23 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from app.config import Settings
+from app.curation.retry import TIMEOUT, classify, run_with_retry
 
 logger = logging.getLogger("finalagent.firecrawl")
 
 
 class WebError(RuntimeError):
-    """A web tool failed. Reported as a tool error, never swallowed into empty data."""
+    """A web tool failed. Reported as a tool error, never swallowed into empty data.
+
+    `kind` names the failure class from `app.contracts.RETRYABLE_ERRORS` — or `PERMANENT` for
+    anything that should never be retried. Without it the retry layer would have to guess from
+    message text, and a 404 would be retried exactly like a 429, which is what the reference
+    implementation did (`web_scraper.py:41` catches one broad HTTP error class for everything).
+    """
+
+    def __init__(self, message: str, *, kind: str = "TRANSIENT_NETWORK") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 @dataclass(slots=True)
@@ -130,18 +141,23 @@ def supports_interact(web: WebTool) -> bool:
 
 
 def validated_http_url(url: str) -> str:
-    """Reject anything that is not an absolute http(s) URL before it leaves the process."""
+    """Reject anything that is not an absolute http(s) URL before it leaves the process.
+
+    These refusals are `PERMANENT`: retrying a `file://` URL is not a transient failure, and
+    without a kind the retry layer would treat it as one and waste three attempts on it.
+    """
     candidate = (url or "").strip()
     if not candidate:
-        raise WebError("empty URL")
+        raise WebError("empty URL", kind="PERMANENT")
     try:
         parsed = urlparse(candidate)
     except ValueError as exc:
-        raise WebError(f"unparseable URL: {candidate!r}") from exc
+        raise WebError(f"unparseable URL: {candidate!r}", kind="PERMANENT") from exc
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         # A model inventing `file://` or `data:` URLs is a real failure mode when the
         # graph is allowed to name its own targets.
-        raise WebError(f"refused non-http(s) URL scheme: {parsed.scheme or 'none'!r}")
+        raise WebError(f"refused non-http(s) URL scheme: {parsed.scheme or 'none'!r}",
+                       kind="PERMANENT")
     return candidate
 
 
@@ -299,8 +315,29 @@ def normalize_interact(data: Any, *, url: str, prompt: str, session_id: str | No
     )
 
 
+def as_web_error(tool: str, exc: BaseException, *, attempts: int, timeout: float) -> WebError:
+    """One conversion point from "something threw" to a classified, bounded `WebError`.
+
+    A refusal raised as `WebError` passes through untouched — it already knows its kind.
+    Otherwise the type name is all that is quoted: SDK exceptions can echo request data, and
+    request data carries the API key.
+    """
+    note = f" after {attempts} attempt(s)" if attempts > 1 else ""
+    if isinstance(exc, WebError):
+        return exc
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return WebError(f"{tool} timed out after {timeout}s{note}", kind=TIMEOUT)
+    if isinstance(exc, ValueError):
+        # An unparseable response is the provider's fault, not ours, and retrying it is
+        # usually wasted; classify() cannot tell, so it is named here.
+        return WebError(f"{tool} returned an unparseable response{note}", kind=SERVER_ERROR)
+    return WebError(f"{tool} failed: {type(exc).__name__}{note}", kind=classify(exc))
+
+
 class FirecrawlWeb:
-    def __init__(self, settings: Settings, *, app: Any | None = None) -> None:
+    def __init__(self, settings: Settings, *, app: Any | None = None,
+                 sleeper=None) -> None:
+        """`sleeper` is a test seam: retry backoff must be assertable without waiting on it."""
         if app is None:
             from firecrawl import AsyncFirecrawlApp
 
@@ -309,13 +346,17 @@ class FirecrawlWeb:
 
         self._settings = settings
         self._app = app
+        self._sleeper = sleeper or asyncio.sleep
         self._semaphore = asyncio.Semaphore(settings.max_collect_concurrency)
         self._interact_semaphore = asyncio.Semaphore(settings.max_interact_concurrency)
+        # Extra attempts actually made, across the process. Reported in run metadata, because
+        # "it worked" and "it worked only after two 429s" are different facts to a reviewer.
+        self.retry_attempts = 0
 
     async def search(self, query: str, limit: int) -> list[SearchHit]:
         data = await self._call(
             "search",
-            self._app.search(query, limit=limit),
+            lambda: self._app.search(query, limit=limit),
             timeout=self._settings.search_timeout_seconds,
         )
         return normalize_search(data, limit)
@@ -324,7 +365,7 @@ class FirecrawlWeb:
         target = validated_http_url(url)
         data = await self._call(
             "scrape",
-            self._app.scrape(target, formats=["markdown"]),
+            lambda: self._app.scrape(target, formats=["markdown"]),
             timeout=self._settings.scrape_timeout_seconds,
         )
         return normalize_page(data, fallback_url=target, truncate_chars=self._settings.markdown_truncate_chars)
@@ -341,22 +382,23 @@ class FirecrawlWeb:
         """
         target = validated_http_url(url)
         if not prompt.strip():
-            raise WebError("interact requires a prompt")
+            raise WebError("interact requires a prompt", kind="PERMANENT")
 
         timeout = self._settings.interact_timeout_seconds
         async with self._interact_semaphore:
             try:
                 created = await asyncio.wait_for(self._app.browser(), timeout=timeout)
             except asyncio.TimeoutError as exc:
-                raise WebError(f"browser creation timed out after {timeout}s") from exc
+                raise WebError(f"browser creation timed out after {timeout}s", kind=TIMEOUT) from exc
             except WebError:
                 raise
             except Exception as exc:
-                raise WebError(f"browser creation failed: {type(exc).__name__}") from exc
+                raise WebError(f"browser creation failed: {type(exc).__name__}",
+                               kind=classify(exc)) from exc
 
             session_id = _field(created, "id", "session_id", "sessionId")
             if not session_id:
-                raise WebError("Firecrawl returned a browser session with no id")
+                raise WebError("Firecrawl returned a browser session with no id", kind="PERMANENT")
 
             try:
                 executed = await asyncio.wait_for(
@@ -371,7 +413,7 @@ class FirecrawlWeb:
             except WebError:
                 raise
             except Exception as exc:
-                raise WebError(f"interact failed: {type(exc).__name__}") from exc
+                raise WebError(f"interact failed: {type(exc).__name__}", kind=classify(exc)) from exc
             finally:
                 await self._stop_session(str(session_id))
 
@@ -395,18 +437,29 @@ class FirecrawlWeb:
         except Exception as exc:
             logger.warning("could not close browser session %s: %s", session_id, type(exc).__name__)
 
-    async def _call(self, tool: str, awaitable: Any, *, timeout: float) -> Any:
+    async def _call(self, tool: str, factory, *, timeout: float) -> Any:
+        """One read call, retried inside the run's RetryPolicy, each attempt separately bounded.
+
+        `interact` deliberately does not go through here: every attempt would create a new
+        billable browser session, and a session is already bounded by its own deadline and the
+        run's interaction budget. Retrying a read is cheap; retrying a session is not.
+        """
+        result, attempts, error = await run_with_retry(
+            tool,
+            lambda: self._attempt(factory, timeout=timeout),
+            policy=self._settings.retry_policy,
+            base_seconds=self._settings.retry_base_delay_seconds,
+            cap_seconds=self._settings.retry_max_delay_seconds,
+            sleeper=self._sleeper,
+        )
+        self.retry_attempts += max(0, attempts - 1)
+        if error is not None:
+            raise as_web_error(tool, error, attempts=attempts, timeout=timeout)
+        return result
+
+    async def _attempt(self, factory, *, timeout: float) -> Any:
         async with self._semaphore:
-            try:
-                return await asyncio.wait_for(awaitable, timeout=timeout)
-            except asyncio.TimeoutError as exc:
-                raise WebError(f"{tool} timed out after {timeout}s") from exc
-            except WebError:
-                raise
-            except Exception as exc:
-                # Type name only: SDK exceptions can echo request data, which carries
-                # the API key.
-                raise WebError(f"{tool} failed: {type(exc).__name__}") from exc
+            return await asyncio.wait_for(factory(), timeout=timeout)
 
 
 
@@ -438,7 +491,7 @@ class FakeWeb:
         self.scrape_calls.append(url)
         validated_http_url(url)
         if url in self._fail_urls:
-            raise WebError(f"scrape refused for {url}")
+            raise WebError(f"scrape refused for {url}", kind="PERMANENT")
         page = self._pages.get(url)
         if page is None:
             return Page(url=url, title=f"Page {url}", markdown=f"markdown body for {url}")
@@ -470,9 +523,9 @@ class FakeInteractiveWeb(FakeWeb):
         self.interact_calls.append((url, prompt))
         validated_http_url(url)
         if not prompt.strip():
-            raise WebError("interact requires a prompt")
+            raise WebError("interact requires a prompt", kind="PERMANENT")
         if url in self._fail_interact_urls:
-            raise WebError(f"interact refused for {url}")
+            raise WebError(f"interact refused for {url}", kind="PERMANENT")
         scripted = self._interactions.get(url)
         if scripted is not None:
             return scripted

@@ -9,7 +9,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -21,6 +21,7 @@ from app.api.v1 import health as health_router
 from app.api.v1 import requirements as requirements_router
 from app.api.v1 import research as research_router
 from app.config import Settings, get_settings
+from app.curation.robots import RobotsGate, build_robots_gate
 from app.firecrawl.client import FirecrawlWeb
 from app.llm.client import GeminiLlm
 from app.logging_setup import configure_logging
@@ -57,7 +58,8 @@ def _envelope(code: str, message: str, details: list[Any] | None = None) -> dict
 
 
 def create_app(settings: Settings | None = None, *, llm: object | None = None,
-               web: object | None = None, skills: SkillLibrary | None = None) -> FastAPI:
+               web: object | None = None, skills: SkillLibrary | None = None,
+               robots: Callable[[], RobotsGate] | None = None) -> FastAPI:
     resolved = settings if settings is not None else get_settings()
     configure_logging(resolved.log_level)
 
@@ -78,6 +80,9 @@ def create_app(settings: Settings | None = None, *, llm: object | None = None,
     # Reading a directory is not a provider call, so a missing SKILLS_DIR must not fail the
     # boot: it resolves to an empty library, which the graph handles by having no playbooks.
     app.state.skills = skills if skills is not None else SkillLibrary(resolve_skills_dir(resolved))
+    # A factory, not an instance: robots.txt is cached per run so a long-lived process cannot
+    # serve a file it fetched before the site changed its policy.
+    app.state.robots = robots or (lambda: build_robots_gate(resolved))
 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=resolved.allowed_hosts)
 

@@ -25,9 +25,21 @@ class ResearchLimitsRequest(CamelModel):
     expected_records: int | None = Field(default=None, ge=1, le=5000)
     allowed_domains: list[str] = Field(default_factory=list)
     blocked_domains: list[str] = Field(default_factory=list)
+    # --- curation (Phase 5) ---
+    entity_type: str | None = Field(default=None, max_length=60)
+    preferred_domains: list[str] = Field(default_factory=list)
+    max_sources_per_domain: int | None = Field(default=None, ge=0, le=10)
+    min_relevance_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    desired_sources: int | None = Field(default=None, ge=1, le=200)
     # Which web tools this run wants. The service intersects it with ALLOWED_WEB_TOOLS, so
     # a request can narrow the set but never widen it — `interact` is operator-enabled.
     allowed_tools: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("preferred_domains")
+    @classmethod
+    def _domains_normalised(cls, value: list[str]) -> list[str]:
+        normalised = [str(domain).strip().lower() for domain in value if str(domain).strip()]
+        return list(dict.fromkeys(normalised))
 
     @field_validator("allowed_tools")
     @classmethod
