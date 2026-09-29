@@ -129,7 +129,7 @@ class Requirement(CamelModel):
         if (
             self.objective.strip()
             and self.entity_type.strip()
-            len(self.fields) >= 1
+            and len(self.fields) >= 1
             and not self.missing_information
         ):
             return "valid"

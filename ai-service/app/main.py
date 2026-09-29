@@ -17,7 +17,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from app.api.v1 import health as health_router
+from app.api.v1 import research as research_router
 from app.config import Settings, get_settings
+from app.firecrawl.client import FirecrawlWeb
+from app.llm.client import GeminiLlm
 from app.logging_setup import configure_logging
 
 log = logging.getLogger("finalagent.ai")
@@ -41,7 +44,8 @@ def _envelope(code: str, message: str, details: list[Any] | None = None) -> dict
     return {"error": {"code": code, "message": message, "details": details or []}}
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, llm: object | None = None,
+               web: object | None = None) -> FastAPI:
     resolved = settings if settings is not None else get_settings()
     configure_logging(resolved.log_level)
 
@@ -54,6 +58,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url=None,
     )
     app.state.settings = resolved
+
+    # Constructed at startup so a broken provider or missing SDK fails the boot rather
+    # than the first request. Tests inject doubles through the keyword arguments.
+    app.state.llm = llm if llm is not None else GeminiLlm(resolved)
+    app.state.web = web if web is not None else FirecrawlWeb(resolved)
 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=resolved.allowed_hosts)
 
@@ -106,6 +115,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(health_router.router, prefix="/ai/v1")
+    app.include_router(research_router.router, prefix="/ai/v1")
 
     @app.get("/")
     def root() -> dict[str, Any]:

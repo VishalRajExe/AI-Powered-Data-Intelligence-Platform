@@ -71,11 +71,19 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = 45.0
     extract_timeout_seconds: float = 180.0
     interact_timeout_seconds: float = 60.0
+    scrape_timeout_seconds: float = 60.0
 
     max_schema_repairs: int = 3
     max_collect_concurrency: int = 5
     markdown_truncate_chars: int = 4000
     markdown_truncate_with_extract: int = 2000
+
+    # --- research graph bounds (ported from data-enrichment-js configuration.ts, minus
+    #     maxInfoToolCalls, which that repo declares and defaults but never reads) ---
+    max_loops: int = 6
+    max_search_results: int = 5
+    max_scrapes_per_run: int = 12
+    max_searches_per_run: int = 8
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod
@@ -104,6 +112,21 @@ class Settings(BaseSettings):
             problems.append("MAX_SCHEMA_REPAIRS must be between 0 and 10.")
         if self.max_collect_concurrency < 1 or self.max_collect_concurrency > 32:
             problems.append("MAX_COLLECT_CONCURRENCY must be between 1 and 32.")
+        if not 1 <= self.max_loops <= 20:
+            problems.append("MAX_LOOPS must be between 1 and 20; the research loop is bounded.")
+        if not 1 <= self.max_search_results <= 20:
+            problems.append("MAX_SEARCH_RESULTS must be between 1 and 20.")
+        if not 1 <= self.max_scrapes_per_run <= 100:
+            problems.append("MAX_SCRAPES_PER_RUN must be between 1 and 100.")
+        if not 1 <= self.max_searches_per_run <= 100:
+            problems.append("MAX_SEARCHES_PER_RUN must be between 1 and 100.")
+        for name, value in (
+            ("SCRAPE_TIMEOUT_SECONDS", self.scrape_timeout_seconds),
+            ("LLM_REQUEST_TIMEOUT_SECONDS", self.llm_request_timeout_seconds),
+            ("INTERACT_TIMEOUT_SECONDS", self.interact_timeout_seconds),
+        ):
+            if value <= 0:
+                problems.append(f"{name} must be greater than zero.")
 
         if problems:
             raise ConfigurationError(

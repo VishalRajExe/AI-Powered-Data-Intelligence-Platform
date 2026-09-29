@@ -73,8 +73,9 @@ for entry in "${RESULTS[@]}"; do
   printf '%-6s %-24s %s\n' "$status" "$name" "$detail"
 done
 echo "================================================================="
-echo "Not covered by this script: live Gemini/Firecrawl calls (Phase 2 spike),"
-echo "Docker builds (Docker is not installed on this machine), and any real"
-echo "MySQL round-trip (needs credentials in the root .env)."
+echo "Not covered by this script: live Gemini/Firecrawl provider calls (run"
+echo "RUN_LIVE_PROVIDER_TESTS=true pytest -q tests/test_live_provider_spike.py), Docker builds"
+echo "(Docker is not installed on this machine), and any real MySQL round-trip"
+echo "(needs credentials in the root .env)."
 
 exit "$FAILED"
