@@ -73,9 +73,11 @@ for entry in "${RESULTS[@]}"; do
   printf '%-6s %-24s %s\n' "$status" "$name" "$detail"
 done
 echo "================================================================="
-echo "Not covered by this script: live Gemini/Firecrawl provider calls (run"
-echo "RUN_LIVE_PROVIDER_TESTS=true pytest -q tests/test_live_provider_spike.py), Docker builds"
-echo "(Docker is not installed on this machine), and any real MySQL round-trip"
-echo "(needs credentials in the root .env)."
+echo "Not covered by this script: live provider calls. Run"
+echo "  RUN_LIVE_PROVIDER_TESTS=true pytest -q tests/test_live_requirements.py"
+echo "  RUN_LIVE_PROVIDER_TESTS=true pytest -q tests/test_live_provider_spike.py"
+echo "These need Gemini quota (the free tier caps gemini-2.5-flash at 20 requests/day) and a"
+echo "real FIRECRAWL_API_KEY. Also not covered: Docker builds (Docker is not installed here)"
+echo "and any real MySQL round-trip (needs credentials in the root .env)."
 
 exit "$FAILED"

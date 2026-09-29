@@ -12,9 +12,9 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 2 — Data-enrichment core integration. **COMPLETE.** Phases 0, 1, 1.5 and 2 are
-  recorded above. Phase 2 added the research graph inside `ai-service`; it added no persistence, no
-  planner and no UI.
+- **Current Phase:** 3 — Dynamic data contract + extraction schema. **COMPLETE, with one live
+  verification blocked by provider quota** (see §2 and §5). Phases 0, 1, 1.5 and 2 are recorded
+  above. A natural-language prompt now determines the fields collected; nothing is persisted yet.
 - **Last updated:** 2026-09-29
 - **Application code written:** three independent processes.
   - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 15 main classes, 5 test classes.
@@ -158,6 +158,50 @@ existed, and that the system was production-ready — each contradicted by its o
   Risk **R32** records that the graph lets the model name URLs while robots/SSRF gating arrives with
   the source-governance phase.
 
+- [x] **Phase 3 (2026-09-29) — dynamic data contract + extraction schema.** Natural language now
+  drives the field list: prompt → AI requirement → data contract → extraction schema → research
+  graph, with Spring validating the AI's answer between stages.
+
+  | New | Purpose |
+  |---|---|
+  | `ai-service/app/requirements/{schema,service}.py` + `prompts/requirement.md` | Gemini structured output into the existing `Requirement` contract, bounded repair, fail-closed |
+  | `derive_extraction_schema()` | builds the graph's JSON Schema from the requirement's own fields — no template |
+  | `build_research_brief()` | geography, dates, filters, quantity and source wishes become collection constraints |
+  | `POST /ai/v1/requirements/analyze`, `POST /ai/v1/research/from-prompt` | the stages, and the whole flow |
+  | `backend/.../requirement/{RequirementDto,RequirementValidator,PipelineController}.java` | Java's independent validation gate; collection is blocked unless it passes |
+  | `ai-service/tests/test_live_requirements.py` | gated live check that the three brief prompts yield three distinct schemas |
+
+  Measured: **98 pytest passed (4 gated-live skipped)**, **54 mvn tests passed**, frontend
+  typecheck/lint/build unchanged and passing.
+
+  Three defects found and fixed by actually running the live path:
+  1. `GeminiLlm` passed OpenAI-shaped `[{"role","content"}]` dicts where the SDK wants a string
+     or `types.Content` — pydantic rejected every request.
+  2. Gemini's `responseSchema` has **no `additionalProperties` field** and returns
+     `400 INVALID_ARGUMENT`. Since gate 1 depends on `additionalProperties: false`, the two are
+     reconciled by `to_gemini_schema()`: the strict schema stays the internal contract and only
+     the provider copy is projected. `strip_const` alone was not enough.
+  3. `tests/conftest.py` assigned `os.environ[key] = value`, overwriting the developer's real
+     `GEMINI_API_KEY` with a dummy — so the live test reported "API key not valid". Now
+     `setdefault`.
+
+  Also measured about my own code: masking provider errors to a bare type name made the first
+  failure undebuggable, so `_detail()` now truncates to 400 chars and redacts the key if it
+  appears — diagnosable without becoming a leak. Unit-tested.
+
+  **One thing NOT verified, stated plainly:** the live three-prompt schema comparison did not
+  complete. The account is on the **Gemini free tier**, capped at **20 `gemini-2.5-flash`
+  requests/day**, which was exhausted mid-run (`429 RESOURCE_EXHAUSTED`). The requests were
+  reaching the API correctly by then. The dynamic-derivation *logic* is proven offline
+  (`test_the_three_requests_yield_three_distinct_schemas`, plus per-request schema assertions);
+  what remains unproven is that Gemini itself returns genuinely different field sets for the
+  three prompts. Re-run after the quota resets or on a paid key:
+  `RUN_LIVE_PROVIDER_TESTS=true pytest -q tests/test_live_requirements.py -s`.
+
+  Deferred deliberately: no 429/backoff handling for provider rate limits yet (the error is
+  surfaced, not retried), and no requirement persistence — there is still no schema to store
+  a contract in, so `/api/v1/requirements/parse` is stateless.
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -197,6 +241,11 @@ existed, and that the system was production-ready — each contradicted by its o
 | 2026-09-29 | **Nothing from the new repositories stays in TypeScript; no fourth runtime.** | Verified: `workflow.compile()` is called with no checkpointer (`graph.ts:309`), `src/` writes nothing to disk, and the three nodes plus two routers reduce to a while-loop over a message list with an integer counter. Wrapping ~700 LangGraph lines in a Node service to preserve a language choice would recreate exactly the two-orchestrators problem Phase 0 rejected (`A` §A.1) |
 
 | 2026-09-29 | **Two nesting levels, not two orchestrators:** Spring owns the outer plan DAG (`SEARCH → SCRAPE → EXTRACT → … → SAVE`, persisted, auditable); the `data-enrichment-js` research graph lives *inside* a single `EXTRACT` step in Python, ephemeral and bounded. | The master instruction names `data-enrichment-js` the primary research foundation and forbids collapsing it into one LLM call, while Phase 0 forbids two orchestrators. Nesting satisfies both: Spring never re-implements the research loop, and Python never decides whether a step runs. Full node-by-node mapping in `O` §O.12 |
+
+| 2026-09-29 | **The pipeline is two AI-service calls with Spring's gate between them**, not one `from-prompt` call on Python. | Python can run the whole chain in one request, and does expose that endpoint — but then Spring would be forwarding an unverified AI answer straight into a web collection run. `/api/v1/research/from-prompt` analyses, validates the contract and schema in Java, and only then starts collection. This is the exact shape that failed in the old project, where nothing independently checked the model's answer |
+| 2026-09-29 | **`additionalProperties: false` stays in the internal contract; `to_gemini_schema()` projects it away for the provider only.** | Measured live: Gemini answers `400 INVALID_ARGUMENT — Unknown name "additional_properties" at generation_config.response_schema`. Dropping it everywhere would have disarmed gate 1's extra-key detection to satisfy a provider, so the strict schema is the source of truth and the provider gets a projection. Same reasoning as stripping `const`, which alone was not enough |
+| 2026-09-29 | **`RequirementValidator` (Java) deliberately mirrors `Requirement.cross_validate` (Python).** | The duplication is the point: Java is the system of record and must not persist or collect against a contract only the model vouched for. Same rules the old project's `requirement.schema.ts` declared — the difference is that it is now actually enforced, on the side that owns the data |
+| 2026-09-29 | **DTO parsing is not a contract-drift alarm** — and the code now says so rather than pretending otherwise. | I asserted that unknown JSON keys would be rejected; the test showed Spring Boot disables `FAIL_ON_UNKNOWN_PROPERTIES` and a class-level `ignoreUnknown = false` does not re-enable it, so a key added on the Python side is dropped silently. `PipelineControllerTest.unknownKeysFromTheAiServiceAreDropped` pins the real behaviour; drift has to be caught by the structural rules and a versioned envelope, not by Jackson |
 
 ## 4. Database / Schema Changes
 
@@ -312,8 +361,15 @@ Environment limits affecting verification:
     `exhaustive-deps`) inside verbatim-copied design files. Left unfixed on purpose: editing them
     would break byte-identical preservation of the design system. Zero errors.
   - Phase 1 code is **uncommitted** on the `implementjava` branch.
-- **No live external API call has been made during this audit.** Firecrawl and Gemini behaviour is
-  documented from SDK/docs inspection, not execution. Phase 2 exists to verify it.
+- **No completed live provider call has been made.** Phase 3 sent real requests to Gemini and they
+  were rejected before generation — first by our own schema bugs (now fixed), then by quota
+  (`429 RESOURCE_EXHAUSTED`). Firecrawl has never been called: no `FIRECRAWL_API_KEY` exists here.
+  Provider behaviour is still documented from SDK introspection, not from a successful run.
+- **The Gemini key on this machine is a free-tier key: 20 `gemini-2.5-flash` requests/day.** That
+  budget is spent during a single three-prompt live verification, so live work must be
+  deliberate: the gated tests exist precisely so it is not burned by an ordinary `verify.sh`.
+  Plan capacity or a paid key before the provider phase, and expect 429s to need backoff (not yet
+  implemented — the error is surfaced, not retried).
 - **Not run, on purpose:** `npm run build` (writes `backend/dist`) and `next build` (writes
   `.next/`) in the *old* project — the audit is of the checkout as delivered, and those would have
   modified it. Its "production build succeeds" claim is therefore recorded as **unverified**,
@@ -385,11 +441,28 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phase 3 — Authentication & tenancy** (`docs/audit/M-phase-plan.md`). Not started; awaiting
-authorization. Phase 2 was scoped as the data-enrichment core integration, not the provider spike
-that `M` originally listed second, so the live provider work is still owed.
+**Awaiting authorization.** Phases have been directed out of `M-phase-plan.md` order: Phase 3
+delivered the plan's Phase 4 (requirement understanding) and part of Phase 5 (schema generation),
+while the plan's Phase 3 (authentication) and Phase 6 (the MySQL job engine) have not been built.
+That is not a problem to hide — but the ordering drift means `M` should be reconciled with reality
+before another phase is chosen.
 
-What Phase 2 changes for later phases:
+Most valuable next candidates, in dependency order:
+
+1. **The MySQL schema + Flyway baseline** — nothing has anywhere to be persisted, so every phase
+   after this one currently returns results into the void.
+2. **Authentication and tenancy** — `/api/v1/requirements/parse` and `/api/v1/research/from-prompt`
+   are unauthenticated and, unlike Phase 2's endpoint, the latter now makes real provider calls, so
+   an open instance is a billing risk as well as a data one.
+3. **Close the live verification left open in Phase 3** once Gemini quota resets:
+   `RUN_LIVE_PROVIDER_TESTS=true pytest -q tests/test_live_requirements.py -s`.
+4. **Provider backoff** for 429/503, which the free-tier ceiling makes a normal condition rather
+   than an edge case.
+
+Still open: **G1**, **G2** (needs a Firecrawl key), **B1** (MySQL user), **L1** (enrichment-repo
+licences).
+
+### Carried forward from Phase 2, still true
 
 - The research graph is a **stateless in-process run**. It persists nothing, so the dataset phase
   must define how `ResearchResult` maps onto rows, columns, sources and evidence. The DTO already
@@ -401,8 +474,8 @@ What Phase 2 changes for later phases:
   behind workspace-scoped authorization before any data lands.
 - **R32** is the sharpest technical risk: the model names URLs, while robots / SSRF / rate-limit
   gating is the source-governance phase. Until then callers should pass `allowedDomains`.
-- The `collection` extra resolved cleanly on Python 3.14 (cp314 wheels exist), so item 3 below is
-  withdrawn; 3.12 remains the pinned deployment interpreter for reliability, not installability.
+- The `collection` extra resolved cleanly on Python 3.14 (cp314 wheels exist); 3.12 remains the
+  pinned deployment interpreter for reliability, not installability.
 - `M` still lists gate 3 as a **Phase 8** exit criterion; it is implemented, so Phase 8 now owes
   only the wiring into a real collection run.
 

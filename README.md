@@ -6,9 +6,10 @@ A user describes a data requirement in plain English; the system understands it,
 collection workflow, gathers data from permitted web sources, cleans and validates it, and
 produces a source-traceable dataset that can be searched, filtered and exported.
 
-**Status: Phase 2 complete — the data-enrichment research graph is integrated and runs inside the
-Python service.** Still no persistence, planner, quality pipeline, source governance or
-authentication: `POST /api/v1/research` runs a job and returns it, storing nothing.
+**Status: Phase 3 complete — a natural-language prompt now determines the fields collected.**
+Prompt → AI requirement → data contract → extraction schema → research graph, with Spring
+validating the model's answer before collection starts. Still nothing persisted: no schema, no
+dataset storage, no authentication.
 
 ---
 
@@ -94,14 +95,29 @@ Spring validates the contract, the Python graph plans → retrieves → extracts
 response carries `records`, `sources`, `metadata` and `validation`. Nothing is stored yet. The call
 needs a working `GEMINI_API_KEY` and `FIRECRAWL_API_KEY`, because it makes real provider requests.
 
-## Verified (Phase 2, executed 2026-09-29)
+To see just the contract, before anything collects:
+
+```bash
+curl -X POST localhost:8090/api/v1/requirements/parse \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"find remote frontend jobs in India with salary"}'
+```
+
+The response is the parsed requirement plus the extraction schema derived from its own field list,
+so two different prompts produce two different schemas. Spring validates that answer — a contract
+the model itself is inconsistent about stops there with `INVALID_REQUIREMENT` and no collection run.
+
+## Verified (Phases 2–3, executed 2026-09-29)
 
 Every row is a command run in that session, with counts, not an assertion.
 
 | Check | Result |
 |---|---|
-| `mvn test` | **37 passed**, 0 failures |
-| `pytest` | **74 passed**, 1 gated live test skipped by design |
+| `mvn test` | **54 passed**, 0 failures |
+| `pytest` | **98 passed**, 4 gated live tests skipped by design |
+| Prompt → requirement → schema: three different requests, three distinct field sets | passed offline (`test_the_three_requests_yield_three_distinct_schemas`); **live confirmation blocked by free-tier quota**, see `docs/control/Memory.md` §2 |
+| Spring rejects an inconsistent AI requirement and blocks collection | passed — `research` never called (`verify(..., never())`) |
+| Needs-clarification returns without collecting | passed on both services |
 | Research graph on doubles | all gates exercised: schema repair, repair exhaustion, loop bound on the search path, no-answer-before-data, critique rejection and re-loop, malformed verdict, unverified URL |
 | Backend jar boots; `/api/v1/health` → 200 | passed (note: 8080 is held on this machine by the **old project's** jar; use `SERVER_PORT=8090`) |
 | Backend with no credentials → **exit 1**, naming `AI_SERVICE_API_KEY`, `MYSQL_PASSWORD`, `MYSQL_USER` | passed |
