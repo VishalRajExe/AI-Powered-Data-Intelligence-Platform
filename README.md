@@ -6,11 +6,17 @@ A user describes a data requirement in plain English; the system understands it,
 collection workflow, gathers data from permitted web sources, cleans and validates it, and
 produces a source-traceable dataset that can be searched, filtered and exported.
 
-**Status: Phase 5 complete — the run is curated before it collects.**
-Requirement → search strategy → relevant sources → source policy (domains, robots.txt, duplicates,
-relevance) → Firecrawl (`search` → `scrape` → `interact` when enabled) → structured records with
-per-source citations and every refusal reported. One web engine, one LLM, no embedding provider.
-Still nothing persisted: no schema, no dataset storage, no authentication.
+**Status: Phase 7 complete — the workflow runs on a MySQL-persisted queue, with no Redis.**
+Requirement → plan (deterministic, hash-stable) → run → steps → jobs → worker claims under a lease
+→ research graph → Firecrawl-facing AI service → Java re-enforces the contract → status, progress
+and counters persisted. Retries, timeouts, cancellation, dead-worker recovery and duplicate-job
+prevention are each tested **against real MySQL 9.6**, and the packaged jar was booted with the
+layer enabled.
+
+Still not built: dataset tables (collected records live in a step's JSON summary), SSE streaming,
+exports, and authentication — which is why the workspace id is server-configured rather than
+per-caller. **Collection itself has still never touched the live web**: `FIRECRAWL_API_KEY` remains
+blank, so every web path is verified against doubles.
 
 ---
 
@@ -109,46 +115,62 @@ The response is the parsed requirement plus the extraction schema derived from i
 so two different prompts produce two different schemas. Spring validates that answer — a contract
 the model itself is inconsistent about stops there with `INVALID_REQUIREMENT` and no collection run.
 
-## Verified (Phases 2–5, executed 2026-09-29)
+## Verified (Phases 2–7, executed 2026-09-29)
 
 Every row is a command run in that session, with counts, not an assertion.
 
 | Check | Result |
 |---|---|
-| `mvn test` | **80 passed**, 0 failures (54 through Phase 3, 68 through Phase 4, +12 at Phase 5) |
-| `pytest` | **242 passed**, 8 gated live tests skipped by design (was 98 / 174; +68 cases at Phase 5) |
-| `scripts/verify.sh` | backend tests ok, backend package ok, ai tests ok, frontend typecheck / lint / build ok |
+| `mvn test` | **185 passed**, 0 failures — 80 through Phase 5, +105 at Phase 7 (75 unit, 30 against MySQL) |
+| `mvn test` with `FINALAGENT_TEST_MYSQL=true` | **185 passed, 0 skipped**, of which **30 run against real MySQL 9.6.0** |
+| Queue claim race | 8 threads, 1 job → **exactly 1 winner**; `attempt_count` 1; one `worker_id` |
+| Duplicate prevention | `UNIQUE (run_id, step_id)`, `UNIQUE (run_id, step_key)`, `UNIQUE (workflow_id, attempt)` all reject the second insert; the repository returns `false` rather than throwing |
+| Lease recovery | expired lease → job and step back to `PENDING` and re-claimable; **with no attempts left → both `FAILED` with `LEASE_EXPIRED_EXHAUSTED`** |
+| Lost lease writes nothing | `writeTerminal`, `requeue` and `renewLease` all return `false` for a worker that no longer owns the row; the new holder's state survives untouched |
+| Retry timing | `requeue(delay)` moves `scheduled_for` / `next_retry_at` forward **on the database clock**, and `findClaimable()` returns nothing until then |
+| Shutdown | `releaseLeasesHeldBy` released 2 leases; both jobs claimable immediately |
+| End-to-end run | API → run → 2 steps → jobs → worker → status: `COMPLETED`, `progress` 100, `records_found` 2, `records_valid` 2, events persisted in order |
+| Failure taxonomy honoured | transient 503 retried then succeeded (attempt 2, reason kept); always-503 exhausted 3 attempts → run `FAILED`; a `FAILED` at HTTP 200 was **not** retried and carried the upstream's own reason |
+| Step timeout | a 6 s call against a 2 s budget → `TIMEOUT`, retried, exhausted, `FAILED` — with the message naming that Firecrawl exposes no run-level abort |
+| Contract re-enforcement | 5 required against 2 collected, one citing no retrieved source → run `PARTIAL`, `RECORD_SHORTFALL`, `records_valid` 1, and the bad record still present in the step output |
+| Cancellation | queued step's job and step both `CANCELLED`, nothing left for the sweeper; a `RUNNING` step is left to its own worker |
+| Readiness | `/api/v1/ready` gained a `workflowQueue` component reporting `pendingJobs` / `runningJobs` / `activeRuns` |
+| **Real MySQL round-trip (`/ready` → 200 for MySQL)** | **achieved at Phase 7** — `finalagent`@`127.0.0.1`, `ALL PRIVILEGES ON finalagent_dev.*` only, Flyway applied `V1`+`V2`, `mysql: UP, latencyMs 0`. The overall response is still 503 while the Python service is down, which is the point |
+| Packaged jar with the layer enabled | `Started BackendApplication in 4.324 s`, `workflow worker … started (pool 8, lease 300s, poll 500ms)`, `GET /api/v1/workflows/runs` → 200 |
+| `pytest` | **245 passed**, 8 gated live tests skipped by design (unchanged by Phase 7 — Python was not modified) |
+| `scripts/verify.sh` | backend tests ok, backend package ok, ai tests ok, frontend typecheck / lint / build ok; the MySQL queue check reports **SKIP** with its reason unless `FINALAGENT_TEST_MYSQL=true` |
 | **Irrelevant sources** | ranked last and named in `Excluded from this search`; with `MIN_RELEVANCE_SCORE` set they are dropped with a reason and counted in `metadata.candidatesDropped`; with no floor nothing is dropped for vocabulary |
 | **Blocked source** | refused by `SourcePolicy` before any fetch — `web.scrape_calls == []` is asserted — and reported in `validation.refusedSources` with the host and the rule that stopped it |
 | **Duplicate source** | `?utm_source=`, `#fragment`, `www.`, default port and a trailing slash collapse to one page identity; a second search for the same page reports `duplicate-url`, `metadata.duplicateSourcesCollapsed` counts it, and a re-scrape is refused as already retrieved |
-| **Retry** | 429/5xx/timeouts retried with capped jittered backoff inside `RetryPolicy` (a contract that existed since Phase 0 and had no reader); `404` and other permanent kinds stop after one attempt; `metadata.retriesAttempted` reports the cost; **browser sessions are never retried** |
+| **Retry (web layer)** | 429/5xx/timeouts retried with capped jittered backoff inside `RetryPolicy`; `404` and other permanent kinds stop after one attempt; `metadata.retriesAttempted` reports the cost; **browser sessions are never retried** |
 | **robots restriction** | `Disallow` honoured for our own UA token; one file fetched per origin per run; 401/403/404 mean *no rules* while 5xx/unreachable follow `ROBOTS_ON_ERROR` — refused and reported by default |
-| Refused robots ≠ silent permission | the reference implementation parsed a 500 error page as robots text and answered "allowed"; a test pins the corrected behaviour |
 | Aggregation | sources in first-observed order with `citedByRecords` counts; a record citing a page no tool returned lands in `recordsWithoutEvidence` and `unverifiedUrls` and is **still returned**, never dropped |
-| The planning turn sees retrieved material | 42+12 tests: **a Phase 2 porting defect found here** — the transcript reached only the submission prompt, so the model chose its next action blind |
+| Refused robots ≠ silent permission | the reference implementation parsed a 500 error page as robots text and answered "allowed"; a test pins the corrected behaviour |
+| The planning turn sees retrieved material | **a Phase 2 porting defect found at Phase 4** — the transcript reached only the submission prompt, so the model chose its next action blind |
 | Java refuses an unusable curation request | `INVALID_CURATION_REQUEST` for a floor outside 0..1, a non-hostname "domain", a blank or absurd entity type (`SourceCurationPolicyTest`, 10 cases) |
-| No new dependency | robots fetching is stdlib `urllib` on a worker thread; no embedding provider, no second search engine, nothing installed from the reference repo |
+| No new dependency at Phase 5 | robots fetching is stdlib `urllib` on a worker thread; no embedding provider, no second search engine, nothing installed from the reference repo |
 | Prompt → requirement → schema: three different requests, three distinct field sets | passed offline (`test_the_three_requests_yield_three_distinct_schemas`); **live confirmation blocked by free-tier quota**, see `docs/control/Memory.md` §2 |
 | Spring rejects an inconsistent AI requirement and blocks collection | passed — `research` never called (`verify(..., never())`) |
 | Needs-clarification returns without collecting | passed on both services |
 | Research graph on doubles | all gates exercised: schema repair, repair exhaustion, loop bound on the search path, no-answer-before-data, critique rejection and re-loop, malformed verdict, unverified URL |
-| Browser-session lifecycle against a **stub of the Firecrawl SDK client** | 19 tests: session created → prompt sent → `stop_interaction` in every path (success, SDK error, timeout), timeout returns a structured envelope with fallback advice, null fields stripped, empty lists preserved, truncation marked, non-http and empty-prompt refused **before** a session exists |
+| Browser-session lifecycle against a **stub of the Firecrawl SDK client** | 19 tests: session created → prompt sent → `stop_interaction` in every path (success, SDK error, timeout); timeout returns a structured envelope with fallback advice; null fields stripped, empty lists preserved, truncation marked, non-http and empty-prompt refused **before** a session exists |
 | `interact` gating | refused when not in the run's tool set, when the engine has no sessions, when the URL was never retrieved, outside the domain policy, and in parallel batch execution |
 | Per-run action schema | generated from the enabled tools — a disabled tool is not in the enum, so the provider cannot request it; asserted on the recorded LLM call |
 | Tool ceiling | a request naming `interact` while the service excludes it → **400 `NO_PERMITTED_WEB_TOOLS`**; Java rejects unknown names, empty lists, out-of-range budgets (11 `WebToolPolicyTest` cases) |
 | SKILL.md loader | 24 tests: frontmatter subset parsing, validation reporting, discovery, domain match (exact / `www.` / suffix), traversal guard refuses `../` and absolute paths |
-| Backend jar boots; `/api/v1/health` → 200 | passed (note: 8080 is held on this machine by the **old project's** jar; use `SERVER_PORT=8090`) |
-| Backend with no credentials → **exit 1**, naming `AI_SERVICE_API_KEY`, `MYSQL_PASSWORD`, `MYSQL_USER` | passed |
 | AI service with a missing provider key → **exit 1**, naming the variable | passed |
 | Live `POST /api/v1/research` through Spring → Python, invalid for Python | **422 `AI_SERVICE_REJECTED_REQUEST`** carrying Python's own envelope |
 | Same request with an empty schema | **400 `INVALID_EXTRACTION_SCHEMA`**, and `verifyNoInteractions` proves Python was never called |
-| Java ↔ Python wire contract | camelCase round-trip test on a captured Python payload shape, now including `allowedTools`, `maxInteractionsPerRun`, `interactionsUsed`, `enabledTools`, `playbooksUsed` |
-| `npm run typecheck` / `lint` / `build` | passed; 13 pages |
 | Browser → Next → Spring → FastAPI health chain | passed (`aiService: UP`) |
+| Java ↔ Python wire contract | camelCase round-trip on a captured Python payload shape, now also pinning `refusedSources` as **objects**, `recordsWithoutEvidence` as **record indices**, and `Source.citedByRecords` — five fields Spring had been dropping silently (P20) |
+| Backend jar boots; `/api/v1/health` → 200 | passed (note: 8080 is held on this machine by the **old project's** jar; use `SERVER_PORT=8090`) |
+| Backend with no credentials → **exit 1**, naming `AI_SERVICE_API_KEY`, `MYSQL_PASSWORD`, `MYSQL_USER` | passed |
+| Backend with an enabled queue and a bad bound → **exit 1** | passed: 22 `StartupRequirementsValidatorTest` cases, including a step timeout longer than its lease and a heartbeat not shorter than the lease |
+| `npm run typecheck` / `lint` / `build` | passed; 13 pages |
 | Actuator liveness stays `UP` while MySQL is down | passed |
-| Real MySQL round-trip (`/ready` → 200) | **not achieved** — still needs a matching database user |
 | **Real Firecrawl execution** | **not performed.** `FIRECRAWL_API_KEY` has length 0 in both the shell and the root `.env`; `tests/test_live_firecrawl.py` skips all four cases and prints the reason. Gated behind `RUN_LIVE_FIRECRAWL_TESTS=true` |
 | Live Gemini research run | **not performed** — a call would bill a free-tier key already at its 20 requests/day ceiling. Gated behind `RUN_LIVE_PROVIDER_TESTS=true` |
+| **Two-process restart test** | **not performed** — the lease-expiry reclaim is proven in-process against real MySQL; killing a JVM and resuming from another is owed (`L` R41) |
 
 ## Deliberately deferred out of Phase 1
 

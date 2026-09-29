@@ -28,6 +28,11 @@ public record ResearchResult(
     public record Record(Map<String, Object> values, List<Source> sources) {
     }
 
+    /**
+     * {@code citedByRecords} is only present on the run-level source list, where the aggregation
+     * stage counts how many records rest on each source; a record's own {@code sources} carry no
+     * count, so this stays null rather than defaulting to a number that would read as evidence.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Source(
             String url,
@@ -35,10 +40,16 @@ public record ResearchResult(
             String snippet,
             String sourceType,
             String retrievedAt,
-            Boolean verifiedByTool
+            Boolean verifiedByTool,
+            Integer citedByRecords
     ) {
     }
 
+    /**
+     * Field order mirrors {@code app/research/graph.py:_validation} key for key, and the two list
+     * shapes are not interchangeable: {@code refusedSources} carries an object per refusal, while
+     * {@code recordsWithoutEvidence} carries record indices, not URLs.
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Validation(
             Boolean schemaValid,
@@ -48,7 +59,16 @@ public record ResearchResult(
             Boolean critiqueSatisfactory,
             List<String> critiqueReasons,
             List<String> unverifiedUrls,
+            List<Integer> recordsWithoutEvidence,
+            Integer duplicateSourcesCollapsed,
+            List<Refusal> refusedSources,
+            List<Map<String, Object>> droppedCandidates,
             List<String> warnings
     ) {
+    }
+
+    /** A source the curation stage refused before fetching it — domain policy or robots, never a silent skip. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Refusal(String url, String code, String reason) {
     }
 }

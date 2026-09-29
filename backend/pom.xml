@@ -34,11 +34,21 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
     </dependency>
-    <!-- JDBC, not JPA: there are no entities until the schema phase. This supplies HikariCP
-         and JdbcTemplate, which is everything the readiness probe needs today. -->
+    <!-- JDBC, not JPA: the schema is written as SQL and versioned by Flyway, and the queue needs
+         statements (SKIP LOCKED, conditional UPDATE) that an ORM would only get in the way of. -->
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <!-- Flyway 10 split MySQL support out of flyway-core; without it `flyway migrate` on a
+          mysql:// URL fails before the first statement runs. -->
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-mysql</artifactId>
     </dependency>
     <dependency>
       <groupId>com.mysql</groupId>

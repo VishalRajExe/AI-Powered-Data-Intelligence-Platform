@@ -362,19 +362,43 @@ New: `JobStatus` (the brief's 7 states), `JobType`, `RobotsStatus`, `DomainDecis
 
 ## E.5 Migration plan
 
-| File | Contents |
-|---|---|
-| `V1__baseline_identity.sql` | `users`, `workspaces`, `workspace_members`, `refresh_tokens`, `user_preferences` |
-| `V2__workflow_definition.sql` | `workflows`, `workflow_plans` |
-| `V3__execution.sql` | `workflow_runs`, `workflow_steps`, `workflow_jobs`, `activity_events` |
-| `V4__governance.sql` | `source_domain_policy`, `sources` |
-| `V5__datasets.sql` | `datasets`, `dataset_columns`, `dataset_rows`, `source_evidence`, `validation_issues`, `deduplication_events`, `data_quality_reports` |
-| `V6__export.sql` | `export_jobs` |
-| `V7__seed_dev.sql` | dev user + workspace only, **guarded to non-production** |
+| File | Contents | Status |
+|---|---|---|
+| `V1__baseline_identity.sql` | `users`, `workspaces`, `workspace_members`, `refresh_tokens`, `user_preferences` | **deferred to the authentication phase — arrives as `V3`** |
+| `V2__workflow_definition.sql` | `workflows`, `workflow_plans` | **applied as `V1__workflow_definition.sql`** |
+| `V3__execution.sql` | `workflow_runs`, `workflow_steps`, `workflow_jobs`, `activity_events` | **applied as `V2__execution.sql`** |
+| `V4__governance.sql` | `source_domain_policy`, `sources` | not built |
+| `V5__datasets.sql` | `datasets`, `dataset_columns`, `dataset_rows`, `source_evidence`, `validation_issues`, `deduplication_events`, `data_quality_reports` | not built |
+| `V6__export.sql` | `export_jobs` | not built |
+| `V7__seed_dev.sql` | dev user + workspace only, **guarded to non-production** | not built |
 
 Split by aggregate rather than one giant file, so a phase can be rolled forward independently.
 `V7` must refuse to run when `APP_ENV=production`, preserving the old seed's guard
 (`prisma/seed.ts:3`) — and must **not** create a demo login.
+
+### E.5.1 Numbering deviation, recorded rather than smoothed over
+
+Phase 7 (workflow execution) was built before the authentication phase, so the first aggregate with
+working code behind it became `V1` and identity slips to `V3`. **An already-applied migration is
+never renumbered or edited**, because Flyway verifies the checksums of what it has run; the sequence
+grows forward from here. Two consequences to carry into the auth phase:
+
+- `workflows.workspace_id`, `workflows.created_by_id`, `workflow_runs.workspace_id` and
+  `workflow_plans.created_by_id` are `NOT NULL` with **no foreign key**. They are populated from
+  server-side configuration (`FINALAGENT_WORKSPACE_ID`) and `Principals.UNAUTHENTICATED` (a nil
+  UUID), never from a request. The auth phase adds `fk_*_workspace` / `fk_*_user` and must then
+  refuse a workspace id that is not the caller's, which is the old project's
+  `datasets.routes.ts:13` defect this design removed the need for.
+- A dev seed (`V7` above) that mints the first workspace can now safely insert into `workflows`,
+  because the columns exist and are honest about who created a row: nobody.
+
+### E.5.2 Changes the database forced during Phase 7
+
+| Change | Why |
+|---|---|
+| `fk_runs_plan` gained `ON DELETE CASCADE` | Without it a workflow that had ever run could not be deleted: deleting the parent cascades to `workflow_plans` **and** `workflow_runs`, and the run's reference to its plan blocked removal of the plan. Found by MySQL refusing the `DELETE`, not by reading the DDL — `Memory.md` §2 P13 |
+| `workflow_jobs.last_error_message` stays `VARCHAR(2000)` **and** the repository truncates to fit | A provider payload of any length must not abort the write that records why a job failed |
+| The three string literals that were one message became one literal | `'<a>' + '<b>'` in SQL is arithmetic, not concatenation; MySQL answered `Truncated incorrect DOUBLE value` and the sweeper could never fail a stranded job (P12) |
 
 ---
 

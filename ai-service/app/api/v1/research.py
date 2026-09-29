@@ -14,14 +14,18 @@ from pydantic import Field, field_validator
 
 from app.config import Settings
 from app.contracts import CamelModel
-from app.curation.policy import extract_hostnames
 from app.llm.client import LlmError
 from app.research import prompts
 from app.research.contracts import ResearchLimitsRequest, ResearchRequest
 from app.research.graph import ResearchGraph
 from app.research.state import ResearchLimits
 from app.requirements.schema import expected_records
-from app.requirements.service import RequirementAnalysis, RequirementAnalysisError, RequirementAnalyzer
+from app.requirements.service import (
+    RequirementAnalysis,
+    RequirementAnalysisError,
+    RequirementAnalyzer,
+    build_collection_policy,
+)
 from app.security import require_api_key
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
@@ -127,21 +131,20 @@ def analysis_limits(limits: ResearchLimitsRequest | None, settings: Settings,
                     analysis: RequirementAnalysis) -> ResearchLimits:
     """Resolve the request, then fold the requirement's own source wishes into the policy.
 
-    The user said what they want collected; that is where preferred and avoided domains come
-    from. Only host-shaped preferences become a domain rule — a prose one like "their own
-    website" is carried as a note and reported, because turning it into a guessed domain would
-    be inventing policy the user never stated.
+    The policy is the one the analysis produced (`build_collection_policy`), so a preference is
+    never interpreted twice with two rules. Host-shaped wishes become domain rules; prose wishes
+    are carried as notes and reported rather than guessed at.
     """
     resolved = resolve_limits(limits, settings, expected_records=expected_records(analysis.requirement))
     requirement = analysis.requirement
+    policy = analysis.collection_policy or build_collection_policy(requirement)
 
-    preference_hosts, preference_notes = extract_hostnames(list(requirement.source_preferences))
-    restriction_hosts, restriction_notes = extract_hostnames(list(requirement.source_restrictions))
-
-    resolved.preferred_domains = list(dict.fromkeys(resolved.preferred_domains + preference_hosts))
-    resolved.blocked_domains = list(dict.fromkeys(resolved.blocked_domains + restriction_hosts))
+    resolved.preferred_domains = list(dict.fromkeys(
+        resolved.preferred_domains + list(policy.get("preferredDomains") or [])))
+    resolved.blocked_domains = list(dict.fromkeys(
+        resolved.blocked_domains + list(policy.get("blockedDomains") or [])))
     resolved.entity_type = resolved.entity_type or requirement.entity_type
-    resolved.source_preference_notes = preference_notes + restriction_notes
+    resolved.source_preference_notes = list(policy.get("unenforceablePreferences") or [])
     return resolved
 
 

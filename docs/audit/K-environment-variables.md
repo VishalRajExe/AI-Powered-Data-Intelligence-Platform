@@ -57,21 +57,37 @@
 | `JWT_REFRESH_TTL_DAYS` | no | `7` | |
 | `AI_SERVICE_BASE_URL` | yes | `http://localhost:8000` | internal only; never exposed to the browser |
 | `AI_SERVICE_API_KEY` | **yes** | — | shared secret for the Spring→Python boundary, constant-time compared |
-| `JOB_CORE_POOL_SIZE` | no | `4` | |
-| `JOB_MAX_POOL_SIZE` | no | `8` | |
-| `JOB_QUEUE_CAPACITY` | no | `100` | `CallerRunsPolicy` gives backpressure |
-| `JOB_LEASE_SECONDS` | no | `180` | renewed at `lease/3` |
-| `JOB_STALE_SWEEP_SECONDS` | no | `30` | |
-| `JOB_MAX_ATTEMPTS_DEFAULT` | no | `3` | plan steps may lower this, never raise it past the schema cap of 5 |
+| `AI_SERVICE_TIMEOUT_MS` | no | `3000` | The requirement-analysis client only. The **research** call gets its own `RestClient` with `min(300 s, WORKFLOW_STEP_TIMEOUT_MS + 5 s)`, because a collection run is minutes, not milliseconds, and one knob cannot govern both |
+| `WORKFLOW_EXECUTION_ENABLED` | no | `false` | Turns the queue on **and** turns Flyway on. Off, the service still answers health, requirement parsing and ad-hoc research honestly, instead of refusing to boot over a database it does not use |
+| `FINALAGENT_WORKSPACE_ID` | **yes** when enabled | — | The tenancy root, read from configuration and **never from a request** — the old `datasets.routes.ts:13` defect. Replaced by the token's workspace claim in the authentication phase |
+| `WORKFLOW_POLL_INTERVAL_MS` | no | `500` | Bounded 100-60000 at startup: below that is a table scan every few milliseconds |
+| `WORKFLOW_BATCH_SIZE` | no | `4` | Jobs claimed per pass, and expired leases swept per pass. Bounded 1-32 |
+| `WORKFLOW_CORE_POOL_SIZE` / `WORKFLOW_MAX_POOL_SIZE` | no | `4` / `8` | The claim gate is a **semaphore of `maxPoolSize` permits**, not the pool's queue: a claimed job waiting behind 200 others is a job whose lease expires and which then runs twice |
+| `WORKFLOW_QUEUE_CAPACITY` | no | `100` | Bounded 1-10000 |
+| `WORKFLOW_LEASE_SECONDS` | no | `300` | Bounded 10-3600. A dead worker holds its jobs for one lease, no longer |
+| `WORKFLOW_HEARTBEAT_SECONDS` | no | `30` | Bounded ≥5 and **strictly shorter than the lease** — a heartbeat that outlives its lease renews nothing |
+| `WORKFLOW_MAX_ATTEMPTS` | no | `3` | Bounded 1-10. `attempt_count` increments on the claim, so the count that decides exhaustion is the count actually spent |
+| `WORKFLOW_BACKOFF_BASE_SECONDS` / `WORKFLOW_BACKOFF_MAX_SECONDS` | no | `1` / `120` | `min(cap, base · 2^(attempt-1))` plus up to 30 % jitter; the ceiling may not be below the base |
+| `WORKFLOW_STEP_TIMEOUT_MS` | no | `240000` | Bounded 1000-300000 and **must be shorter than the lease**, or a step outlives its own lease and two workers run one step |
+| `JOB_STALE_SWEEP_SECONDS` | — | — | **Not a variable.** Sweeping is `WORKFLOW_BATCH_SIZE` expired leases inside the same loop that claims, so a separate interval would be a second clock to keep honest |
+| `SOURCE_MAX_REQUESTS_PER_DOMAIN_PER_MIN` | no | `20` | Produced as `SearchStrategy.max_requests_per_domain_per_minute` and reported, but **consumed by nothing yet** — the unbuilt host-resolution phase owns it |
 | `RATE_LIMIT_AUTH_PER_MIN` | no | `15` | |
 | `RATE_LIMIT_WORKFLOW_PER_MIN` | no | `30` | |
-| `SOURCE_ROBOTS_USER_AGENT` | no | `FinalAgentBot/1.0 (+contact-url)` | Identifying a crawler is correct behaviour; the old default was `ScoutlyBot` |
-| `SOURCE_ROBOTS_TIMEOUT_MS` | no | `5000` | |
-| `SOURCE_MAX_REQUESTS_PER_DOMAIN_PER_MIN` | no | `20` | global ceiling; a plan may go lower, never higher than 60 |
+| `SOURCE_ROBOTS_USER_AGENT` | no | `FinalAgentBot/1.0 (+contact-url)` | Identifying a crawler is correct behaviour; the old default was `ScoutlyBot`. **Not read yet:** robots is fetched in Python (`ROBOTS_USER_AGENT`, K.4), which is where the fetch actually happens. This one stays for the host-resolution phase |
+| `SOURCE_ROBOTS_TIMEOUT_MS` | no | `5000` | *(same note)* |
 | `EXPORT_STORAGE_DIR` | no | `./storage/exports` | downloads are path-traversal-contained to it (`export.repository.ts:122-128`) |
 | `EXPORT_CHUNK_SIZE` | no | `500` | |
 | `EXPORT_TTL_HOURS` | no | `24` | **actually enforced** by the sweeper this time |
 | `REQUEST_BODY_LIMIT` | no | `1mb` | |
+
+**Renamed at Phase 7.** The audit's `JOB_*` names became `WORKFLOW_*`, so one prefix covers the
+layer and its bounds are all listed in one place. `JOB_LEASE_SECONDS`'s `180` became
+`WORKFLOW_LEASE_SECONDS` `300`: the default step budget (240 s) has to fit inside a lease with room
+to spare, and the startup validator refuses the pairing — which is how the original numbers were
+found to contradict each other (`Memory.md` §2 P14). `JOB_MAX_ATTEMPTS_DEFAULT` became
+`WORKFLOW_MAX_ATTEMPTS` with a hard 1-10 range instead of a plan-overridable default, because a step
+cannot currently lower it either — `max_attempts` is stamped at enqueue from configuration, and a
+per-step override would need the plan schema to carry it first.
 
 ## K.4 FastAPI (`ai-service`)
 

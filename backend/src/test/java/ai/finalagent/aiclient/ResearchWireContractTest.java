@@ -73,7 +73,8 @@ class ResearchWireContractTest {
                   "sources": [
                     {"url": "https://youtube.test/c/codingcat", "title": "Coding Cat",
                      "snippet": "python tutorials", "sourceType": "search+scrape",
-                     "retrievedAt": "2026-09-29T06:00:00+00:00", "verifiedByTool": true}
+                     "retrievedAt": "2026-09-29T06:00:00+00:00", "verifiedByTool": true,
+                     "citedByRecords": 1}
                   ],
                   "metadata": {"model": "gemini-2.5-flash", "loopsUsed": 3, "searchesUsed": 1,
                                 "scrapesUsed": 1, "interactionsUsed": 1,
@@ -85,6 +86,12 @@ class ResearchWireContractTest {
                   "validation": {"schemaValid": true, "missingFields": [], "extraFields": [],
                                   "repairsUsed": 0, "critiqueSatisfactory": true,
                                   "critiqueReasons": ["a", "b", "c"], "unverifiedUrls": [],
+                                  "recordsWithoutEvidence": [1], "duplicateSourcesCollapsed": 2,
+                                  "refusedSources": [{"url": "https://blog.example/x",
+                                                        "code": "ROBOTS_DISALLOWED",
+                                                        "reason": "disallow /blog/"}],
+                                  "droppedCandidates": [{"url": "https://off.example/y",
+                                                          "code": "IRRELEVANT", "score": 0.02}],
                                   "warnings": ["expected at least 50 records, collected 1"]}
                 }
                 """;
@@ -103,6 +110,14 @@ class ResearchWireContractTest {
         assertThat(result.metadata()).containsEntry("playbooksUsed", List.of("Acme jobs (Job boards)"));
         assertThat(result.validation().warnings())
                 .anyMatch(warning -> warning.contains("expected at least 50 records"));
+        // What the curation stage did before any page was fetched: refusals carry their own code,
+        // dropped candidates carry their score, and a record with no evidence is named by index.
+        assertThat(result.validation().refusedSources())
+                .extracting(ResearchResult.Refusal::code).containsExactly("ROBOTS_DISALLOWED");
+        assertThat(result.validation().droppedCandidates().get(0)).containsEntry("score", 0.02);
+        assertThat(result.validation().recordsWithoutEvidence()).containsExactly(1);
+        assertThat(result.validation().duplicateSourcesCollapsed()).isEqualTo(2);
+        assertThat(result.sources().get(0).citedByRecords()).isEqualTo(1);
         assertThat(result.failureReason()).isNull();
     }
 

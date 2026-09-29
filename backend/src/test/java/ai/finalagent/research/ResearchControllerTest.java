@@ -74,12 +74,13 @@ class ResearchControllerTest {
                         Map.of("company", "Acme", "role", "Frontend Engineer",
                                 "application_url", "https://acme.test/jobs/1"),
                         List.of(new ResearchResult.Source("https://acme.test/jobs/1", "Acme", "",
-                                "search+scrape", "2026-09-29T00:00:00Z", true)))),
+                                "search+scrape", "2026-09-29T00:00:00Z", true, null)))),
                 List.of(new ResearchResult.Source("https://acme.test/jobs/1", "Acme", "",
-                        "search+scrape", "2026-09-29T00:00:00Z", true)),
+                        "search+scrape", "2026-09-29T00:00:00Z", true, 1)),
                 Map.of("loopsUsed", 3, "searchesUsed", 1, "scrapesUsed", 1),
                 new ResearchResult.Validation(true, List.of(), List.of(), 0, true,
-                        List.of("fields present", "urls observed", "count matches"), List.of(), List.of()),
+                        List.of("fields present", "urls observed", "count matches"),
+                        List.of(), List.of(), 0, List.of(), List.of(), List.of()),
                 null);
     }
 

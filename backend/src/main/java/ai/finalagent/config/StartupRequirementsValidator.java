@@ -68,6 +68,8 @@ public class StartupRequirementsValidator implements InitializingBean {
             checkCorsOrigin(problems, origin);
         }
 
+        checkExecution(problems, p.execution());
+
         if (!problems.isEmpty()) {
             throw new MissingRequiredConfigurationException(
                     "FINALAIAGENT backend refused to start. Fix the following configuration "
@@ -125,6 +127,68 @@ public class StartupRequirementsValidator implements InitializingBean {
             }
         } catch (URISyntaxException e) {
             problems.add(variable + " is not a parseable URI.");
+        }
+    }
+
+    /**
+     * Bounds the workflow queue. Every one of these is a limit that, if wrong, shows up as a
+     * stuck or duplicated job rather than an exception, so they are refused at startup instead of
+     * discovered in production.
+     */
+    static void checkExecution(List<String> problems, FinalAgentProperties.Execution execution) {
+        if (execution == null) {
+            problems.add("finalagent.execution must be configured; the workflow layer cannot "
+                    + "start from implicit defaults.");
+            return;
+        }
+        if (!execution.enabled()) {
+            // Disabled means "no queue, no Flyway": the remaining checks would only make the
+            // service refuse to boot for values nothing reads.
+            return;
+        }
+        if (execution.workspaceId() == null || execution.workspaceId().isBlank()) {
+            problems.add("FINALAGENT_WORKSPACE_ID must be set when the workflow layer is enabled. "
+                    + "It is taken from configuration, never from a request, because the previous "
+                    + "project trusted a client-supplied workspaceId.");
+        }
+        if (execution.pollIntervalMs() < 100 || execution.pollIntervalMs() > 60_000) {
+            problems.add("WORKFLOW_POLL_INTERVAL_MS must be between 100 and 60000; a faster poll "
+                    + "is a database scan every few milliseconds.");
+        }
+        if (execution.batchSize() < 1 || execution.batchSize() > 32) {
+            problems.add("WORKFLOW_BATCH_SIZE must be between 1 and 32.");
+        }
+        if (execution.corePoolSize() < 1 || execution.maxPoolSize() < execution.corePoolSize()
+                || execution.maxPoolSize() > 64) {
+            problems.add("WORKFLOW_MAX_POOL_SIZE must be at least WORKFLOW_CORE_POOL_SIZE and no "
+                    + "more than 64; workers are bounded by the Hikari pool, not by ambition.");
+        }
+        if (execution.queueCapacity() < 1 || execution.queueCapacity() > 10_000) {
+            problems.add("WORKFLOW_QUEUE_CAPACITY must be between 1 and 10000.");
+        }
+        if (execution.leaseSeconds() < 10 || execution.leaseSeconds() > 3600) {
+            problems.add("WORKFLOW_LEASE_SECONDS must be between 10 and 3600.");
+        }
+        if (execution.heartbeatSeconds() < 5
+                || execution.heartbeatSeconds() >= execution.leaseSeconds()) {
+            problems.add("WORKFLOW_HEARTBEAT_SECONDS must be at least 5 and shorter than the "
+                    + "lease; a heartbeat that outlives its lease renews nothing.");
+        }
+        if (execution.maxAttempts() < 1 || execution.maxAttempts() > 10) {
+            problems.add("WORKFLOW_MAX_ATTEMPTS must be between 1 and 10.");
+        }
+        if (execution.backoffBaseSeconds() <= 0 || execution.backoffMaxSeconds() < execution.backoffBaseSeconds()) {
+            problems.add("WORKFLOW_BACKOFF_MAX_SECONDS must be at least WORKFLOW_BACKOFF_BASE_SECONDS, "
+                    + "and the base must be greater than zero.");
+        }
+        if (execution.stepTimeoutMs() < 1_000 || execution.stepTimeoutMs() > 300_000) {
+            problems.add("WORKFLOW_STEP_TIMEOUT_MS must be between 1000 and 300000; the plan "
+                    + "schema bounds a step the same way, and a longer step needs a job design, "
+                    + "not a bigger number here.");
+        }
+        if (execution.stepTimeoutMs() >= execution.leaseSeconds() * 1000L) {
+            problems.add("WORKFLOW_STEP_TIMEOUT_MS must be shorter than WORKFLOW_LEASE_SECONDS, or a "
+                    + "step would still be running when its lease expires and another worker claims it.");
         }
     }
 }

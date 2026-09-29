@@ -43,6 +43,16 @@ run_check() {
 if [[ "$WHICH" == "all" || "$WHICH" == "backend" ]]; then
   run_check "backend: tests"   "backend"  "mvn -B -ntp test"
   run_check "backend: package" "backend"  "mvn -B -ntp -DskipTests package"
+
+  # The queue's locking, lease and duplicate-key guarantees only exist in MySQL. Two test
+  # classes cover them and are disabled unless the gate is on, so an environment without a
+  # database reports SKIPPED for them instead of pretending the queue was verified.
+  if [[ "${FINALAGENT_TEST_MYSQL:-}" == "true" ]]; then
+    run_check "backend: mysql queue" "backend" \
+      "FINALAGENT_TEST_MYSQL=true mvn -B -ntp test -Dtest='WorkflowQueueMySqlTest,WorkflowRunLifecycleMySqlTest'"
+  else
+    record "SKIP" "backend: mysql queue" "FINALAGENT_TEST_MYSQL is not true"
+  fi
 fi
 
 if [[ "$WHICH" == "all" || "$WHICH" == "ai" ]]; then
@@ -80,7 +90,10 @@ echo "  RUN_LIVE_FIRECRAWL_TESTS=true pytest -q tests/test_live_firecrawl.py"
 echo "The first two need Gemini quota (the free tier caps gemini-2.5-flash at 20 requests/day);"
 echo "the third bills Firecrawl credits and is skipped while FIRECRAWL_API_KEY is blank, so the"
 echo "browser-session path is verified here only against a stub SDK client."
-echo "Also not covered: Docker builds (Docker is not installed here)"
-echo "and any real MySQL round-trip (needs credentials in the root .env)."
+echo "Also not covered: Docker builds (Docker is not installed here)."
+echo "A real MySQL round-trip IS covered, but only when FINALAGENT_TEST_MYSQL=true is set:"
+echo "  FINALAGENT_TEST_MYSQL=true scripts/verify.sh backend"
+echo "which runs the queue's lease, claim-race, retry and duplicate-key tests against the"
+echo "database named in the root .env. Without it those cases are reported SKIPPED above."
 
 exit "$FAILED"

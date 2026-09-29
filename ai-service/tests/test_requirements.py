@@ -268,3 +268,50 @@ async def test_records_key_is_required_and_an_empty_array_fails_the_gate(setting
 
     brief = build_research_brief(analysis.requirement)
     assert "youtube_channel" in brief
+
+
+def _with_sources(**preferences):
+    import copy
+
+    payload = copy.deepcopy(CHANNELS)
+    payload["requirement"].update(preferences)
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_a_named_source_becomes_a_domain_rule_and_a_prose_one_stays_a_note(settings):
+    analysis = await RequirementAnalyzer(llm=RecordingLlm([_with_sources(
+        sourcePreferences=["youtube.com", "the channel's own website"],
+        sourceRestrictions=["reddit.com"],
+    )]), settings=settings).analyze("find best youtube channels for coding")
+
+    policy = analysis.collection_policy
+    assert policy["preferredDomains"] == ["youtube.com"]
+    assert policy["blockedDomains"] == ["reddit.com"]
+    # The prose preference is reported as unenforceable rather than being guessed into a domain:
+    # inventing one is how a hardcoded source list comes back.
+    assert policy["unenforceablePreferences"] == ["the channel's own website"]
+
+
+@pytest.mark.asyncio
+async def test_the_safety_literals_come_from_the_service_not_from_the_model(settings):
+    """A model cannot relax these by omitting or contradicting them; they are constants."""
+    analysis = await RequirementAnalyzer(llm=RecordingLlm([CHANNELS]),
+                                         settings=settings).analyze("find best youtube channels for coding")
+
+    policy = analysis.collection_policy
+    assert policy["respectRobotsTxt"] is True
+    assert policy["allowAuthentication"] is False
+    assert policy["allowCaptchaBypass"] is False
+    assert policy["preferredDomains"] == [] and policy["blockedDomains"] == []
+
+
+@pytest.mark.asyncio
+async def test_the_analysis_response_carries_the_policy_spring_needs_to_store(settings):
+    analysis = await RequirementAnalyzer(llm=RecordingLlm([CHANNELS]),
+                                         settings=settings).analyze("find best youtube channels for coding")
+
+    body = analysis.as_dict()
+    assert set(body) == {"status", "requirement", "extractionSchema", "searchQueries",
+                         "researchBrief", "collectionPolicy", "clarificationQuestions", "metadata"}
+    assert body["collectionPolicy"]["respectRobotsTxt"] is True

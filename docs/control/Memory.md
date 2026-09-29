@@ -12,34 +12,44 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 5 — research quality integration. **COMPLETE, live-verified by nothing**
-  (see §2 and §5): every case ran on doubles, because there is still no `FIRECRAWL_API_KEY`.
-  Requirement → search strategy → relevant sources → source policy → Firecrawl → extraction is
-  now one connected path over one web engine. Phases 0-4 are recorded above; nothing is persisted.
+- **Current Phase:** 7 — Spring Boot workflow execution, **COMPLETE and live-verified against real
+  MySQL** for the first time in this project. Workflow → WorkflowPlan → WorkflowRun → WorkflowStep
+  → WorkflowJob are persisted tables; a Spring `TaskExecutor` worker pool claims MySQL-persisted
+  jobs under leases with no Redis anywhere. 185 backend tests pass, 30 of them against MySQL 9.6,
+  and the packaged jar was booted with the layer enabled. The web layer (Phases 4-5) remains
+  **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real search, scrape, session or
+  robots fetch has ever run from this project.
 - **Last updated:** 2026-09-29
 - **Application code written:** three independent processes.
-  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 25 main source files, 11 test classes.
+  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 52 main source files, 20 test classes, 27 of
+    those files in the new `workflow/` package:
+    `domain` (state machines + row records), `repository` (the queue), `plan` (deterministic
+    planner), `execution` (worker, executor, lease guard, backoff, step handlers), `service`, `web`.
   - `ai-service/` — FastAPI on Python 3.14 (3.12 pinned for deployment), 36 modules: config,
     contracts, security, logging, `api/v1/{health,research,requirements}`, `llm/`, `firecrawl/`,
     `extraction/`, `requirements/`, `research/` (graph, tools, state, prompts, skills, contracts)
     and `curation/` (canonical, relevance, ranking, policy, robots, retry, queries, aggregation).
+    Unchanged by Phase 7 — Spring calls it, it calls nothing back.
   - `frontend/` — Next.js 14.2.35. PirateAgentUI design foundation copied byte-identically
     (`diff -r` verified), 10 routes, `lib/api/` typed client.
   - Plus `database/`, `deploy/`, `scripts/`, `ai-service/skills/` (playbook loader docs), and the
     root `.env.example`.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
-  process; `scripts/verify.sh` runs every suite.
-- **Still not built:** the workflow planner and job engine, the MySQL schema and persistence, the
-  quality pipeline (normalize / validate / dedupe / entity-resolve), host-resolution source
-  governance (SSRF and per-domain rate — robots *is* now enforced at fetch time), SSE monitoring,
-  exports, and authentication. `POST /api/v1/research` runs the graph and returns the result,
-  storing nothing.
+  process; `scripts/verify.sh` runs every suite and now reports the MySQL-gated queue checks.
+- **Built:** the workflow planner and job engine, their schema and persistence, fetch-time source
+  governance (robots + domain policy + ranking + dedupe), and Java-side contract re-enforcement.
+- **Still not built:** dataset persistence (the collected records live in a step's JSON summary,
+  not in typed tables), the quality pipeline as a *stored* artefact (normalize / entity-resolve /
+  dedupe across runs), exports, SSE streaming (events are persisted and pollable, not pushed),
+  host-resolution SSRF and per-domain rate, and authentication — which is what makes
+  `FINALAGENT_WORKSPACE_ID` a single-tenant stopgap rather than a design.
 - **Repository:** `FINALAIAGENT` is its own git repo, pushed to branch `implementjava` of
   `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git` after every phase, per the
   standing rule. Its history is independent of `main` (old project), which has never been touched
-  from here. Phase 5 is the next commit to make.
-- **Blocked on:** decisions **G1**, **G2**, **S1** and the **L1** licence ruling (§6); a MySQL
-  account the app can connect as; Python 3.12 before the provider extra is installed.
+  from here. Phase 7 is the next commit to make.
+- **Blocked on:** decisions **G1**, **G2**, **S1**, **Q1**, **Q2** and the **L1** licence ruling
+  (§6); Python 3.12 before the provider extra is installed. **B1 (the MySQL account) is resolved**
+  and no longer blocks anything.
 
 ## 2. Completed Phases
 
@@ -326,6 +336,59 @@ existed, and that the system was production-ready — each contradicted by its o
   Deliberate non-additions: no embedding provider, no second search engine, no `map`/`crawl`
   budget model, no DNS-resolving SSRF guard (still Spring's, and now sharpened — see R32/R37).
 
+- [x] **Phase 7 (2026-09-29) — Spring Boot workflow execution. NO REDIS.** MySQL-persisted jobs,
+      Spring `TaskExecutor` workers, conditional-UPDATE claim locking, leases with heartbeats, a
+      sweeper for dead workers, retries with capped jittered backoff, step timeouts, cooperative
+      cancellation, persisted progress and counters, and duplicate-job prevention enforced by the
+      schema. Every number below came from a command run in this session.
+
+  | Verification | Measured |
+  |---|---|
+  | Backend tests | `mvn test` → **185 tests, 0 failures, 0 errors, 0 skipped** with `FINALAGENT_TEST_MYSQL=true` (was 80 before this phase; without the gate 155 run and the same 30 report as skipped) |
+  | Queue semantics on real MySQL | **14/14** in `WorkflowQueueMySqlTest`, MySQL **9.6.0** on 127.0.0.1:3306 |
+  | Full run lifecycle on real MySQL | **16/16** in `WorkflowRunLifecycleMySqlTest` (end-to-end: API → run → jobs → worker → steps → status) |
+  | Claim race | 8 threads, one job, **exactly 1 winner**; `attempt_count` 1, one `worker_id` |
+  | Duplicate prevention | `UNIQUE (run_id, step_id)` and `UNIQUE (workflow_id, attempt)` both reject the second insert (returns false, row count stays 1) |
+  | Lease recovery | expired lease → job back to `PENDING`, step back to `PENDING`, re-claimable by the next worker; with attempts exhausted → job and step `FAILED` with `LEASE_EXPIRED_EXHAUSTED` |
+  | Lost-lease write | `writeTerminal` / `requeue` / `renewLease` all return **false** for the worker that lost ownership; the row keeps the new holder's state and no result is written |
+  | Retry timing | `requeue(delay=60)` puts `scheduled_for`/`next_retry_at` 60 s out on the **database clock**; `findClaimable()` returns nothing until then |
+  | Shutdown | `releaseLeasesHeldBy` returned 2 and both jobs became claimable immediately |
+  | Backend jar | `target/backend-0.1.0.jar`, 29,862,362 bytes |
+  | **Real process boot** | jar started with `WORKFLOW_EXECUTION_ENABLED=true`: Flyway connected to MySQL 9.6, **`workflow worker local:development:32276:… started (pool 8, lease 300s, poll 500ms)`**, `Started BackendApplication in 4.324 seconds` |
+  | `/api/v1/ready` live | 503, honestly: `mysql UP`, `credentials UP`, **`workflowQueue UP` with `pendingJobs/runningJobs/activeRuns`**, `aiService DOWN (reachable:false)` because the Python service was not running |
+  | `GET /api/v1/workflows/runs` live | 200 with `{"runs":[],"worker":{"freeSlots":8,"running":true,"inFlight":0,…}}` |
+  | AI service | unchanged this phase: **245 passed, 8 skipped** |
+
+  **This closes Phase 1's last exit criterion** (item 6, "a MySQL account the app can connect as").
+  The account is `finalagent`, granted `ALL PRIVILEGES ON finalagent_dev.*` only, and the schema
+  now holds the seven Flyway-managed tables plus `flyway_schema_history` (2 migrations). The rows
+  written while verifying were deleted again; `SELECT COUNT(*)` on `workflows`, `workflow_runs`,
+  `workflow_jobs`, `activity_events` is 0.
+
+  Defects **in my own Phase 7 code** found by compiling and running, not by reading:
+
+  | # | Defect | How it surfaced |
+  |---|---|---|
+  | P12 | **`failLeaseExhausted` used SQL `+` to join two string literals.** In SQL that is arithmetic, so MySQL answered `Data truncation: Truncated incorrect DOUBLE value` and the sweep could never fail a stranded job — the exact row the sweeper exists to fix. | `WorkflowQueueMySqlTest.anExpiredLeaseWithNoAttemptsLeft…` against real MySQL (SQLite and doubles never evaluate that expression) |
+  | P13 | **`fk_runs_plan` had no cascade,** so deleting a workflow that had ever run was refused outright: the plan row is a parent of the run, and both cascade from `workflows`. No retention path, no delete, and the tests could not clean up. | `Cannot delete or update a parent row` on the first `@AfterEach`; fixed by `ON DELETE CASCADE` in `V2__execution.sql` and re-applying the schema |
+  | P14 | **The shipped defaults contradicted the validator they ran into:** `step-timeout-ms` 240000 against `lease-seconds` 90, which `StartupRequirementsValidator` itself refuses ("step timeout must be shorter than the lease"). Enabling the queue with the documented defaults would have stopped the process at boot. | Writing `acceptsAConfiguredQueue` with the defaults from `application.yml` — it failed before any queue code ran. Lease default raised to 300 s in `application.yml` and `.env.example`, with the reason written next to the number |
+  | P15 | **A successful terminal write erased the reason for the failed attempt** (`last_error_code = ?` with null), so a run that took three tries recorded nothing about why. | `aTransientUpstreamFailureIsRetriedAndTheRunStillCompletes…` expected `SERVER_ERROR`, got `null`; the write now `COALESCE`s the error columns |
+  | P16 | **Both step handlers read the wrong payload key** (`researchRequest` / `validate` instead of `config`), so every real run would have failed with `STEP_CONFIG_MISSING` before calling anything. The unit tests caught it because they built the payload the way `PlanSteps.payloadFor` actually builds it. | `ExtractStepHandlerTest` / `ValidateStepHandlerTest` |
+  | P17 | **The `VALIDATE` step re-added `recordsFound` and `recordsRaw` that `EXTRACT` had already counted,** so a two-step run would have reported double the records it collected. Counters are now owned by exactly one step type. | Reasoning against the DDL while writing `ValidateStepHandlerTest`; asserted by `theValidatorContributesOnlyTheVerdictsToTheRunCounters` |
+  | P18 | **A failed run left its later steps `PENDING`,** reading as work still to come beside a `FAILED` run. The terminal rollup now cancels unstarted steps as well as unstarted jobs. | `aStepThatNeverSucceedsExhaustsItsAttempts…` |
+  | P19 | **`ActivityRepository.forRun(runId, limit, afterId)`** had the cursor and the limit swapped relative to every caller's mental model; called with `limit=0` it silently returned nothing. Reordered to `(runId, afterId, limit)`. | `theStepThatRanRecordedWhatItProducedAndTheRunKeepsTheEventTrail` got an empty list despite four events being present |
+  | P20 | **`ResearchResult.Validation` was missing five fields the AI service already sends** (`recordsWithoutEvidence`, `duplicateSourcesCollapsed`, `refusedSources`, `droppedCandidates`, and `Source.citedByRecords`), and Spring — with `FAIL_ON_UNKNOWN_PROPERTIES` disabled — dropped them silently. | Writing `ExtractStepHandler`, which needed the refusal counts; the wire-contract test now pins all of them, including that `refusedSources` is a list of **objects** while `recordsWithoutEvidence` is a list of **record indices** |
+  | P21 | **Dead code from the first draft:** eleven repository methods nothing called (`findByStatus`, `isStepJobTerminal`, `hasUnfinishedForRun`, `runningJobCount`… , `markRunningAgain`, `cancelAllNotFinished`, `findNotFinished`, `countByStatus`, `countAll`, `reclaimExpiredLeases(int)`, `findExhaustedExpired`), plus `LeaseGuard.jobId()`, `StepContext.get()` and `WorkflowService.Created`. Each was a second way to do something that had a first way already. | `grep` for call sites before writing tests |
+
+  Reuse records:
+
+  | Repository | Source file | Feature | Destination | Method |
+  |---|---|---|---|---|
+  | _(none — Phase 7 is a port of this project's own audit, not of a reference repo)_ | `docs/audit/J-no-redis-job-architecture.md` §J.1-§J.13 | the whole queue design: four queue columns, the conditional-UPDATE claim, lease + heartbeat, sweeper, backoff formula, `REQUIRES_NEW` terminal writes, semaphore-gated claiming, shutdown lease release | `workflow/repository/JobRepository`, `workflow/execution/{WorkflowWorker,WorkflowJobExecutor,LeaseGuard,Backoff}`, `db/migration/V2__execution.sql` | **AUDIT → IMPLEMENTATION.** Every SQL statement carries the section it came from in its javadoc. Nothing here was taken from `anakin`, `web-agent-main` or `web-research-agent-master`: none of them has a persistent job queue (the first is in-process, the second delegates to Firecrawl's cloud run, the third is a synchronous script) |
+  | old project (audit only) | `workflow-runner.ts:167-169` | emitting `EXPORT_NOT_IN_PHASE` placeholder steps for work the runner never implemented | — | **NO TAKE — and inverted.** `WorkflowPlanner` emits only `collect` and `validate`; `SAVE`/`EXPORT` are absent from the plan rather than present-and-skipped, so a plan cannot look complete while doing nothing |
+  | old project (audit only) | `workflows.routes.ts:92` | progress synthesised from status (`COMPLETED→100, RUNNING→50, else 0`) | `RunRollup.derive`, `RunRepository.updateProgress` | **REPLACED.** Progress is the fraction of terminal steps, and the counters move by atomic SQL increments tied to the step transition that produced them |
+  | old project (audit only) | `datasets.routes.ts:13`, `persistDataset` | client-supplied `workspaceId`; rows dropped when they lacked a verified source | `WorkflowService.workspace()`, `ValidateStepHandler` | **REJECTED.** The workspace comes from `FINALAGENT_WORKSPACE_ID` only, a foreign workspace id answers as not-found, and failing records are counted and reported, never deleted |
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -382,22 +445,71 @@ existed, and that the system was production-ready — each contradicted by its o
 | 2026-09-29 | **Curation lives in Python, request *shape* is validated in Java, and the ceiling stays in one place.** | Same division as Phase 4's tool ceiling: the service that fetches decides and reports; Spring refuses nonsense before paying for a round trip. A second policy implementation in Java would be a second place for the two to disagree |
 | 2026-09-29 | **`domain_allowed` moved from `research/tools.py` to `curation/policy.py`.** | One policy path: allow/block and robots are decided by the same call that every tool consults, so a scrape cannot pass a check the search stage skipped |
 
+| 2026-09-29 | **Phase 7: the job queue is MySQL, not Redis, and the lock is one conditional `UPDATE`.** | `UPDATE workflow_jobs SET status='RUNNING', worker_id=?, lease_expires_at=TIMESTAMPADD(SECOND,?,NOW(6)), attempt_count=attempt_count+1, version=version+1 WHERE id=? AND status='PENDING' AND version=? AND scheduled_for<=NOW(6)` returns 1 row for exactly one caller. InnoDB evaluates the predicates and writes the new values in the same statement, so there is no window between "check" and "take" for another node to slip into. Measured: 8 threads, 1 winner. `SKIP LOCKED` is neither needed nor used: the version predicate already makes the second claimer a no-op, and it works on any MySQL rather than 8.0+ only (`J` §J.2) |
+| 2026-09-29 | **Time belongs to the database.** Every lease, backoff and scheduling instant in `JobRepository` is `NOW(6)` or `TIMESTAMPADD(…, NOW(6))`; the application clock is never consulted. | Two app nodes with clock skew would otherwise disagree about who owns a job, and that disagreement looks exactly like a stuck queue. Proven where it matters: `requeue(delay=60)` puts `scheduled_for` in the future on the *server's* clock and `findClaimable()` then returns nothing |
+| 2026-09-29 | **A worker that lost its lease writes nothing — twice over.** The executor re-reads `worker_id AND status='RUNNING'` before opening its terminal transaction, and the write itself carries `WHERE worker_id = ? AND status = ?`. | If a lease is retaken mid-step, two workers hold answers for one step, and whichever wrote last would otherwise win arbitrarily while the run's counters absorbed both. Verified by `aWorkerWhoseLeaseWasTakenOverCannotWriteAnything`: `writeTerminal`, `requeue` and `renewLease` all return false for the dispossessed worker and the row keeps the new holder's state |
+| 2026-09-29 | **Terminal state is written in a `REQUIRES_NEW` transaction with a 5 s timeout.** | By the time a timeout or a cancellation is recorded, the step's own context is finished, and a write made inside it would be rolled back along with it — which is how the reference implementation left rows "stuck in processing forever" by its own admission (`J` §J.6) |
+| 2026-09-29 | **Duplicate work is refused by the schema, not by a check-then-insert:** `UNIQUE (run_id, step_id)`, `UNIQUE (run_id, step_key)`, `UNIQUE (workflow_id, attempt)`. | Two nodes can both pass "does this job exist?" before either inserts. `insertStepJob` and `RunRepository.insert` catch `DuplicateKeyException` and return false, so the loser of the race reads the winner's row instead of creating a second execution |
+| 2026-09-29 | **Step-job claiming is gated by a semaphore, not by the pool's queue.** | A claimed job whose lease is ticking while it waits behind 200 queued others is a job that gets reclaimed and run twice — the exact failure the lease exists to detect. `WorkflowWorker` takes a permit per claim and releases it when the job finishes |
+| 2026-09-29 | **A lease that expires with attempts left is revived; one that expires with none is failed loudly,** together with its step row. | Reviving forever would hide a worker that cannot finish; leaving it `RUNNING` would look like work in progress indefinitely, which is how the old export jobs stranded. Both branches live in `WorkflowWorker.reclaimExpiredLeases` and both are tested against MySQL |
+| 2026-09-29 | **Shutdown releases our leases** — stop claiming, drain in-flight up to `min(30, lease)`, then `releaseLeasesHeldBy(workerId)`. | The difference between a redeploy that resumes in seconds and one where every in-flight job waits out its lease. The test asserts both rows return to `PENDING` with `lease_expires_at` cleared |
+| 2026-09-29 | **The step timeout wraps the handler on a separate invoker thread; it is not a value the handler is asked to respect.** | A call blocked on a socket never checks a deadline, so `Future.get(stepTimeoutMs)` reclaims the job regardless. What the timeout *cannot* do is abort the HTTP request already in flight — Firecrawl exposes no run-level abort — so the recorded message says that out loud instead of implying the call was cancelled |
+| 2026-09-29 | **`WORKFLOW_STEP_TIMEOUT_MS` must be shorter than `WORKFLOW_LEASE_SECONDS`, enforced at startup.** | If a step can outlive its lease, two workers run one step on purpose rather than by accident. Writing the rule found that the shipped defaults broke it (P14), which is the argument for having it |
+| 2026-09-29 | **Cancellation is cooperative, and a `RUNNING` step is never rewritten by the cancelling request.** | Only its worker knows what it is in the middle of. `cancel` sets `cancel_requested_at`, cancels *pending* jobs and *pending* steps, and lets the in-flight worker notice at its next boundary; handlers check `cancelRequested()` before spending anything. Stamping a live row `CANCELLED` would create a row claiming an outcome no thread ever wrote |
+| 2026-09-29 | **Counters move by atomic SQL increments tied to the step transition that produced them, and each counter has exactly one owner.** | `records_raw`/`records_found` belong to `EXTRACT`, `records_valid`/`duplicate_count` to `VALIDATE`. Read-modify-write would race across concurrent steps, and a shared "records found" field would double-count (P17). A replayed or lease-lost write adds nothing, because the step write it hangs off returns false |
+| 2026-09-29 | **Progress is derived from step states and nothing else.** | The replaced project synthesised `COMPLETED→100, RUNNING→50, else 0` (`workflows.routes.ts:92`), so a run wedged for twenty minutes looked half-done. `RunRollup.derive` floors `terminal/total`, so a two-step plan reports 0, 50, 100 as its steps actually finish |
+| 2026-09-29 | **A shortfall against the plan's `minimumRecords` is `PARTIAL`, never `COMPLETED`.** | The count is the evidence and the status is the reading of it; `RECORD_SHORTFALL` names both numbers in the message so nobody has to diff a log to learn how much was missing |
+| 2026-09-29 | **The planner is deterministic code, not a language model, and it emits only steps this build executes.** | Phase 3's structured call already produced the requirement, schema and queries; deriving the DAG from them keeps the same-input → same-`planHash` property and keeps a model out of the space between the contract and the queue. `SAVE` and `EXPORT` are *absent* rather than present-and-skipped, inverting the old `EXPORT_NOT_IN_PHASE` placeholder that let a plan look complete while doing nothing (`workflow-runner.ts:167-169`) |
+| 2026-09-29 | **A job carries its own config snapshot** — `PlanSteps.payloadFor` copies the step's config into `workflow_jobs.payload` at enqueue time. | A job reclaimed an hour later must execute the plan that was current when it was created, not whatever the mutable plan row says now |
+| 2026-09-29 | **Steps are materialised up front; jobs are created only when their dependencies are satisfied.** | Then every `PENDING` job in the queue is genuinely executable, so no worker has to claim work, discover its predecessors are unfinished and put it back. Materialising the steps is also what lets `GET /runs/{id}` show the whole plan, including the parts still waiting |
+| 2026-09-29 | **The `VALIDATE` step is Java re-enforcing Python's claim, and it deletes nothing.** | `WorkflowService.plan` refuses to store a plan from an unverified AI answer, and `ValidateStepHandler` refuses to call a record valid because the graph said so: required fields present and non-blank, a source with `verifiedByTool`, and a dedupe identity. Failures are counted and reported by index (max 50, plus `issuesTruncated`), because the old `persistDataset` dropped unevidenced rows in silence (`00-FORENSIC-AUDIT.md` §5 item 8) |
+| 2026-09-29 | **The activity log is written before anything is broadcast, always,** and a failed monitoring write is logged with the run id rather than swallowed. | It is what makes post-restart history and SSE replay correct without Redis pub/sub: the table is the truth and a stream is a convenience |
+| 2026-09-29 | **Tenancy stays in configuration while authentication does not exist, and a foreign id answers as not-found.** | `FINALAGENT_WORKSPACE_ID` is never read from a request; `require(runId)` returns the same 404 for another workspace's run as for a nonexistent one, because confirming that an id exists is itself a leak. `Principals.UNAUTHENTICATED` (nil UUID) is the actor: "we do not know who", not a placeholder that resembles an account |
+| 2026-09-29 | **Flyway is tied to `WORKFLOW_EXECUTION_ENABLED`, with `baseline-on-migrate: false`.** | One switch for the layer and the schema it needs, so nothing can start the queue against an unmigrated database; and baselining away a pre-existing schema would skip precisely the unique keys and compound FKs the guarantees live in |
+| 2026-09-29 | **`AiServiceClient` gets a second `RestClient` for research calls.** | The 3 s JSON parse timeout is right for requirement analysis and wrong for a multi-minute collection. The research client reads `min(300 s, stepTimeout + 5 s)` so the caller gives up slightly *after* the step's own budget, and the step timeout — not a socket default — remains what actually bounds a job |
+| 2026-09-29 | **The MySQL integration tests are gated by `FINALAGENT_TEST_MYSQL=true`, and `verify.sh` reports them as SKIPPED when it is off.** | A queue's locking guarantees cannot be shown against doubles — mocking `claim()` would be a test of Mockito. The gate means an environment without a database says "not run" out loud instead of implying it ran |
+
 ## 4. Database / Schema Changes
 
-**No tables were created in Phase 1 — there is no schema yet.** Flyway was deliberately not
-added until there is a migration to run; wiring it with zero migrations would have been
-configuration nobody exercises.
+**Phase 7 created the first real schema.** Two Flyway migrations now exist and have been applied
+to and re-applied against native **MySQL 9.6.0** (`finalagent_dev`), not merely written:
 
-`docs/audit/E-database-model.md` specifies the target: 21 tables across 7 Flyway
-migrations (`V1__baseline_identity` … `V7__seed_dev`), translated from the old project's 16
-Prisma models plus three new tables — `workflow_jobs` (the MySQL queue), `refresh_tokens`
-(replaces Redis revocation) and `source_domain_policy` (per-domain governance config).
+| Migration | Tables | What it guarantees |
+|---|---|---|
+| `V1__workflow_definition.sql` | `workflows`, `workflow_plans` | `UNIQUE (workspace_id, id)` so a compound FK can be tenant-scoped; `UNIQUE (workflow_id, version)` because plans are immutable and a run must keep pointing at the version it executed |
+| `V2__execution.sql` | `workflow_runs`, `workflow_steps`, `workflow_jobs`, `activity_events` | `UNIQUE (workflow_id, attempt)` — duplicate *start* refused; `UNIQUE (run_id, step_key)` and `UNIQUE (run_id, sequence)` — duplicate *step* refused; **`UNIQUE (run_id, step_id)`** — duplicate *job* refused; `idx_jobs_claim (status, scheduled_for, priority, created_at)` — the claim query's covering index; `idx_jobs_lease (status, lease_expires_at)` — the sweeper's; both `runs` and `steps` FK to `(run_id, workspace_id)` so a job can never point at a run in another workspace |
 
-What Phase 1 did establish about the database: the backend binds `MYSQL_HOST/PORT/DATABASE/USER/
-PASSWORD` into a Hikari `DataSource` (`initialization-fail-timeout: -1`, so an unreachable server
-degrades to a `503 /ready` rather than a stack trace at boot), and `database/` holds a disposable
-MySQL 8.4 container plus a read-only `smoke-test.sql`. Neither has been executed: Docker is absent
-and no database user matches the configured credentials.
+Numbering deviates from `E-database-model.md`: the audit's `V1__baseline_identity` belongs to the
+authentication phase, which has not been built. Rather than create empty tables to fill a slot,
+V1 is the first aggregate with working code behind it. **An already-applied migration is never
+renumbered or edited** — Flyway verifies checksums of what it has run — so when identity lands it
+arrives as `V3__baseline_identity.sql`, and the `workspace_id` / `created_by_id` columns that are
+`NOT NULL` today with **no foreign key** get theirs then. That is a real gap, recorded here and in
+`E`, not a design choice.
+
+Changes made to the DDL *because MySQL disagreed with it* (both P12/P13 in §2):
+
+- `fk_runs_plan` gained `ON DELETE CASCADE`. Without it a workflow that had ever run could not be
+  deleted at all: deleting the parent cascades to `workflow_plans` and to `workflow_runs`, and the
+  run's reference to its plan blocked the plan's removal.
+- `workflow_jobs.last_error_message` stays `VARCHAR(2000)` and the repository truncates to fit, so
+  a long provider payload cannot abort the write that records why a job failed.
+
+`V2` was edited once (the cascade) *before* the phase shipped, which was only permissible because
+the schema had never been applied anywhere but this local dev database; the tables were dropped and
+both migrations re-applied, and `flyway_schema_history` now holds exactly 2 rows. Against a shared
+or deployed database the same fix would have had to be a new `V3`.
+
+Still deliberately absent: `datasets`, `dataset_records`, `sources`, `source_domain_policy`,
+`users`, `workspaces`, `refresh_tokens`, `export_jobs`. The records a run collects live in
+`workflow_steps.output_summary` as JSON for now — a staging area, not the dataset model, and the
+persistence phase replaces it.
+
+What the schema is *not*: it is not JPA-generated. `pom.xml` carries `flyway-core` + `flyway-mysql`
+and no JPA provider for these tables; the queue needs conditional `UPDATE … WHERE status = ? AND
+version = ?` and `NOW(6)`-based lease arithmetic that an ORM would only obscure, so the SQL is
+written where it is used and the records in `workflow/domain/Records.java` are an anaemic read
+model over JDBC row mappers.
 
 ## 5. Known Bugs / Issues / Verification Limits
 
@@ -459,6 +571,34 @@ Carried from the audit as things the rebuild must **not** reproduce:
     is **not shared on clone**, so a fresh checkout shows it as untracked. It should be in
     `.gitignore`. Note: `FINALAIAGENT/.gitignore` was created in this session for exactly that
     reason.
+
+### Verification limits introduced by Phase 7 (what the MySQL tests do *not* prove)
+
+The queue is now tested against a real database, which is a different class of evidence from
+everything before it. Three things it still does not show:
+
+- **Single process, many threads — not many processes.** `eightThreadsRacingForOneJobProduceExactlyOneOwner`
+  contends across 8 threads in one JVM against one MySQL. The claim statement itself does not care
+  which process sent it, and that is the whole point of putting the lock in the database, but a
+  genuine two-host test would additionally exercise `WorkerIdentity` uniqueness across machines,
+  different clock domains, and a SIGKILL that never runs the shutdown lease release. None of that
+  has been run, because there is one machine here.
+- **`Flyway 11.7.2 officially supports MySQL 8.1; this ran on 9.6.** Every migration applied and
+  validated, and the startup logged `Flyway upgrade recommended: MySQL 9.6 is newer than this
+  version of Flyway and support has not been tested`. Recorded as R40 rather than treated as a pass.
+- **Collection still has never touched the web.** `AiServiceClient` is mocked in the lifecycle
+  tests, so what is proven is API → run → job → claim → handler → result → status, with the
+  AI-service boundary asserted at the request that leaves Spring. `FIRECRAWL_API_KEY` is still
+  blank (length 0 in the shell and in `.env`), so the real cost, real duration and real failure
+  modes of a step that actually collects remain unmeasured — including whether the 240 s step
+  budget and 300 s lease are sized for real research runs at all.
+
+One live boot was done for real: `java -jar backend/target/backend-0.1.0.jar` with
+`WORKFLOW_EXECUTION_ENABLED=true` reached `Started BackendApplication in 4.324 seconds`, Flyway
+connected to MySQL 9.6, the worker logged its lease and pool, `GET /api/v1/workflows/runs` answered
+200 with worker stats, and `/api/v1/ready` answered **503** with `workflowQueue UP` but
+`aiService DOWN (reachable:false)` — correct, because the Python service was not running. The
+last Phase 1 exit criterion (B1, an account the application can connect as) is closed.
 
 ### Defects found and fixed during Phase 1 (all by running, not reading)
 
@@ -543,7 +683,7 @@ Environment limits affecting verification:
 |---|---|---|
 | **G1** | With `DEMO_MODE` removed, how will this be demonstrated to judges? (a) test fixtures + run replay *(recommended)*, (b) guarded `SYNTHETIC_MODE` that can never trigger on a missing key, (c) funded keys and demo live. See `docs/audit/L-risks.md` R8 | **Awaiting user decision** |
 | **G2** | Is the Firecrawl Python SDK's `interact` sufficient? Fallback is the Express sidecar implementing `agent-core/openapi.yaml` — a fourth runtime requiring its own recorded decision. See `docs/audit/I-firecrawl-integration.md` §I.6 | **Narrowed twice, still open on live behaviour.** Phase 4 confirmed the whole session lifecycle is expressible in Python and implemented it: `browser()` → `interact(job_id, prompt=…)` → `stop_interaction(job_id)`, all three verified present on `AsyncFirecrawlApp` in `firecrawl` 4.45.0 by introspection, with the `job_id`-first shape handled by opening the session inside the tool call. So the sidecar is not needed for *API shape* reasons. Whether a real prompt-mode session completes inside a sane deadline and returns usable text is **unmeasured** — no `FIRECRAWL_API_KEY` here. Resolve with `RUN_LIVE_FIRECRAWL_TESTS=true pytest -q tests/test_live_firecrawl.py -s` once a key exists |
-| **B1** | `finalagent_dev` needs a MySQL account the application can connect as, or `/ready` can never return 200. Options: (a) create a user on the native `MySQL96` service (needs its credentials — I will not guess them), (b) install Docker and use `database/docker-compose.yml`, which mints the user from `.env`. | **Blocking the last Phase 1 exit criterion — awaiting user choice** |
+| **B1** | `finalagent_dev` needed a MySQL account the application can connect as, or `/ready` could never return 200 and no queue test could run against a real database. | **RESOLVED 2026-09-29 at Phase 7.** The user supplied the native server's root credential, and a scoped account was created through it: `finalagent`@`127.0.0.1` with `GRANT ALL PRIVILEGES ON finalagent_dev.*` and `USAGE ON *.*` — nothing global, no `GRANT OPTION`, no other schema. `SELECT CURRENT_USER()` confirms the app connects as `finalagent`, `/api/v1/ready` reports `mysql UP`, and 30 integration tests now run against that server. Recorded here because *how* the queue was verified depends on it |
 | **L1** | Both new repositories have unresolved licences: `data-enrichment-js-main` claims `"license": "MIT"` in `package.json:7` with **no licence text anywhere in the tree**, and `ai-data-enrichment-agent-main` has **no licence at all**. May we adapt logic from either? Options: (a) treat a `package.json` declaration as sufficient, as already done for `web-agent-main` under R2, (b) verify upstream terms before Phase 2, (c) re-implement gate 3 from the behavioural description in `O` §O.4 without translating their source. | **Awaiting user ruling** (R28, R29) |
 
 | **L2** | Phase 2 research graph: depend on the `langgraph` PyPI package, or express the same topology as a plain Python state machine? Evidence says nothing in `data-enrichment-js` needs the runtime (no checkpointer, no disk writes, no interrupts — `O` §O.12), so a state machine preserves the graph without a new heavy dependency. Either satisfies the master instruction | **RESOLVED at Phase 2 — plain Python state machine, no `langgraph` dependency.** Node and edge names
@@ -563,8 +703,30 @@ Toolchain on this machine, all verified present and used by the Phase 1 run:
 | Maven | 3.9.11 | used for `test` / `package` / `spring-boot:run` |
 | Node / npm | 24.19.0 / 11.17.0 | used for install, typecheck, lint, build, dev server |
 | Python | 3.14.6 (`py`); pip 26.1.2 | used via `ai-service/.venv`; **3.12 still required for the provider extra** |
-| MySQL | 9.6.0, service `MySQL96`, port 3306 | running, reachable, **no matching application user** |
+| MySQL | 9.6.0, service `MySQL96`, port 3306 | running, reachable, **application user `finalagent` created and in use** — `ALL PRIVILEGES ON finalagent_dev.*` only. The `mysql` CLI is at `C:/Program Files/MySQL/MySQL Server 9.6/bin/mysql` |
 | Docker | — | **not installed**; nothing in `database/` or `deploy/` has been built |
+
+### Running the workflow layer locally
+
+The queue is off by default and needs two things: a reachable MySQL and a workspace id.
+
+```bash
+WORKFLOW_EXECUTION_ENABLED=true \
+FINALAGENT_WORKSPACE_ID=$(uuidgen) \
+bash scripts/dev-backend.sh                    # Flyway applies V1 + V2, worker starts claiming
+```
+
+To exercise the queue's locking, leases and duplicate keys against a real database:
+
+```bash
+cd backend && FINALAGENT_TEST_MYSQL=true mvn test     # 185 tests, 30 of them MySQL-backed
+cd backend && mvn test                                # 155 tests; the same 30 ITs report as skipped
+```
+
+Those two classes write to the schema named in the root `.env`, in workspace
+`00000000-0000-0000-0000-000000000ff1`, and delete their own rows before and after each test.
+Point `MYSQL_DATABASE` at a scratch schema before running them against a database you care about.
+`scripts/verify.sh` reports the same check as `SKIP` with the reason when the variable is absent.
 
 ### First time
 
@@ -580,8 +742,8 @@ cd frontend && npm install
 bash scripts/dev-ai.sh                        # http://localhost:8000  (AI_SERVICE_PORT)
 bash scripts/dev-backend.sh                   # http://localhost:8080  (SERVER_PORT)
 bash scripts/dev-frontend.sh                  # http://localhost:3000; add `-- -p 3210` if busy
-bash scripts/verify.sh                        # 27 backend + 31 python + 3 frontend gates
-bash scripts/verify.sh backend                # one layer
+bash scripts/verify.sh                        # every layer; add FINALAGENT_TEST_MYSQL=true for the queue
+bash scripts/verify.sh backend                 # one layer
 ```
 
 Ports are 8080 / 8000 / 3000 and documented once, in `.env.example`. The old project's
@@ -601,39 +763,54 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Awaiting authorization.** Phases have been directed out of `M-phase-plan.md` order: Phase 3
-delivered the plan's Phase 4 (requirement understanding) and part of Phase 5 (schema generation),
-Phase 4 delivered the plan's Phase 6 web-execution half (Firecrawl tools inside the graph), and
-Phase 5 delivered most of the plan's Phase 7 (source governance) **at fetch time** — robots,
-domain policy, ranking and dedupe — while the plan's Phase 3 (authentication), Phase 6 job engine
-and host-resolution SSRF/rate limits remain unbuilt. That drift is not a problem to hide: `M` now
-carries a delivery note under Phases 7 and 8, and should be reconciled before another phase is
-chosen.
+**Phase 7 is complete and pushed; awaiting authorization for the next one.** Phases have been
+directed out of `M-phase-plan.md` order, and that drift is now worth stating precisely rather than
+in a footnote:
+
+| Planned | Delivered | Where it went |
+|---|---|---|
+| Phase 3 — authentication | **not built** | the reason `FINALAGENT_WORKSPACE_ID` is a single-tenant stopgap and `created_by_id` has no FK |
+| Phase 4 — requirement understanding | Phase 3 | `requirements/` in Python, `RequirementValidator` in Java |
+| Phase 5 — schema generation | part, Phase 3 | `derive_extraction_schema` + `ExtractionSchemaValidator` |
+| Phase 6 — job engine | **Phase 7** | `workflow/` — plan, run, step, job, worker, MySQL queue, retries, leases, cancellation |
+| Phase 7 — source governance | mostly, Phase 5 (at fetch time) | `curation/` — robots, policy, ranking, dedupe, retry, aggregation. **Not** built: host-resolution SSRF and per-domain rate |
+| Phase 8 — dataset persistence | **not built** | records currently live in `workflow_steps.output_summary` JSON |
 
 Most valuable next candidates, in dependency order:
 
-1. **The MySQL schema + Flyway baseline** — nothing has anywhere to be persisted, so every phase
-   after this one currently returns results into the void.
-2. **Authentication and tenancy** — `/api/v1/requirements/parse` and `/api/v1/research/from-prompt`
-   are unauthenticated and, unlike Phase 2's endpoint, the latter now makes real provider calls, so
-   an open instance is a billing risk as well as a data one. `interact` raises that again: a run can
-   now drive a live browser session, so `ALLOWED_WEB_TOOLS` must never be opened up on an
-   unauthenticated deployment.
-3. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
-   fetch (private/link-local/loopback refusal), enforce per-domain request rate
-   (`SearchStrategy.max_requests_per_domain_per_minute` exists and is now produced, but nothing
-   consumes it), and decide **Q2** about the robots default with real hosts.
-4. **Judge the ranking** (**Q1**) against live result sets once a Firecrawl key exists, then either
-   set a relevance floor, add a Gemini rerank over ~8 candidates, or leave lexical as is.
-5. **Provider backoff at the LLM layer** for 429/503 — the web layer now retries
-   (`curation/retry.py`); the Gemini client still surfaces the error without retrying, which the
-   free-tier ceiling makes a normal condition rather than an edge case.
+1. **Dataset persistence (the plan's Phase 8).** This is now the sharpest gap: the queue executes a
+   run, Java validates the records, and then the records sit in a JSON column on a step row. A
+   `datasets` / `dataset_records` / `sources` set of tables, the record→evidence mapping, and the
+   `EXTRACT` step's payload moving out of `output_summary` and into typed rows. Everything the phase
+   needs to join on already exists — `workflow_runs.id`, per-record `sources[].verifiedByTool`, and
+   the counters that say how much was collected.
+2. **Authentication and tenancy (the plan's Phase 3).** `/api/v1/workflows/*` is unauthenticated and
+   now *starts billed work*, which is worse than the read-only endpoints that came before it: a
+   caller who can POST /runs can spend Firecrawl credits and Gemini quota. `interact` raises it
+   again, because a run can drive a live browser session. The queue itself is safe to leave as is —
+   the workspace is server-configured and a foreign id answers as not-found — but
+   `FINALAGENT_WORKSPACE_ID` and `Principals.UNAUTHENTICATED` are placeholders that must not survive
+   into a shared deployment, and `workspace_id` / `created_by_id` need their foreign keys (V3).
+3. **SSE monitoring over the durable event log.** `activity_events` is already written before any
+   broadcast and is cursor-addressable (`id > ?`), so the streaming endpoint is a reader over a table
+   that exists rather than new plumbing.
+4. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
+   fetch (private/link-local/loopback refusal) and enforce
+   `SearchStrategy.max_requests_per_domain_per_minute`, which is produced and reported but still
+   consumed by nothing.
+5. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
+   the queue retries (`Backoff`), but the Gemini client still surfaces a rate limit as an error —
+   normal on a free tier capped at 20 requests/day, not an edge case.
+6. **Right-size the budgets against one real run.** `WORKFLOW_STEP_TIMEOUT_MS=240000` inside
+   `WORKFLOW_LEASE_SECONDS=300` was reasoned about, never measured: no step has ever collected from
+   the live web here.
 
 Still open: **G1** (demonstration strategy), **G2** (needs a Firecrawl key — see §6 for what Phase 4
-settled and what it did not), **B1** (a MySQL user), **L1** (enrichment-repo licence position — see
-`docs/control/THIRD-PARTY.md`), **S1** (who writes site playbooks), and the two new Phase 5 gates
-**Q1** (is lexical relevance adequate) and **Q2** (should unreadable robots keep refusing), both of
-which need live web access to answer.
+settled and what it did not), **L1** (enrichment-repo licence position — see
+`docs/control/THIRD-PARTY.md`), **S1** (who writes site playbooks), **Q1** (is lexical relevance
+adequate) and **Q2** (should unreadable robots keep refusing), both of which need live web access.
+**B1 is closed.** Nothing new is blocked on the database: it is reachable, migrated, and the queue
+runs on it.
 
 ### Carried forward from Phase 2, still true
 

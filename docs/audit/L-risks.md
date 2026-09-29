@@ -348,7 +348,56 @@ each attempt would create another billable session (`test_the_web_client_does_no
 `metadata.retriesAttempted` so cost is visible; and the plan-level `timeoutMs` on `PlanStep` remains
 the outer bound once the job engine exists.
 
-## L.11 Where the risk list came from
+## L.12 Added at Phase 7 — a queue that now really runs
+
+**R40 — Flyway 11.7.2 does not claim to support the MySQL this project runs on.** Severity: Medium.
+Every migration applied, validated and re-applied against MySQL 9.6.0, and the boot logged
+`Flyway upgrade recommended: MySQL 9.6 is newer than this version of Flyway and support has not
+been tested. The latest supported version of MySQL is 8.1`. The DDL is plain InnoDB/utf8mb4 and
+nothing 9.x-specific is used, so the exposure is in Flyway's own metadata handling rather than in
+the schema. Mitigation: pin the MySQL version for deployments (compose uses 8.4, which *is* in
+Flyway's tested range), and re-check on a Flyway upgrade. Verified-by: the live jar boot in
+`Memory.md` §5.
+
+**R41 — Concurrency was proven in one process, not across machines.** Severity: High for a
+multi-node deployment, Low for the single-container compose target.
+`eightThreadsRacingForOneJobProduceExactlyOneOwner` contends 8 threads against one MySQL, which
+does exercise the real thing — the claim is one conditional `UPDATE`, and InnoDB does not care which
+connection sent it. What has not been exercised: `WorkerIdentity` uniqueness across hosts, two nodes
+with clock skew (mitigated by design: every deadline is `NOW(6)` server-side), and a `SIGKILL` that
+never runs the shutdown lease release, leaving jobs to the sweeper. The design covers all three;
+none is measured.
+
+**R42 — `workflow_steps.output_summary` is currently the dataset.** Severity: Medium, and it is
+self-inflicted on purpose. Collected records are stored in a JSON column on the step row because the
+dataset tables (`E` §E.5 `V5__datasets.sql`) belong to the persistence phase. Consequences that are
+real today: no indexed row search (`E` §E.6's `LIKE '%…%'` criticism applies to `JSON_EXTRACT` over
+this column too), no row-level provenance joins, and a 64 MiB `JSON` ceiling on a run that collected
+far more than it should have. Mitigation is the next phase, not a patch; the records are not lost,
+and `records_raw`/`records_found`/`records_valid` on the run row say how many are in there.
+
+**R43 — A step budget sized by arithmetic has never met a real run.** Severity: Medium.
+`WORKFLOW_STEP_TIMEOUT_MS=240000` inside `WORKFLOW_LEASE_SECONDS=300` came from reasoning about the
+research graph's bounds (`MAX_LOOPS`, `MAX_SCRAPES_PER_RUN`) and from the timeouts Phases 4-5 set,
+not from an observation: `FIRECRAWL_API_KEY` is still blank, so no step has ever collected anything.
+Too short and every genuine run fails at attempt 1 with `TIMEOUT` and burns its retries; too long
+and a wedged run holds a worker permit and a database connection for minutes. Both are visible in
+`workflow_jobs.last_error_code` and `activity_events` once a live run happens. Verified-by: nothing
+yet — this is stated, not asserted.
+
+**R44 — `/api/v1/workflows/*` is unauthenticated and now starts billed work.** Severity: **High,
+and new at this phase.** Before Phase 7, an anonymous caller could ask for a research run and get a
+result back into the void. Now a caller can `POST /api/v1/workflows` → `/plan` → `/runs` and leave
+work queued on a worker that will spend Firecrawl credits and Gemini quota on their prompt, with the
+records persisted in this deployment's database. `FINALAGENT_WORKSPACE_ID` keeps every caller inside
+one workspace — nobody can read or cancel another tenant's run, because there is only one tenant —
+but it does not limit *who* may start work. Mitigation until the authentication phase: run this
+deployment on a private network, keep `WORKFLOW_EXECUTION_ENABLED=false` in any environment exposed
+to the internet, and watch `GET /api/v1/workflows/runs`, which reports queue depth. This is R35's
+pattern (an enabled `interact` on an unauthenticated deployment) with a persistent queue added to the
+blast radius, and it is the strongest argument for the authentication phase being next.
+
+## L.13 Where the risk list came from
 
 `R1`–`R27` are findings against the old project, read from source and measured where the claim was
 checkable. `R28`–`R32` are Phase 1.5 findings about the two enrichment repositories. `R33`–`R35`
@@ -356,5 +405,8 @@ are Phase 4 findings about what this build can now do that it could not before: 
 load guidance written by someone else, and bill for a session nobody has timed. `R36`–`R39` are
 Phase 5 findings about judgements made without data: how relevance is scored, who is asked about
 robots, what happens when the answer cannot be read, and how many times a failure is retried.
+`R40`–`R44` are Phase 7 findings about running for real for the first time: a migration tool that
+does not recognise our database, concurrency proven one level below how it will be deployed, results
+stored where rows belong, budgets nobody has measured, and an open endpoint that now spends money.
 
 Next: `M-phase-plan.md`.

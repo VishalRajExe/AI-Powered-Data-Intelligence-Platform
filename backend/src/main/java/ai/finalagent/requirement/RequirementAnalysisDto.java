@@ -17,6 +17,12 @@ public record RequirementAnalysisDto(
         Map<String, Object> extractionSchema,
         List<String> searchQueries,
         String researchBrief,
+        /**
+         * Resolved by the AI service, not by Spring: which source wishes name a domain, which are
+         * prose that cannot become a rule, and the safety literals that no model may relax. It is
+         * stored with the plan and replayed at execution, so the interpretation happens once.
+         */
+        Map<String, Object> collectionPolicy,
         List<String> clarificationQuestions,
         Map<String, Object> metadata
 ) {

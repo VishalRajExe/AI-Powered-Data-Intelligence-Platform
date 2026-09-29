@@ -208,6 +208,38 @@ architecture would fail). Two concurrent pollers never both execute the same job
 counting stub). A failing step retries with observable backoff, then terminates as `FAILED` with
 a persisted reason. Cancellation takes effect at the next boundary.
 
+### Phase 6 delivery note — delivered as the user's "PHASE 7", 2026-09-29, against real MySQL
+
+Built: `backend/src/main/java/ai/finalagent/workflow/**` (27 files), the `V1`/`V2` migrations,
+`WorkflowController`, and the queue-depth component of `/api/v1/ready`. 30 integration tests run
+against MySQL 9.6.0 (`WorkflowQueueMySqlTest` 14, `WorkflowRunLifecycleMySqlTest` 16), 75 unit
+tests, and the packaged jar booted with the layer enabled.
+
+| Planned here | Delivered | Note |
+|---|---|---|
+| atomic conditional-UPDATE claim | ✅ | `JobRepository.claim` — `WHERE status='PENDING' AND version=? AND scheduled_for<=NOW(6)` |
+| **`FOR UPDATE SKIP LOCKED`** batch claim | ❌ **deliberately not used** | The version predicate already makes the second claimer a no-op without taking a row lock, so `SKIP LOCKED` would add an 8.0-only requirement and a transaction to hold for nothing. 8 threads → exactly 1 winner, measured |
+| lease + heartbeat, renew at `lease/3` | ✅ shape, ⚠️ different rule | `WORKFLOW_HEARTBEAT_SECONDS` is explicit config validated to be strictly shorter than the lease, rather than derived as `lease/3`. Renewal aborts when the owner changed: `LeaseGuard` marks the lease lost and the executor then writes nothing |
+| stale-recovery sweeper | ✅ | Runs **inside the claim loop**, so there is no second `JOB_STALE_SWEEP_SECONDS` clock to keep honest. Two branches — revive while attempts remain, fail outright when exhausted — both tested |
+| exponential backoff **plus jitter**, retryable whitelist | ✅ | `Backoff` = `min(cap, base·2^(n-1))` + ≤30 % jitter, persisted onto `scheduled_for` by the database clock. `JobExecutionException.fromHttpStatus` is the whitelist, with 4xx **and 500** permanent by decision |
+| `ThreadPoolTaskExecutor` + bounded queue + `CallerRunsPolicy` | ⚠️ replaced | A fixed `ExecutorService` gated by a **semaphore of permits per claim**. `CallerRunsPolicy` would run a job on the poller thread while that job's lease is being renewed elsewhere; the semaphore makes over-claiming unrepresentable instead of politely degraded |
+| `@Scheduled` claim poller | ⚠️ replaced | `SmartLifecycle` plus one `ScheduledExecutorService`, so the worker stops claiming before the pool drains and the lease release can run in order |
+| per-step Resilience4j `TimeLimiter` | ✅ without the dependency | `Future.get(stepTimeoutMs)` on a separate invoker pool: no new library, and a step cannot opt out of its deadline |
+| terminal writes in `REQUIRES_NEW` | ✅ | `TransactionTemplate` with `PROPAGATION_REQUIRES_NEW` and a 5 s timeout |
+| parent/child batch fan-out with atomic rollup | ❌ **not built** | The plan this phase emits is two sequential steps, so there is nothing to fan out. `workflow_jobs.parent_job_id` exists in the schema and is read by no code path — recorded rather than implied |
+| cooperative cancellation at step boundaries | ✅ | `cancel_requested_at`, handlers that check before spending anything, unstarted **jobs** moved to `CANCELLED` — and unstarted **steps** too, which the first draft missed (P18). A `RUNNING` step is left to its worker |
+| reclaim skips already-completed steps | ✅ | `WorkflowJobExecutor.run` short-circuits a reclaimed job whose step already finished, rather than re-spending collection credits |
+| graceful shutdown releasing leases | ✅ | drain up to `min(30 s, lease)`, then `releaseLeasesHeldBy`: 2 leases released, both jobs immediately claimable |
+| `POST /api/v1/workflows/execute` → 202 | ⚠️ different shape | `POST /workflows` → `POST /{id}/plan` → `POST /{id}/runs` (202). Split so the AI answer is validated in Java *between* the calls instead of forwarded straight into collection. `GET /runs/{id}`, `/runs/{id}/events`, `POST /runs/{id}/cancel` and `GET /runs` all exist |
+| steps execute against a **stub** collector | ⚠️ better than planned | They execute against the real AI-service boundary; only that boundary is mocked in tests, because `FIRECRAWL_API_KEY` is still blank |
+| **"Kill the JVM mid-run and restart"** | ❌ **not performed** | The equivalent transition *is* tested — an expired lease is reclaimed, its step reset, the run completes — but by driving the sweeper, not by killing a process. A genuine two-process restart test needs a second JVM and is owed (**R41**) |
+
+Two things from later phases were pulled forward because this phase could not be honest without
+them: the deterministic `WorkflowPlanner` (Phase 5) and Java's re-enforcement of the collection
+contract in `ValidateStepHandler` (Phase 9's gate). `SAVE` and `EXPORT` steps are **absent** from
+every plan rather than present and skipped, inverting the old `EXPORT_NOT_IN_PHASE` placeholder
+(`workflow-runner.ts:167-169`); they arrive with Phases 10 and 13.
+
 ---
 
 ## Phase 7 — Source governance

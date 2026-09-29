@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.contracts import Requirement
+from app.curation.policy import extract_hostnames
 from app.llm.client import LlmClient, LlmOutputUnparsable
 from app.requirements.schema import (
     REQUIREMENT_JSON_SCHEMA,
@@ -42,6 +43,10 @@ class RequirementAnalysis:
     repair_attempts: int
     clarification_questions: list[str] = field(default_factory=list)
     model_id: str = ""
+    # Resolved once, here, from the requirement's own source wishes. Spring stores it with the
+    # plan and hands it back at execution time, so the rule that turns "Prefer Tracxn" into a
+    # domain (or into a note that it cannot be one) exists in exactly one service.
+    collection_policy: dict[str, Any] = field(default_factory=dict)
 
     def requirement_json(self) -> dict[str, Any]:
         return self.requirement.model_dump(by_alias=True, mode="json", exclude_none=True)
@@ -53,6 +58,7 @@ class RequirementAnalysis:
             "extractionSchema": self.extraction_schema,
             "searchQueries": self.search_queries,
             "researchBrief": self.brief,
+            "collectionPolicy": self.collection_policy,
             "clarificationQuestions": self.clarification_questions,
             "metadata": {
                 "model": self.model_id,
@@ -114,9 +120,29 @@ class RequirementAnalyzer:
                 repair_attempts=attempt,
                 clarification_questions=questions,
                 model_id=self._settings.llm_model_id,
+                collection_policy=build_collection_policy(requirement),
             )
 
         raise RequirementAnalysisError("requirement analysis exhausted its repair budget")
+
+
+def build_collection_policy(requirement: Requirement) -> dict[str, Any]:
+    """Turn stated source wishes into the two kinds of thing a policy can act on.
+
+    A preference that names a host becomes a domain rule; a preference that names an idea
+    ("the company's own website") becomes a note. Inventing a domain for the second kind is how
+    a hardcoded source list gets reintroduced, so it is recorded as unenforceable instead.
+    """
+    preferred, preferred_notes = extract_hostnames(list(requirement.source_preferences))
+    blocked, blocked_notes = extract_hostnames(list(requirement.source_restrictions))
+    return {
+        "preferredDomains": preferred,
+        "blockedDomains": blocked,
+        "unenforceablePreferences": preferred_notes + blocked_notes,
+        "respectRobotsTxt": True,
+        "allowAuthentication": False,
+        "allowCaptchaBypass": False,
+    }
 
 
 def _render(template: str, *, prompt: str, issues: list[str]) -> str:

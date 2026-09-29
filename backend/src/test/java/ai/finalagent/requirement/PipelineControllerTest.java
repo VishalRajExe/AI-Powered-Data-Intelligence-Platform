@@ -85,6 +85,7 @@ class PipelineControllerTest {
                 requirement, schema,
                 List.of("best coding youtube channels"),
                 "List popular YouTube channels that teach programming.\nEntity type: youtube_channel.",
+                Map.of("respectRobotsTxt", true, "allowAuthentication", false, "allowCaptchaBypass", false),
                 requirement.missingInformation(), Map.of("model", "gemini-2.5-flash", "fieldCount", 3));
     }
 
@@ -114,7 +115,7 @@ class PipelineControllerTest {
                 List.of(new ResearchResult.Record(Map.of("channel_name", "Coding Cat"), List.of())),
                 List.of(), Map.of("loopsUsed", 1),
                 new ResearchResult.Validation(true, List.of(), List.of(), 0, true, List.of("a", "b", "c"),
-                        List.of(), List.of()),
+                        List.of(), List.of(), 0, List.of(), List.of(), List.of()),
                 null));
 
         mockMvc.perform(post("/api/v1/research/from-prompt")

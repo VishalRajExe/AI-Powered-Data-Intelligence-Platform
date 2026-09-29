@@ -43,6 +43,16 @@ spring:
       # instead of a 503 naming the failing component.
       initialization-fail-timeout: -1
 
+  flyway:
+    # Migrations are the schema, so this is the same switch as the workflow layer itself rather
+    # than a second thing to remember to turn on.
+    enabled: ${WORKFLOW_EXECUTION_ENABLED:false}
+    locations: classpath:db/migration
+    validate-on-migrate: true
+    # No baselining: baselining away an existing schema would skip the DDL the queue's
+    # guarantees actually live in — the unique keys, the composite FKs, the claim index.
+    baseline-on-migrate: false
+
 finalagent:
   cors:
     allowed-origins: ${FRONTEND_ORIGIN:http://localhost:3000}
@@ -56,6 +66,31 @@ finalagent:
     base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
     api-key: ${AI_SERVICE_API_KEY:}
     timeout-ms: ${AI_SERVICE_TIMEOUT_MS:3000}
+  # The workflow layer. Off by default: without a reachable MySQL the rest of the service still
+  # answers health and requirement parsing honestly, instead of failing to boot.
+  execution:
+    enabled: ${WORKFLOW_EXECUTION_ENABLED:false}
+    # Server-side tenancy root. Deliberately not read from a request: the previous project took a
+    # client-supplied workspaceId on trusted routes, which is how any caller could read any
+    # workspace. The authentication phase replaces this with the token's workspace claim.
+    workspace-id: ${FINALAGENT_WORKSPACE_ID:}
+    poll-interval-ms: ${WORKFLOW_POLL_INTERVAL_MS:500}
+    batch-size: ${WORKFLOW_BATCH_SIZE:4}
+    core-pool-size: ${WORKFLOW_CORE_POOL_SIZE:4}
+    max-pool-size: ${WORKFLOW_MAX_POOL_SIZE:8}
+    queue-capacity: ${WORKFLOW_QUEUE_CAPACITY:100}
+    # A worker that dies holds its jobs for one lease, no longer. The lease must outlast a whole
+    # step with room to spare: a lease that expires mid-step is a second worker starting the same
+    # collection while the first is still spending credits on it.
+    lease-seconds: ${WORKFLOW_LEASE_SECONDS:300}
+    heartbeat-seconds: ${WORKFLOW_HEARTBEAT_SECONDS:30}
+    max-attempts: ${WORKFLOW_MAX_ATTEMPTS:3}
+    backoff-base-seconds: ${WORKFLOW_BACKOFF_BASE_SECONDS:1}
+    backoff-max-seconds: ${WORKFLOW_BACKOFF_MAX_SECONDS:120}
+    # Bounds the wait for one step's answer. A step that exceeds it is retried per policy; the
+    # abandoned HTTP call still finishes under its own timeout, because Firecrawl exposes no
+    # run-level abort.
+    step-timeout-ms: ${WORKFLOW_STEP_TIMEOUT_MS:240000}
 
 app:
   version: 0.1.0

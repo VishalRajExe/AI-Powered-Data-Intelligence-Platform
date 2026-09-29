@@ -1,5 +1,6 @@
 package ai.finalagent.aiclient;
 
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
@@ -17,10 +18,14 @@ import ai.finalagent.config.FinalAgentProperties;
 public class AiServiceClient {
 
     private final RestClient restClient;
+    private final RestClient researchClient;
     private final String baseUrl;
 
-    public AiServiceClient(RestClient aiServiceRestClient, FinalAgentProperties properties) {
+    public AiServiceClient(@Qualifier("aiServiceRestClient") RestClient aiServiceRestClient,
+                           @Qualifier("researchRestClient") RestClient researchRestClient,
+                           FinalAgentProperties properties) {
         this.restClient = aiServiceRestClient;
+        this.researchClient = researchRestClient;
         this.baseUrl = properties.aiService().baseUrl();
     }
 
@@ -40,9 +45,13 @@ public class AiServiceClient {
      * error code where it supplied one, so a 422 from schema validation does not become an
      * opaque 500 at this boundary.
      */
+    /**
+     * Runs the research graph — searches, scrapes and possibly browser sessions inside one
+     * request. Uses the long-timeout client, and is the only call that does.
+     */
     public ResearchResult research(ResearchRequest request) {
         try {
-            return restClient.post()
+            return researchClient.post()
                     .uri("/ai/v1/research")
                     .body(request)
                     .retrieve()

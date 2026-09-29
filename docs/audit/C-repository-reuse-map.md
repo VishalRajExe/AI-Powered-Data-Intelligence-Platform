@@ -324,6 +324,31 @@ layer anakin itself lacks**.
 which is MySQL syntax. Even setting licensing aside, its schema would need translation, not
 adoption.
 
+### C.5.1 What Phase 7 actually took from `anakin-master` (2026-09-29)
+
+**Zero lines copied, zero dependencies added, and three of the six rows below were *not* taken
+because anakin does not have them.** The audited prediction held: this was never "adapt anakin's
+job architecture to MySQL" but "add the durability layer anakin lacks", and the design of that
+layer comes from `J-no-redis-job-architecture.md` — this project's own audit — not from their code.
+
+| Planned destination | Built as | Method | Note |
+|---|---|---|---|
+| `engine/JobClaimRepository.java` with `FOR UPDATE SKIP LOCKED` | `workflow/repository/JobRepository.java:claim` | **REIMPLEMENT, then simplified** | A single conditional `UPDATE … WHERE status='PENDING' AND version=? AND scheduled_for<=NOW(6)`. `SKIP LOCKED` was dropped: with a version predicate there is no row to skip, no transaction to hold, and no MySQL-8.0-only dependency. Measured: 8 threads, 1 winner |
+| `engine/StaleJobRecoveryTask.java` (`@Scheduled`) | `WorkflowWorker.reclaimExpiredLeases`, called from the same loop that claims | **REIMPLEMENT** | No second scheduler, so no second clock to keep honest. Two branches, both tested: revive while attempts remain, `FAILED` with `LEASE_EXPIRED_EXHAUSTED` when none do |
+| `engine/JobFinalizer.java` with `@Transactional(REQUIRES_NEW)` | `WorkflowJobExecutor.finish` — a `TransactionTemplate` with `PROPAGATION_REQUIRES_NEW` and a 5 s timeout | **PORT (concept only)** — the one genuinely transferable idea in the repo | Anakin's `context.WithoutCancel(ctx)` + fresh 5 s timeout (`processor.go:24-33`) has a direct Spring equivalent, and it is the reason a timed-out step's failure is still on the row after its own context is gone |
+| `domain/enums/JobStatus.java` | `workflow/domain/JobStatus.java` | **PORT (concept only)** | The brief's seven states, with `allowedNext()` declared once **and** `WHERE status = <expected>` in the SQL. Anakin's status is a bare `VARCHAR(20)` with no CHECK and no transition guard (`types.go:11-16`, `postgres.go:29-31`) — the negative finding, done the opposite way |
+| `config/AsyncConfig.java` → `ThreadPoolTaskExecutor(queueCapacity, CallerRunsPolicy)` | `WorkflowBeans.workflowJobPool` (fixed `ExecutorService`) + a **semaphore of `maxPoolSize` claim permits** in `WorkflowWorker` | **PORT (concept only), mechanism replaced** | Anakin's backpressure comes from a blocking channel send stalling the HTTP request. The Spring analogue would be a bounded queue plus `CallerRunsPolicy`, which runs a *claimed* job on the poller thread while its lease is being renewed elsewhere. The permit gate makes over-claiming unrepresentable instead of politely degraded, and `queueCapacity` became a validated bound rather than a queue |
+| `engine/RetryPolicy.java` — persist `attempt_count`, add jitter, schedule `next_retry_at` | `execution/Backoff.java` + `workflow_jobs.{attempt_count,max_attempts,scheduled_for,next_retry_at}` | **PORT (concept only) + fix all three defects** | `attempt_count` increments on the **claim**, so a crash mid-attempt still spends one; `min(cap, base·2^(n-1))` + ≤30 % jitter; delay lands on `scheduled_for` via the **database** clock, so `findClaimable()` refuses it until then (tested) |
+| `api/RunQueryService.java` derived batch status on read; `api/` sync-poll UX with 408-and-keep-polling; `engine/BatchFanout.java` parent/child rollup | — | **NOT BUILT** | Two honest absences, not silent ones. The planner emits two sequential steps, so there is nothing to fan out: `workflow_jobs.parent_job_id` exists in the schema and is read by no code path. Run status is **materialised** by `RunRollup` on each step transition rather than derived on read, because a shortfall has to be visible in the row a dashboard queries, not recomputed by whoever renders it |
+| `governance/ContentQualityDetector.java`, `governance/SsrfGuard.java`, `governance/DomainPolicyCache.java`, `security/InternalApiAuth.java` | built **earlier than this phase**, and not from anakin | **N/A** | Content quality is the Python graph's critique gate (Phase 2); SSRF and internal auth are Spring's (Phase 1); per-domain policy is Python's `curation/policy.py` (Phase 5). Anakin confirmed the *shape* of each; none of them is its implementation |
+
+**Licence position, restated because this is the phase where it matters most:** anakin is AGPL-3.0,
+whose network-use clause would copyleft the product if its code were linked or translated. What was
+taken is four *described behaviours* — fresh-context terminal writes, bounded worker pool, lease-style
+recovery, status vocabulary — each re-implemented against this project's own schema and SQL, with the
+source line cited in the javadoc of the code that replaced it. `FINALAIAGENT` builds and runs with
+`anakin-master` absent, as it did before this phase and as `THIRD-PARTY.md` asserts for every row.
+
 ---
 
 ## C.6 Reuse totals
@@ -334,7 +359,8 @@ adoption.
 | `web-agent-main` | MIT (declared in `package.json`; no LICENSE file — risk **R2**) | **0 files copied.** The plan said "copy the `structured-extraction` SKILL.md and the prompt content"; neither happened. Prompts were rewritten around our own gates, and **no playbook content is copied at all** (gate **S1**) — see C.2.1 | `schema-validate`, the two enforcement gates, **toolkit gating and the interact timeout envelope + null-stripping (Phase 4)**, **the SKILL.md loader, domain match and traversal guard (Phase 4)**, event/tool-result shapes, compaction (deferred) | LangChain/deepagents harness, vendoring, `firecrawl-aisdk` (npm — would be a fourth runtime), subagents/workers/compaction, `bashExec`/`scrapeBash`, `map`/`crawl`/`extract`, Express template (kept as documented fallback) |
 | `web-research-agent-master` | MIT | 0 files verbatim | **Taken at Phase 5:** relevance-ranking shape (lexical replacement), robots gate, retry formula (capped, jittered, actually used), source aggregation, query dedupe/budget-fitting. **Still owed:** conflict/citation prompt ideas for the quality phase. **Declined:** embeddings + Azure, Google CSE, the LLM query-analysis call, chunking defaults (no chunking exists here), ephemeral Chroma, hardcoded models/limits, demo fixtures |
 | `TheAgenticBrowser-main` | Community License | **0 — prohibited** | 8 patterns (critique loop, feedback→replan, termination thresholds, context hygiene, tool trace, task registry+SSE) | browser agent, DOM skills, Playwright manager, alpha pins |
-| `anakin-master` | AGPL-3.0 | **0 — prohibited** | 14 patterns (job schema information, lifecycle, pool/backpressure, `persistCtx`, executor flow, batch rollup, sync-poll UX, content detector, handler chain, SSRF, caching, shutdown ordering, sidecar watchdog, polling UX) | proxy bandit, memory store, telemetry |
+| `anakin-master` | AGPL-3.0 | **0 — prohibited** | 14 patterns (job schema information, lifecycle, pool/backpressure, `persistCtx`, executor flow, batch rollup, sync-poll UX, content detector, handler chain, SSRF, caching, shutdown ordering, sidecar watchdog, polling UX). **Taken at Phase 7:** `REQUIRES_NEW` terminal writes, bounded-pool backpressure (as a claim semaphore rather than a queue), the seven-state status vocabulary | Its process-local job registry — a restart loses in-flight work, which is the old project's export-job failure — and everything the audit hoped it had: no durable claim predicate, no lease, no heartbeat, no sweeper, no backoff, dead `MAX_JOB_RETRIES`. Each of those was designed against `J` instead. Its Postgres-only DDL (`UUID`, `gen_random_uuid()`, `COUNT(*) FILTER`) does not translate to MySQL |
+| `ai-data-enrichment-agent-main` | **none declared** | **0** | none | Bright Data "unlocker" engine (rejected on governance grounds, `O` §O.5), unpinned requirements |
 
 **No reference repository is a runtime dependency.** Nothing in `FINALAIAGENT` imports from any of
 the four. See `N-scripts-and-dependencies.md` for the old project's toolchain state, and

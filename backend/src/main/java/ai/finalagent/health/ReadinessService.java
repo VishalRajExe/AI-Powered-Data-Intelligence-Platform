@@ -12,6 +12,12 @@ import org.springframework.stereotype.Service;
 import ai.finalagent.aiclient.AiServiceClient;
 import ai.finalagent.aiclient.dto.AiServiceHealth;
 import ai.finalagent.config.FinalAgentProperties;
+import ai.finalagent.workflow.repository.JobRepository;
+import ai.finalagent.workflow.repository.RunRepository;
+import ai.finalagent.workflow.service.WorkflowService;
+import ai.finalagent.workflow.repository.JobRepository;
+import ai.finalagent.workflow.repository.RunRepository;
+import ai.finalagent.workflow.service.WorkflowService;
 
 /**
  * Reports the truth about dependencies. Never degrades to a synthetic "UP": an unreachable
@@ -25,12 +31,17 @@ public class ReadinessService {
     private final JdbcTemplate jdbcTemplate;
     private final AiServiceClient aiServiceClient;
     private final FinalAgentProperties properties;
+    private final JobRepository jobRepository;
+    private final RunRepository runRepository;
 
     public ReadinessService(JdbcTemplate jdbcTemplate, AiServiceClient aiServiceClient,
-                            FinalAgentProperties properties) {
+                            FinalAgentProperties properties, JobRepository jobRepository,
+                            RunRepository runRepository) {
         this.jdbcTemplate = jdbcTemplate;
         this.aiServiceClient = aiServiceClient;
         this.properties = properties;
+        this.jobRepository = jobRepository;
+        this.runRepository = runRepository;
     }
 
     public record Report(String status, Map<String, ComponentStatus> components) {
@@ -41,9 +52,32 @@ public class ReadinessService {
         components.put("mysql", checkMysql());
         components.put("aiService", checkAiService());
         components.put("credentials", checkCredentials());
+        if (properties.execution().enabled()) {
+            components.put("workflowQueue", checkWorkflowQueue());
+        }
 
         boolean allUp = components.values().stream().allMatch(ComponentStatus::isUp);
         return new Report(allUp ? ComponentStatus.UP : ComponentStatus.DOWN, components);
+    }
+
+    /**
+     * Queue depth, not worker liveness. A worker thread that exists proves nothing; jobs moving
+     * from PENDING to terminal is what proves the layer works, and a queue that only grows is the
+     * failure an operator needs to see before a dashboard does.
+     */
+    private ComponentStatus checkWorkflowQueue() {
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("workspaceIdConfigured", present(properties.execution().workspaceId()));
+        try {
+            details.put("pendingJobs", jobRepository.countPending());
+            details.put("runningJobs", jobRepository.countRunning());
+            details.put("activeRuns", runRepository.runningJobCount(WorkflowService.activeStatuses()));
+            return ComponentStatus.up(details);
+        } catch (DataAccessException e) {
+            log.warn("workflow queue check failed: {}", e.toString());
+            details.put("reachable", false);
+            return ComponentStatus.down(details);
+        }
     }
 
     private ComponentStatus checkMysql() {
