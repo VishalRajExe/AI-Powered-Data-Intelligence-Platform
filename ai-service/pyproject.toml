@@ -34,6 +34,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+# Prompt templates are data inside the package; without this a wheel or Docker build
+# installs the code and silently loses the prompts.
+[tool.setuptools.package-data]
+"app.research.prompts" = ["*.md"]
+"app.requirements.prompts" = ["*.md"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

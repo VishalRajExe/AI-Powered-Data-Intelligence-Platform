@@ -1,9 +1,5 @@
 package ai.finalagent.research;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -43,40 +39,13 @@ public class ResearchController {
 
     @PostMapping
     public ResearchResult research(@Valid @RequestBody ResearchRequest request) {
-        validateExtractionSchema(request.extractionSchema());
+        ExtractionSchemaValidator.validate(request.extractionSchema());
         return aiServiceClient.research(request);
     }
 
-    static void validateExtractionSchema(Map<String, Object> schema) {
-        if (schema == null || schema.isEmpty()) {
-            throw new InvalidExtractionSchemaException("extractionSchema is required");
-        }
-        if (!"object".equals(schema.get("type"))) {
-            throw new InvalidExtractionSchemaException(
-                    "extractionSchema.type must be 'object' — the contract describes one result");
-        }
-        if (!(schema.get("properties") instanceof Map<?, ?> properties) || properties.isEmpty()) {
-            throw new InvalidExtractionSchemaException(
-                    "extractionSchema.properties must declare at least one field; an empty schema "
-                            + "would make validation pass vacuously");
-        }
-        if (!Boolean.FALSE.equals(schema.get("additionalProperties"))) {
-            throw new InvalidExtractionSchemaException(
-                    "extractionSchema must set additionalProperties:false so invented fields are caught");
-        }
-        if (schema.get("required") instanceof List<?> required) {
-            Set<?> declared = properties.keySet();
-            List<?> unknown = required.stream().filter(name -> !declared.contains(name)).toList();
-            if (!unknown.isEmpty()) {
-                throw new InvalidExtractionSchemaException(
-                        "extractionSchema.required names undeclared properties: " + unknown);
-            }
-        }
-    }
-
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    @ExceptionHandler(InvalidExtractionSchemaException.class)
-    public ErrorResponse handleInvalidSchema(InvalidExtractionSchemaException e) {
+    @ExceptionHandler(ExtractionSchemaValidator.InvalidExtractionSchemaException.class)
+    public ErrorResponse handleInvalidSchema(ExtractionSchemaValidator.InvalidExtractionSchemaException e) {
         return ErrorResponse.of("INVALID_EXTRACTION_SCHEMA", e.getMessage());
     }
 
@@ -90,11 +59,5 @@ public class ResearchController {
         String code = status.is4xxClientError() ? "AI_SERVICE_REJECTED_REQUEST" : "AI_SERVICE_UNAVAILABLE";
         return ResponseEntity.status(status).body(ErrorResponse.of(code,
                 "The AI service could not complete the research run: " + e.getMessage()));
-    }
-
-    public static class InvalidExtractionSchemaException extends RuntimeException {
-        public InvalidExtractionSchemaException(String message) {
-            super(message);
-        }
     }
 }

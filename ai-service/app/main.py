@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
 from app.api.v1 import health as health_router
+from app.api.v1 import requirements as requirements_router
 from app.api.v1 import research as research_router
 from app.config import Settings, get_settings
 from app.firecrawl.client import FirecrawlWeb
@@ -116,6 +117,7 @@ def create_app(settings: Settings | None = None, *, llm: object | None = None,
 
     app.include_router(health_router.router, prefix="/ai/v1")
     app.include_router(research_router.router, prefix="/ai/v1")
+    app.include_router(requirements_router.router, prefix="/ai/v1")
 
     @app.get("/")
     def root() -> dict[str, Any]:

@@ -52,6 +52,23 @@ public class AiServiceClient {
         }
     }
 
+    /**
+     * Asks the AI service to turn a natural-language request into a structured requirement
+     * plus the extraction schema derived from it. The answer is treated as a proposal:
+     * callers must validate it before anything collects.
+     */
+    public ai.finalagent.requirement.RequirementAnalysisDto analyzeRequirement(String prompt) {
+        try {
+            return restClient.post()
+                    .uri("/ai/v1/requirements/analyze")
+                    .body(java.util.Map.of("prompt", prompt))
+                    .retrieve()
+                    .body(ai.finalagent.requirement.RequirementAnalysisDto.class);
+        } catch (RestClientResponseException e) {
+            throw new AiServiceException(e.getStatusCode().value(), e.getMessage(), e);
+        }
+    }
+
     /** The AI service answered, but with an error status. */
     public static class AiServiceException extends RuntimeException {
         private final int upstreamStatus;

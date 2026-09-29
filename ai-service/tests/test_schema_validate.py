@@ -4,6 +4,7 @@ from app.extraction.schema_validate import (
     coerce_to_json,
     field_checklist,
     strip_const,
+    to_gemini_schema,
     validate_against_schema,
 )
 
@@ -128,3 +129,18 @@ def test_strip_const_recurses_into_arrays():
     scrubbed = strip_const({"type": "array", "items": {"type": "object",
                                                         "properties": {"a": {"const": "x"}}}})
     assert "const" not in scrubbed["items"]["properties"]["a"]
+
+
+def test_gemini_projection_drops_additional_properties():
+    """Gemini answers 400 INVALID_ARGUMENT for `additionalProperties`, while gate 1 needs it.
+
+    The strict schema stays the internal contract; only the copy sent to the provider is
+    projected. Verified against the live API in tests/test_live_requirements.py.
+    """
+    projected = to_gemini_schema(STARTUP_SCHEMA)
+
+    assert "additionalProperties" not in projected
+    assert "additionalProperties" not in projected["properties"]["records"]
+    assert "additionalProperties" not in projected["properties"]["records"]["items"]
+    assert "additionalProperties" in STARTUP_SCHEMA, "the internal contract is not weakened"
+    assert projected["properties"]["records"]["items"]["properties"]["company_name"]["type"] == "string"

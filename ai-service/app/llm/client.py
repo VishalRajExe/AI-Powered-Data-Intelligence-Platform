@@ -12,7 +12,7 @@ import json
 from typing import Any, Protocol
 
 from app.config import Settings
-from app.extraction.schema_validate import coerce_to_json, strip_const
+from app.extraction.schema_validate import coerce_to_json, to_gemini_schema
 
 
 class LlmError(RuntimeError):
@@ -59,15 +59,18 @@ class GeminiLlm:
             temperature=temperature,
             system_instruction=system,
             response_mime_type="application/json",
-            # Gemini rejects `const`; strip it before the schema reaches the provider.
-            response_schema=strip_const(json_schema),
+            # Gemini rejects `const` and has no `additionalProperties` field, so the strict
+            # internal schema is projected before it reaches the provider.
+            response_schema=to_gemini_schema(json_schema),
         )
 
         try:
             response = await asyncio.wait_for(
                 self._client.aio.models.generate_content(
+                    # The SDK takes a string, a Part, or a types.Content — not an
+                    # OpenAI-style {"role","content"} dict, which pydantic rejects.
                     model=self.model_id,
-                    contents=[{"role": "user", "content": prompt}],
+                    contents=prompt,
                     config=config,
                 ),
                 timeout=self._settings.llm_request_timeout_seconds,
@@ -77,10 +80,8 @@ class GeminiLlm:
                 f"Gemini request timed out after "
                 f"{self._settings.llm_request_timeout_seconds}s on model {self.model_id}"
             ) from exc
-        except Exception as exc:  # SDK raises many provider-specific types
-            # Never interpolate the exception into a returned message: SDK errors can
-            # echo request payloads, which carry the API key.
-            raise LlmError(f"Gemini request failed: {type(exc).__name__}") from exc
+        except Exception as exc:
+            raise LlmError(f"Gemini request failed: {_detail(exc, self._settings.gemini_api_key)}") from exc
 
         text = getattr(response, "text", None)
         if not text:
@@ -90,6 +91,19 @@ class GeminiLlm:
         if not isinstance(parsed, dict):
             raise LlmOutputUnparsable("Gemini output was not a JSON object")
         return parsed
+
+
+def _detail(exc: BaseException, secret: str) -> str:
+    """A bounded, key-scrubbed description of a provider failure.
+
+    Swallowing the detail entirely turns every distinct outage into the same unusable
+    message; echoing it raw risks the API key, which some SDK error dumps include. So:
+    truncate, then redact the key if it survived into the text.
+    """
+    text = f"{type(exc).__name__}: {exc}"[:400]
+    if secret:
+        text = text.replace(secret, "***")
+    return text
 
 
 class RecordingLlm:

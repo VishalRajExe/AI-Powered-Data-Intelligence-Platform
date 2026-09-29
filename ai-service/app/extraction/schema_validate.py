@@ -201,3 +201,23 @@ def strip_const(schema: Any) -> Any:
     if isinstance(schema, list):
         return [strip_const(item) for item in schema]
     return schema
+
+
+# `additionalProperties: false` is how this project declares a closed contract — gate 1
+# reports unexpected keys because of it. Gemini's responseSchema type has no such field and
+# answers 400 INVALID_ARGUMENT when one is sent, so the two needs are reconciled here: the
+# strict schema remains the internal contract, and only the provider copy is loosened.
+_PROVIDER_UNSUPPORTED = ("additionalProperties", "$schema", "$id", "$defs", "examples", "title")
+
+
+def to_gemini_schema(schema: Any) -> Any:
+    """Provider-safe projection of our strict JSON Schema."""
+    if isinstance(schema, dict):
+        return {
+            key: to_gemini_schema(value)
+            for key, value in schema.items()
+            if key not in _PROVIDER_UNSUPPORTED
+        }
+    if isinstance(schema, list):
+        return [to_gemini_schema(item) for item in schema]
+    return strip_const(schema)

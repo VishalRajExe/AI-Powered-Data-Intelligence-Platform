@@ -17,8 +17,10 @@ TEST_ENVIRONMENT = {
     "ALLOWED_HOSTS": "testserver,localhost,127.0.0.1",
 }
 
+# `setdefault`, not assignment: a developer's real GEMINI_API_KEY must survive into the gated
+# live tests, while offline runs still get a value that satisfies the fail-loud config.
 for key, value in TEST_ENVIRONMENT.items():
-    os.environ[key] = value
+    os.environ.setdefault(key, value)
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
