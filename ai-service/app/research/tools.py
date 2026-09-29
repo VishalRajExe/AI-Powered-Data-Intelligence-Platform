@@ -23,7 +23,15 @@ import asyncio
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
-from app.firecrawl.client import Page, SearchHit, WebError, WebTool, validated_http_url
+from app.firecrawl.client import (
+    Interaction,
+    Page,
+    SearchHit,
+    WebError,
+    WebTool,
+    supports_interact,
+    validated_http_url,
+)
 from app.research.state import ResearchState
 
 
@@ -72,6 +80,20 @@ def _format_hits(hits: list[SearchHit]) -> str:
 def _format_page(page: Page) -> str:
     header = f"URL: {page.url}\nTitle: {page.title}\nHTTP status: {page.status_code}"
     return f"{header}\n\n{page.markdown}".strip()
+
+
+def _format_interaction(result: Interaction) -> str:
+    header = (
+        f"Browser session result for {result.url}\n"
+        f"Prompt: {result.prompt}\n"
+        f"Session: {result.session_id or 'unknown'}"
+    )
+    flags = []
+    if result.truncated:
+        flags.append("output was truncated by the collection layer")
+    if result.killed:
+        flags.append("the session was killed before finishing")
+    return f"{header}\n\n{result.output}".strip() + ("\n\n[" + "; ".join(flags) + "]" if flags else "")
 
 
 async def run_search(
@@ -166,6 +188,72 @@ async def run_scrape(state: ResearchState, web: WebTool, url: str) -> ToolOutcom
     )
 
 
+async def run_interact(state: ResearchState, web: WebTool, url: str, prompt: str) -> ToolOutcome:
+    """Drive a page in a browser session — the only action that acts rather than reads.
+
+    Three gates the read tools do not need:
+
+    * the tool must be enabled for this run at all (`allowed_tools`), mirroring upstream's
+      filtered toolkit (`toolkit.ts:188-204`) — the model is not offered an action it
+      cannot take;
+    * the URL must already have been retrieved by search or scrape this run. An agent that
+      can click anything can reach anything, so interact inherits the same evidence rule
+      the submission gate enforces, one layer earlier;
+    * the attempt spends budget whether or not it succeeds. A session that hangs to the
+      deadline is the expensive case, and refunding it would let one page stall the run.
+    """
+    if "interact" not in state.limits.allowed_tools:
+        return ToolOutcome(
+            name="interact", ok=False, content="",
+            error="interact is not enabled for this run; use search or scrape",
+        )
+    if not supports_interact(web):
+        return ToolOutcome(
+            name="interact", ok=False, content="",
+            error="the configured web engine has no browser session support",
+        )
+    if not prompt.strip():
+        return ToolOutcome(name="interact", ok=False, content="", error="interact requires a prompt")
+
+    try:
+        target = validated_http_url(url)
+    except WebError as exc:
+        return ToolOutcome(name="interact", ok=False, content="", error=str(exc))
+
+    if not state.budget.interaction_allowed():
+        return ToolOutcome(
+            name="interact",
+            ok=False,
+            content="",
+            error=f"interaction budget exhausted ({state.budget.max_interactions} browser sessions)",
+        )
+    if not domain_allowed(target, state.limits.allowed_domains, state.limits.blocked_domains):
+        return ToolOutcome(name="interact", ok=False, content="", error="url is outside the domain policy")
+    if target not in state.observed_urls():
+        return ToolOutcome(
+            name="interact",
+            ok=False,
+            content="",
+            error=f"{target} has not been retrieved this run; search for it and scrape it before "
+                  "attempting to drive it",
+        )
+
+    state.budget.note_interaction()
+
+    try:
+        result = await web.interact(target, prompt)  # type: ignore[attr-defined]
+    except WebError as exc:
+        return ToolOutcome(name="interact", ok=False, content="", error=str(exc))
+
+    if result.error:
+        # Includes the timeout envelope: it arrives as data with fallback advice in it, and
+        # the model must read that advice rather than have it collapsed into a stack trace.
+        return ToolOutcome(name="interact", ok=False, content="", error=result.error)
+
+    state.observe(target, source_type="interact")
+    return ToolOutcome(name="interact", ok=True, content=_format_interaction(result), observed_urls=[target])
+
+
 async def execute_action(state: ResearchState, web: WebTool, action: dict) -> list[ToolOutcome]:
     """Run the single action the model chose.
 
@@ -179,13 +267,28 @@ async def execute_action(state: ResearchState, web: WebTool, action: dict) -> li
         return [await run_search(state, web, str(action.get("query", "")))]
     if kind == "scrape":
         return [await run_scrape(state, web, str(action.get("url", "")))]
+    if kind == "interact":
+        return [await run_interact(state, web, str(action.get("url", "")), str(action.get("prompt", "")))]
     return []
 
 
 async def execute_many(state: ResearchState, web: WebTool, calls: list[tuple[str, str]]) -> list[ToolOutcome]:
-    """Concurrent execution with per-call isolation, kept for batch phases."""
+    """Concurrent execution with per-call isolation, kept for batch phases.
+
+    `interact` is refused here on principle: upstream gives parallel workers search and
+    scrape only, because a browser session is too heavy to multiply
+    (`worker/index.ts:61`, `worker/index.ts:69`). Batch callers pass `(kind, value)` pairs,
+    which cannot carry an interact prompt anyway, so a refusal is also the only honest
+    answer.
+    """
+    refused = [
+        ToolOutcome(name="interact", ok=False, content="",
+                    error="interact is not available in parallel batch execution; run it in the "
+                          "research loop where its budget and session lifecycle are tracked")
+        for kind, _ in calls if kind == "interact"
+    ]
     tasks = [
         run_search(state, web, value) if kind == "search" else run_scrape(state, web, value)
-        for kind, value in calls
+        for kind, value in calls if kind != "interact"
     ]
-    return list(await asyncio.gather(*tasks))
+    return list(await asyncio.gather(*tasks)) + refused

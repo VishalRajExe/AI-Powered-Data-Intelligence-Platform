@@ -5,6 +5,11 @@ The single place our code meets the Firecrawl SDK, in the spirit of
 cap, and normalised results. The research graph depends on :class:`WebTool`, never on
 this module, which is what lets it be tested without a network or an API key.
 
+Three tools live here: `search`, `scrape` and `interact`. `interact` is the only one that
+acts on a page instead of reading it, so it carries its own concurrency cap, its own hard
+deadline and an explicit browser-session lifecycle, and it stays disabled until an
+operator lists it in `ALLOWED_WEB_TOOLS`.
+
 Replaced on the way in: `data-enrichment-js` searched with Tavily and scraped with a
 bare ``fetch`` that never inspected ``response.ok``; ``ai-data-enrichment-agent``
 scraped with a Bright Data unlocker its own comment calls an anti-bot bypass. Both are
@@ -14,15 +19,20 @@ Scope note: this client guards URL *shape* and scheme only, because the model ch
 URLs. Robots policy, SSRF host resolution, per-domain rate limiting and allow-list
 enforcement belong to Spring, which must clear a URL before it reaches this service
 (`docs/audit/A-final-architecture.md` §A.2). That gating is the source-governance phase.
+Nothing here bypasses a login wall, CAPTCHA or paywall: a session that meets one is
+reported as an error and the run moves on.
 """
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlparse
 
 from app.config import Settings
+
+logger = logging.getLogger("finalagent.firecrawl")
 
 
 class WebError(RuntimeError):
@@ -55,10 +65,68 @@ class Page:
         }
 
 
+@dataclass(slots=True)
+class Interaction:
+    """The result of one Firecrawl browser-session turn.
+
+    Modelled on `BrowserExecuteResponse` (`output/result/stdout/stderr/exitCode/killed/
+    truncated`). `output` is what prompt mode puts the natural-language answer in.
+
+    A timeout is data, not an exception: upstream resolves a structured envelope instead
+    of hanging the loop (`toolkit.ts:77-91`), and the graph needs to be able to tell the
+    model to fall back to `scrape`, which it can only do if the refusal is content.
+    """
+
+    url: str
+    prompt: str
+    output: str = ""
+    error: str | None = None
+    timed_out: bool = False
+    session_id: str | None = None
+    truncated: bool | None = None
+    killed: bool | None = None
+    fields: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None and bool(self.output.strip())
+
+    def as_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "url": self.url,
+            "prompt": self.prompt,
+            "output": self.output,
+            "timedOut": self.timed_out,
+        }
+        if self.session_id:
+            payload["sessionId"] = self.session_id
+        if self.error:
+            payload["error"] = self.error
+        if self.truncated is not None:
+            payload["truncated"] = self.truncated
+        if self.killed is not None:
+            payload["killed"] = self.killed
+        if self.fields:
+            payload["fields"] = self.fields
+        return payload
+
+
 class WebTool(Protocol):
     async def search(self, query: str, limit: int) -> list[SearchHit]: ...
 
     async def scrape(self, url: str) -> Page: ...
+
+
+class InteractiveWebTool(WebTool, Protocol):
+    """`interact` is optional capability, not a baseline: a web engine that cannot run a
+    browser session must still satisfy every other part of the contract."""
+
+    async def interact(self, url: str, prompt: str) -> Interaction: ...
+
+
+def supports_interact(web: WebTool) -> bool:
+    return callable(getattr(web, "interact", None))
+
 
 
 def validated_http_url(url: str) -> str:
@@ -147,19 +215,108 @@ def normalize_page(data: Any, *, fallback_url: str, truncate_chars: int) -> Page
     )
 
 
+def _field(source: Any, *names: str) -> Any:
+    """Read the first present attribute or dict key, without assuming the SDK's style."""
+    for name in names:
+        value = getattr(source, name, None)
+        if value is None and isinstance(source, dict):
+            value = source.get(name)
+        if value is not None:
+            return value
+    return None
+
+
+def strip_interact_nulls(result: Any) -> Any:
+    """Drop top-level null/empty-string fields from an interact result.
+
+    Direct port of `toolkit.ts:25-34`. Firecrawl's `/interact` always returns the whole
+    response shape and fills only the fields that apply to the mode used, so a prompt-mode
+    answer comes back with `result`, `stdout`, `stderr` and `exitCode` null. A model that
+    sees those echoes `null` straight into its reply. Empty arrays and objects are kept —
+    `links: []` is the claim that there were none, which is information.
+    """
+    if not isinstance(result, dict):
+        return result
+    return {
+        key: value
+        for key, value in result.items()
+        if value is not None and not (isinstance(value, str) and value == "")
+    }
+
+
+def interact_timeout_message(timeout_seconds: float) -> str:
+    """Upstream's timeout text (`toolkit.ts:84`), reworded for our tool names.
+
+    The advice in it is the point: the model needs to know which fallback to take, or it
+    retries the same browser prompt until the interaction budget runs out.
+    """
+    return (
+        f"interact timed out after {timeout_seconds}s; the browser session did not return. "
+        "Try a simpler prompt, split it into smaller steps, or fall back to scrape."
+    )
+
+
+def _as_dict(payload: Any) -> dict[str, Any]:
+    """A dict view of an SDK response, however it was modelled."""
+    if isinstance(payload, dict):
+        return dict(payload)
+    dump = getattr(payload, "model_dump", None)
+    if callable(dump):
+        try:
+            return dict(dump(exclude_none=False))
+        except (TypeError, ValueError):
+            return {}
+    fields = getattr(payload, "__dict__", None)
+    return {k: v for k, v in fields.items() if not k.startswith("_")} if isinstance(fields, dict) else {}
+
+
+def _flag(value: Any) -> bool | None:
+    return None if value is None else bool(value)
+
+
+def normalize_interact(data: Any, *, url: str, prompt: str, session_id: str | None,
+                       truncate_chars: int) -> Interaction:
+    payload = _payload(data)
+    error = _field(payload, "error")
+    output = _field(payload, "output", "stdout", "result", "text")
+    if isinstance(output, (dict, list)):
+        import json
+
+        output = json.dumps(output, ensure_ascii=False)
+    text = str(output or "")
+    if len(text) > truncate_chars:
+        text = text[:truncate_chars] + "\n[... interact output truncated by the collection layer ...]"
+
+    return Interaction(
+        url=str(_field(payload, "url") or url),
+        prompt=prompt,
+        output=text,
+        error=str(error) if error else None,
+        session_id=session_id,
+        truncated=_flag(_field(payload, "truncated")),
+        killed=_flag(_field(payload, "killed")),
+        fields=strip_interact_nulls(_as_dict(payload)),
+    )
+
+
 class FirecrawlWeb:
-    def __init__(self, settings: Settings) -> None:
-        from firecrawl import AsyncFirecrawlApp
+    def __init__(self, settings: Settings, *, app: Any | None = None) -> None:
+        if app is None:
+            from firecrawl import AsyncFirecrawlApp
+
+            app = AsyncFirecrawlApp(api_key=settings.firecrawl_api_key,
+                                    api_url=settings.firecrawl_base_url)
 
         self._settings = settings
-        self._app = AsyncFirecrawlApp(api_key=settings.firecrawl_api_key, api_url=settings.firecrawl_base_url)
+        self._app = app
         self._semaphore = asyncio.Semaphore(settings.max_collect_concurrency)
+        self._interact_semaphore = asyncio.Semaphore(settings.max_interact_concurrency)
 
     async def search(self, query: str, limit: int) -> list[SearchHit]:
         data = await self._call(
             "search",
             self._app.search(query, limit=limit),
-            timeout=self._settings.interact_timeout_seconds,
+            timeout=self._settings.search_timeout_seconds,
         )
         return normalize_search(data, limit)
 
@@ -171,6 +328,72 @@ class FirecrawlWeb:
             timeout=self._settings.scrape_timeout_seconds,
         )
         return normalize_page(data, fallback_url=target, truncate_chars=self._settings.markdown_truncate_chars)
+
+    async def interact(self, url: str, prompt: str) -> Interaction:
+        """One browser session per call, created and destroyed inside it.
+
+        `agent-core` inherits session lifecycle from `firecrawl-aisdk` and only wraps the
+        call with a deadline (`toolkit.ts:51-102`). The Python SDK exposes the lifecycle,
+        so it is owned here: `browser()` → `interact()` → `stop_interaction()` in a
+        `finally`. Upstream's abort leaves the session to expire on its own TTL; a session
+        we abandon would keep billing credits for the rest of `ttl`, so the stop always
+        runs, including on the timeout path.
+        """
+        target = validated_http_url(url)
+        if not prompt.strip():
+            raise WebError("interact requires a prompt")
+
+        timeout = self._settings.interact_timeout_seconds
+        async with self._interact_semaphore:
+            try:
+                created = await asyncio.wait_for(self._app.browser(), timeout=timeout)
+            except asyncio.TimeoutError as exc:
+                raise WebError(f"browser creation timed out after {timeout}s") from exc
+            except WebError:
+                raise
+            except Exception as exc:
+                raise WebError(f"browser creation failed: {type(exc).__name__}") from exc
+
+            session_id = _field(created, "id", "session_id", "sessionId")
+            if not session_id:
+                raise WebError("Firecrawl returned a browser session with no id")
+
+            try:
+                executed = await asyncio.wait_for(
+                    self._app.interact(str(session_id), prompt=prompt, timeout=int(timeout)),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                # Returned, not raised: the graph reports this to the model as tool output
+                # with guidance, and a raised WebError would carry none of that.
+                return Interaction(url=target, prompt=prompt, session_id=str(session_id),
+                                   timed_out=True, error=interact_timeout_message(timeout))
+            except WebError:
+                raise
+            except Exception as exc:
+                raise WebError(f"interact failed: {type(exc).__name__}") from exc
+            finally:
+                await self._stop_session(str(session_id))
+
+            return normalize_interact(
+                executed,
+                url=target,
+                prompt=prompt,
+                session_id=str(session_id),
+                truncate_chars=self._settings.markdown_truncate_chars,
+            )
+
+    async def _stop_session(self, session_id: str) -> None:
+        """Close the session. A failure here is logged, never raised: it must not replace
+        the error or result the caller is about to act on."""
+        stop = getattr(self._app, "stop_interaction", None) or getattr(self._app, "stop_interactive_browser", None)
+        if stop is None:
+            logger.warning("firecrawl SDK exposes no session-stop method; session %s will expire on TTL", session_id)
+            return
+        try:
+            await stop(session_id)
+        except Exception as exc:
+            logger.warning("could not close browser session %s: %s", session_id, type(exc).__name__)
 
     async def _call(self, tool: str, awaitable: Any, *, timeout: float) -> Any:
         async with self._semaphore:
@@ -186,8 +409,12 @@ class FirecrawlWeb:
                 raise WebError(f"{tool} failed: {type(exc).__name__}") from exc
 
 
+
 class FakeWeb:
-    """Test double: scripted search/scrape, with call accounting for assertions."""
+    """Test double: scripted search/scrape, with call accounting for assertions.
+
+    Deliberately has **no** `interact` method. That makes "this web engine cannot run a
+    browser session" a state the graph can be tested against rather than an assumption."""
 
     def __init__(
         self,
@@ -216,3 +443,42 @@ class FakeWeb:
         if page is None:
             return Page(url=url, title=f"Page {url}", markdown=f"markdown body for {url}")
         return page
+
+
+class FakeInteractiveWeb(FakeWeb):
+    """A web engine that can also run a browser session, scripted per URL.
+
+    Separate from :class:`FakeWeb` so that the presence of `interact` is something a test
+    chooses, matching how the real capability is opt-in through `ALLOWED_WEB_TOOLS`.
+    """
+
+    def __init__(
+        self,
+        *,
+        interactions: dict[str, Interaction] | None = None,
+        fail_interact_urls: set[str] | None = None,
+        default_output: str = "browser session answered",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._interactions = interactions or {}
+        self._fail_interact_urls = fail_interact_urls or set()
+        self._default_output = default_output
+        self.interact_calls: list[tuple[str, str]] = []
+
+    async def interact(self, url: str, prompt: str) -> Interaction:
+        self.interact_calls.append((url, prompt))
+        validated_http_url(url)
+        if not prompt.strip():
+            raise WebError("interact requires a prompt")
+        if url in self._fail_interact_urls:
+            raise WebError(f"interact refused for {url}")
+        scripted = self._interactions.get(url)
+        if scripted is not None:
+            return scripted
+        return Interaction(
+            url=url,
+            prompt=prompt,
+            output=f"{self._default_output} for {url}",
+            session_id="fake-session",
+        )

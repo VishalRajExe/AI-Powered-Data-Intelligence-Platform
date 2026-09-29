@@ -40,6 +40,7 @@ public class ResearchController {
     @PostMapping
     public ResearchResult research(@Valid @RequestBody ResearchRequest request) {
         ExtractionSchemaValidator.validate(request.extractionSchema());
+        WebToolPolicy.validate(request.limits());
         return aiServiceClient.research(request);
     }
 
@@ -47,6 +48,12 @@ public class ResearchController {
     @ExceptionHandler(ExtractionSchemaValidator.InvalidExtractionSchemaException.class)
     public ErrorResponse handleInvalidSchema(ExtractionSchemaValidator.InvalidExtractionSchemaException e) {
         return ErrorResponse.of("INVALID_EXTRACTION_SCHEMA", e.getMessage());
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(WebToolPolicy.InvalidWebToolRequestException.class)
+    public ErrorResponse handleInvalidWebTools(WebToolPolicy.InvalidWebToolRequestException e) {
+        return ErrorResponse.of("INVALID_WEB_TOOLS", e.getMessage());
     }
 
     @ExceptionHandler(AiServiceClient.AiServiceException.class)

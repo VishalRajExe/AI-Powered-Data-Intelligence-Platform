@@ -276,4 +276,41 @@ or per-domain rate limits. Mitigation: Spring is designed to pre-clear URLs befo
 them (`A` §A.2); until that lands, `allowedDomains` should be supplied by callers, and live
 collection must stay behind the gated provider test.
 
+**R33 — A site playbook is operator-authored guidance the model follows without a source.**
+Severity: Moderate. Likelihood: Medium once playbooks exist. A wrong or stale "the salary is under
+the third tab" sends a run re-scraping the wrong thing, and nothing in the record says which
+playbook was followed or when it was written. Mitigation: playbooks are injected as *navigation*
+guidance only, never as data — gate 1 still requires every submitted field to come from material
+retrieved in the run, `metadata.playbooksUsed` records which ones were consulted, and rejected
+skills are reported at `/ai/v1/ready` rather than skipped silently (upstream swallows them).
+`ai-service/skills/README.md` requires a date and the observation a claim came from. Unmitigated
+residual: there is no expiry or staleness check on a playbook, and no way to prove one still holds.
+
+**R34 — The browser-session path has never touched the live API.** Severity: Moderate.
+Likelihood: Certain. Phase 4 asked for "real and mocked Firecrawl execution" and delivered the
+mocked half: 19 tests drive `FirecrawlWeb.interact()` against a stub of the SDK client, which
+proves *our* lifecycle, deadline and normalisation logic but proves nothing about Firecrawl's side.
+Session latency, credit cost, prompt-mode answer quality and whether a session finishes inside
+60 s are all unmeasured, and `MAX_INTERACT_CONCURRENCY=2` with `MAX_INTERACTIONS_PER_RUN=3` are
+informed guesses until a key exists. Mitigation: `tests/test_live_firecrawl.py` is written,
+dual-gated (`RUN_LIVE_FIRECRAWL_TESTS=true` **and** a non-empty `FIRECRAWL_API_KEY`) and reports
+its skip reason instead of passing silently; gate **G2** stays open.
+
+**R35 — An enabled `interact` on an unauthenticated deployment is a billing and access-control
+surface.** Severity: High. Likelihood: Low today, High if `ALLOWED_WEB_TOOLS` is opened before
+Phase 3 authentication lands. A live session can click, so the reachability an SSRF guard exists
+to prevent becomes directly available, and each session bills credits for its TTL. Mitigation:
+`interact` is off at the service ceiling by default and a request can only narrow it;
+`run_interact()` refuses any URL the run has not already retrieved; `research.md` rule 6 forbids
+using a session to get past a login screen, CAPTCHA or paywall; session concurrency is capped
+below general concurrency. **None of that substitutes for source governance (R32) or authz — both
+still have to land before this is switched on in a deployment.**
+
+## L.9 Where the risk list came from
+
+`R1`–`R27` are findings against the old project, read from source and measured where the claim was
+checkable. `R28`–`R32` are Phase 1.5 findings about the two enrichment repositories. `R33`–`R35`
+are Phase 4 findings about what this build can now do that it could not before: act on a page,
+load guidance written by someone else, and bill for a session nobody has timed.
+
 Next: `M-phase-plan.md`.

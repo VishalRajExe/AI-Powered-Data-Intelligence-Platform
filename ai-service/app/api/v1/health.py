@@ -60,7 +60,25 @@ def ready(request: Request) -> dict[str, Any]:
         "limits": {
             "maxSchemaRepairs": settings.max_schema_repairs,
             "maxCollectConcurrency": settings.max_collect_concurrency,
+            "maxInteractConcurrency": settings.max_interact_concurrency,
+            "maxInteractionsPerRun": settings.max_interactions_per_run,
+            "searchTimeoutSeconds": settings.search_timeout_seconds,
+            "scrapeTimeoutSeconds": settings.scrape_timeout_seconds,
             "interactTimeoutSeconds": settings.interact_timeout_seconds,
             "llmModelId": settings.llm_model_id,
+        },
+        "web": {
+            # Which tools the ceiling exposes, plus whether the attached web engine can
+            # actually service them. A run whose request was silently narrowed by the
+            # ceiling should be visible here rather than inferred from a FAILED job.
+            "engine": type(request.app.state.web).__name__,
+            "enabledTools": list(settings.allowed_web_tools),
+            "interactSupportedByEngine": hasattr(request.app.state.web, "interact"),
+        },
+        "skills": {
+            "directory": str(request.app.state.skills.skills_dir),
+            "loaded": len(request.app.state.skills.skills),
+            "rejected": len(request.app.state.skills.rejected),
+            "sitePlaybooks": sum(len(skill.site_playbooks) for skill in request.app.state.skills.skills),
         },
     }

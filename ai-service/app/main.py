@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,11 +24,21 @@ from app.config import Settings, get_settings
 from app.firecrawl.client import FirecrawlWeb
 from app.llm.client import GeminiLlm
 from app.logging_setup import configure_logging
+from app.research.skills import SkillLibrary
 
 log = logging.getLogger("finalagent.ai")
 
 SERVICE_NAME = "finalagent-ai-service"
 VERSION = "0.1.0"
+
+# The service root, so a relative SKILLS_DIR resolves the same whichever directory uvicorn
+# was launched from.
+SERVICE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def resolve_skills_dir(settings: Settings) -> Path:
+    configured = Path(settings.skills_dir)
+    return configured if configured.is_absolute() else SERVICE_ROOT / configured
 
 _CODE_BY_STATUS = {
     400: "BAD_REQUEST",
@@ -46,7 +57,7 @@ def _envelope(code: str, message: str, details: list[Any] | None = None) -> dict
 
 
 def create_app(settings: Settings | None = None, *, llm: object | None = None,
-               web: object | None = None) -> FastAPI:
+               web: object | None = None, skills: SkillLibrary | None = None) -> FastAPI:
     resolved = settings if settings is not None else get_settings()
     configure_logging(resolved.log_level)
 
@@ -64,6 +75,9 @@ def create_app(settings: Settings | None = None, *, llm: object | None = None,
     # than the first request. Tests inject doubles through the keyword arguments.
     app.state.llm = llm if llm is not None else GeminiLlm(resolved)
     app.state.web = web if web is not None else FirecrawlWeb(resolved)
+    # Reading a directory is not a provider call, so a missing SKILLS_DIR must not fail the
+    # boot: it resolves to an empty library, which the graph handles by having no playbooks.
+    app.state.skills = skills if skills is not None else SkillLibrary(resolve_skills_dir(resolved))
 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=resolved.allowed_hosts)
 

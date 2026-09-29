@@ -29,9 +29,16 @@ public record ResearchRequest(
             Integer maxSearchResults,
             Integer maxSearchesPerRun,
             Integer maxScrapesPerRun,
+            Integer maxInteractionsPerRun,
             Integer expectedRecords,
             List<String> allowedDomains,
-            List<String> blockedDomains
+            List<String> blockedDomains,
+            /**
+             * Web tools this run wants. The AI service intersects it with its own
+             * {@code ALLOWED_WEB_TOOLS}, so a caller can narrow the set but never widen it:
+             * {@code interact} is enabled by an operator, not by a request.
+             */
+            List<String> allowedTools
     ) {
     }
 }

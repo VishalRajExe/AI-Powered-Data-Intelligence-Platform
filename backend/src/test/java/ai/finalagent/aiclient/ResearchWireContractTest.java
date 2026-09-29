@@ -27,7 +27,8 @@ class ResearchWireContractTest {
                 "find best youtube channels for coding",
                 Map.of("type", "object", "properties", Map.of("channels", Map.of("type", "array")),
                         "required", List.of("channels"), "additionalProperties", false),
-                new ResearchRequest.Limits(6, 5, 8, 12, 20, List.of("youtube.com"), List.of("reddit.com")),
+                new ResearchRequest.Limits(6, 5, 8, 12, 2, 20, List.of("youtube.com"),
+                        List.of("reddit.com"), List.of("search", "scrape", "interact")),
                 List.of("best coding channels"));
 
         String json = mapper.writeValueAsString(request);
@@ -36,9 +37,12 @@ class ResearchWireContractTest {
                 .contains("\"extractionSchema\"")
                 .contains("\"seedQueries\"")
                 .contains("\"maxSearchesPerRun\"")
+                .contains("\"maxInteractionsPerRun\"")
                 .contains("\"expectedRecords\"")
+                .contains("\"allowedTools\"")
                 .doesNotContain("extraction_schema")
-                .doesNotContain("seed_queries");
+                .doesNotContain("seed_queries")
+                .doesNotContain("allowed_tools");
     }
 
     @Test
@@ -63,7 +67,10 @@ class ResearchWireContractTest {
                      "retrievedAt": "2026-09-29T06:00:00+00:00", "verifiedByTool": true}
                   ],
                   "metadata": {"model": "gemini-2.5-flash", "loopsUsed": 3, "searchesUsed": 1,
-                                "scrapesUsed": 1, "toolErrors": 0, "repairAttempts": 0,
+                                "scrapesUsed": 1, "interactionsUsed": 1,
+                                "enabledTools": ["search", "scrape", "interact"],
+                                "playbooksUsed": ["Acme jobs (Job boards)"],
+                                "toolErrors": 0, "repairAttempts": 0,
                                 "sourceCount": 1, "schemaFieldCount": 2, "durationMs": 4200,
                                 "maxLoops": 6},
                   "validation": {"schemaValid": true, "missingFields": [], "extraFields": [],
@@ -80,6 +87,11 @@ class ResearchWireContractTest {
         assertThat(result.records().get(0).values()).containsEntry("channel_name", "Coding Cat");
         assertThat(result.records().get(0).sources().get(0).verifiedByTool()).isTrue();
         assertThat(result.metadata()).containsEntry("loopsUsed", 3);
+        // Which tools actually ran and which playbooks actually informed the run: a caller
+        // that asked for browser sessions has to be able to see whether it got them.
+        assertThat(result.metadata()).containsEntry("interactionsUsed", 1);
+        assertThat(result.metadata()).containsEntry("enabledTools", List.of("search", "scrape", "interact"));
+        assertThat(result.metadata()).containsEntry("playbooksUsed", List.of("Acme jobs (Job boards)"));
         assertThat(result.validation().warnings())
                 .anyMatch(warning -> warning.contains("expected at least 50 records"));
         assertThat(result.failureReason()).isNull();

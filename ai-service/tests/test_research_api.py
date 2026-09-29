@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.firecrawl.client import FakeWeb, Page, SearchHit
+from app.firecrawl.client import FakeInteractiveWeb, FakeWeb, Interaction, Page, SearchHit
 from app.llm.client import LlmError, RecordingLlm
 from app.main import create_app
+from tests.conftest import build_settings
 
 SCHEMA = {
     "type": "object",
@@ -128,3 +130,140 @@ def test_health_stays_public_while_research_is_gated(settings):
     with build_client(settings, []) as client:
         assert client.get("/ai/v1/health").status_code == 200
         assert client.post("/ai/v1/research", json=request_body()).status_code == 401
+
+
+# ------------------------------------------------------------------ web tool ceiling
+
+
+def build_client_with(web, settings: Settings, payloads: list) -> TestClient:
+    return TestClient(create_app(settings, llm=RecordingLlm(payloads), web=web))
+
+
+def interactive_web() -> FakeInteractiveWeb:
+    return FakeInteractiveWeb(
+        search_results=[[SearchHit(url="https://acme.test/jobs/1", title="Acme hiring")]],
+        pages={"https://acme.test/jobs/1": Page(url="https://acme.test/jobs/1",
+                                                markdown="Acme is hiring.", status_code=200)},
+        interactions={"https://acme.test/jobs/1": Interaction(
+            url="https://acme.test/jobs/1", prompt="reveal the salary",
+            output="18-24 LPA once expanded.", session_id="brw_1")},
+    )
+
+
+def test_a_request_cannot_enable_a_tool_the_service_left_out(settings):
+    with build_client(settings, []) as client:
+        response = client.post(
+            "/ai/v1/research",
+            json=request_body(limits={"allowedTools": ["interact"]}),
+            headers={"X-API-Key": KEY},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "NO_PERMITTED_WEB_TOOLS"
+
+
+def test_an_unknown_tool_name_is_a_validation_failure(settings):
+    with build_client(settings, []) as client:
+        response = client.post(
+            "/ai/v1/research",
+            json=request_body(limits={"allowedTools": ["crawl"]}),
+            headers={"X-API-Key": KEY},
+        )
+
+    assert response.status_code == 422
+    assert "allowedTools" in response.json()["error"]["details"][0]
+
+
+def test_a_request_may_narrow_the_enabled_tools(settings):
+    payloads = [
+        {"action": "search", "reason": "find postings", "query": "remote frontend jobs India"},
+        {"action": "submit", "reason": "enough gathered"},
+        RECORDS,
+        {"is_satisfactory": True, "reason": ["a", "b", "c"], "improvement_instructions": ""},
+    ]
+    with build_client_with(FakeWeb(
+        search_results=[[SearchHit(url="https://acme.test/jobs/1", title="Acme hiring")]],
+    ), settings, payloads) as client:
+        response = client.post(
+            "/ai/v1/research",
+            json=request_body(limits={"allowedTools": ["search"]}),
+            headers={"X-API-Key": KEY},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["enabledTools"] == ["search"]
+
+
+@pytest.mark.parametrize(
+    "requested, ceiling, expected",
+    [(None, ["search", "scrape"], ["search", "scrape"]),
+     (["search", "scrape", "interact"], ["search", "scrape"], ["search", "scrape"]),
+     (["search", "interact"], ["search", "scrape", "interact"], ["search", "interact"])],
+)
+def test_the_intersection_is_reported_back_to_the_caller(requested, ceiling, expected):
+    from app.api.v1.research import resolve_limits
+    from app.research.contracts import ResearchLimitsRequest
+
+    settings = build_settings(allowed_web_tools=ceiling)
+    limits = resolve_limits(ResearchLimitsRequest(allowedTools=requested), settings)
+    assert limits.allowed_tools == expected
+
+
+def test_the_interaction_budget_is_clamped_to_the_service_setting():
+    from app.api.v1.research import resolve_limits
+    from app.research.contracts import ResearchLimitsRequest
+
+    settings = build_settings(allowed_web_tools=["search", "scrape", "interact"],
+                              max_interactions_per_run=2)
+    assert resolve_limits(ResearchLimitsRequest(maxInteractionsPerRun=20), settings).max_interactions_per_run == 2
+    assert resolve_limits(None, settings).max_interactions_per_run == 2
+
+
+def test_a_run_with_interact_enabled_completes_over_the_wire(settings):
+    payloads = [
+        {"action": "search", "reason": "find postings", "query": "remote frontend jobs India"},
+        {"action": "scrape", "reason": "read the posting", "url": "https://acme.test/jobs/1"},
+        {"action": "interact", "reason": "salary hidden", "url": "https://acme.test/jobs/1",
+         "prompt": "reveal the salary"},
+        {"action": "submit", "reason": "have the salary"},
+        {"jobs": [{"company": "Acme", "role": "Frontend Engineer",
+                   "application_url": "https://acme.test/jobs/1", "salary": "18-24 LPA"}]},
+        {"is_satisfactory": True, "reason": ["fields present", "urls observed", "one role"],
+         "improvement_instructions": ""},
+    ]
+    enabled = build_settings(allowed_web_tools=["search", "scrape", "interact"],
+                             max_interactions_per_run=2)
+    # The job schema must declare the field the run is asked for, or gate 1 rejects the extra.
+    schema_with_salary = {
+        "type": "object",
+        "properties": {
+            "jobs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "company": {"type": "string"},
+                        "role": {"type": "string"},
+                        "application_url": {"type": "string"},
+                        "salary": {"type": "string"},
+                    },
+                    "required": ["company", "role", "application_url"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["jobs"],
+        "additionalProperties": False,
+    }
+
+    with build_client_with(interactive_web(), enabled, payloads) as client:
+        response = client.post("/ai/v1/research",
+                               json=request_body(extractionSchema=schema_with_salary),
+                               headers={"X-API-Key": KEY})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "COMPLETED"
+    assert body["metadata"]["interactionsUsed"] == 1
+    assert body["metadata"]["enabledTools"] == ["search", "scrape", "interact"]
+    assert body["sources"][0]["sourceType"] == "search+scrape+interact"

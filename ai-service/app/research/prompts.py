@@ -14,6 +14,7 @@ which derives it from the user's prompt.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -22,24 +23,86 @@ from app.research.state import ResearchState
 
 PROMPT_DIR = Path(__file__).parent / "prompts"
 
-ACTION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
+DATA_ACTIONS = ("search", "scrape", "interact")
+CONTROL_ACTIONS = ("submit", "blocked")
+
+_ACTION_FIELDS: dict[str, dict[str, Any]] = {
+    "query": {"type": "string", "description": "Required for action=search."},
+    "url": {
+        "type": "string",
+        "description": "Required for action=scrape and action=interact; must come from a prior "
+                       "search result or scraped page.",
+    },
+    "prompt": {
+        "type": "string",
+        "description": "Required for action=interact: what to do or read in the browser session, "
+                       "as one concrete step.",
+    },
+}
+
+_ACTION_ARGUMENTS = {"search": ("query",), "scrape": ("url",), "interact": ("url", "prompt")}
+
+_ACTION_HELP = {
+    "search": "`search` — issue a web search. Provide `query`.",
+    "scrape": "`scrape` — read one page in full. Provide `url`, which must come from a search result "
+              "you were given, not from memory.",
+    "interact": "`interact` — drive a page in a live browser session (click, expand, paginate, read "
+                "what a static scrape cannot). Provide `url`, which you must already have retrieved, "
+                "and `prompt` naming one concrete step. It is bounded and slow: prefer `scrape` "
+                "unless the page genuinely will not yield its data by being read.",
+}
+
+
+def allowed_data_tools(requested: Any, ceiling: Iterable[str]) -> list[str]:
+    """The tools a run may use: what it asked for, narrowed by what the service allows.
+
+    A request can never widen past the ceiling, which is why `interact` cannot be switched
+    on by a caller alone. Order follows the ceiling so the prompt reads consistently.
+    """
+    ceiling_list = [tool.lower() for tool in ceiling]
+    wanted = ceiling_list if requested is None else [str(tool).lower() for tool in requested]
+    return [tool for tool in ceiling_list if tool in wanted]
+
+
+def action_schema(allowed_tools: Iterable[str]) -> dict[str, Any]:
+    """The plan-action schema for one run, built from that run's enabled tools.
+
+    The template kept one static tool list for every run. Enumerating only the enabled
+    actions is what makes the allowlist real: the provider is structurally unable to ask
+    for a disabled tool, and `additionalProperties:false` stops it smuggling one in as an
+    extra field.
+    """
+    data_actions = [tool for tool in DATA_ACTIONS if tool in set(allowed_tools)]
+    properties: dict[str, Any] = {
         "action": {
             "type": "string",
-            "enum": ["search", "scrape", "submit", "blocked"],
+            "enum": [*data_actions, *CONTROL_ACTIONS],
             "description": "The single next action to take.",
         },
         "reason": {
             "type": "string",
             "description": "Why this action, in one or two sentences, naming what is still missing.",
         },
-        "query": {"type": "string", "description": "Required for action=search."},
-        "url": {"type": "string", "description": "Required for action=scrape; must come from a prior search result."},
-    },
-    "required": ["action", "reason"],
-    "additionalProperties": False,
-}
+    }
+    for action in data_actions:
+        for argument in _ACTION_ARGUMENTS[action]:
+            properties[argument] = _ACTION_FIELDS[argument]
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": ["action", "reason"],
+        "additionalProperties": False,
+    }
+
+
+def actions_help(allowed_tools: Iterable[str]) -> str:
+    lines = [_ACTION_HELP[tool] for tool in DATA_ACTIONS if tool in set(allowed_tools)]
+    lines.append("`submit` — you believe the gathered material can fill the contract. No further fields.")
+    lines.append("`blocked` — the contract cannot be satisfied from public web sources. Explain why.")
+    return "\n".join(f"- {line}" for line in lines)
+
+
+ACTION_SCHEMA = action_schema(("search", "scrape"))
 
 CRITIQUE_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -96,13 +159,29 @@ def _feedback_block(state: ResearchState) -> str:
     )
 
 
-def research_prompt(state: ResearchState, checklist: list[str]) -> str:
+def _playbooks_block(playbooks: list[tuple[str, str]]) -> str:
+    if not playbooks:
+        return ""
+    header = (
+        "## Site playbooks for the domains in this run\n\n"
+        "These describe how a specific site lays out its pages, written by whoever maintains "
+        "this deployment. Follow them over generic guesses, but treat their claims as leads to "
+        "verify against retrieved content, not as data you may submit."
+    )
+    blocks = [f"### {name}\n\n{body.strip()}" for name, body in playbooks]
+    return header + "\n\n" + "\n\n".join(blocks)
+
+
+def research_prompt(state: ResearchState, checklist: list[str],
+                    playbooks: list[tuple[str, str]] | None = None) -> str:
     return render(
         load("research.md"),
         {
             "topic": state.topic,
             "schema": _schema_text(state.extraction_schema),
             "checklist": "\n".join(f"- {path}" for path in checklist) or "- (schema declares no fields)",
+            "actions": actions_help(state.limits.allowed_tools),
+            "playbooks": _playbooks_block(playbooks or []),
             "feedback": _feedback_block(state),
         },
     )

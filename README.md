@@ -6,10 +6,12 @@ A user describes a data requirement in plain English; the system understands it,
 collection workflow, gathers data from permitted web sources, cleans and validates it, and
 produces a source-traceable dataset that can be searched, filtered and exported.
 
-**Status: Phase 3 complete — a natural-language prompt now determines the fields collected.**
-Prompt → AI requirement → data contract → extraction schema → research graph, with Spring
-validating the model's answer before collection starts. Still nothing persisted: no schema, no
-dataset storage, no authentication.
+**Status: Phase 4 complete — the research graph now runs Firecrawl's web tools, including an
+opt-in browser session.**
+Prompt → AI requirement → data contract → extraction schema → research graph → Firecrawl
+(`search` → `scrape` → `interact` when enabled) → structured records + sources + validation
+state, with Spring validating the model's answer and the tool request before collection starts.
+Still nothing persisted: no schema, no dataset storage, no authentication.
 
 ---
 
@@ -107,29 +109,36 @@ The response is the parsed requirement plus the extraction schema derived from i
 so two different prompts produce two different schemas. Spring validates that answer — a contract
 the model itself is inconsistent about stops there with `INVALID_REQUIREMENT` and no collection run.
 
-## Verified (Phases 2–3, executed 2026-09-29)
+## Verified (Phases 2–4, executed 2026-09-29)
 
 Every row is a command run in that session, with counts, not an assertion.
 
 | Check | Result |
 |---|---|
-| `mvn test` | **54 passed**, 0 failures |
-| `pytest` | **98 passed**, 4 gated live tests skipped by design |
+| `mvn test` | **68 passed**, 0 failures (54 through Phase 3, +14 at Phase 4) |
+| `pytest` | **174 passed**, 7 gated live tests skipped by design (was 98 passed / 4 skipped; 79 cases added at Phase 4) |
+| `scripts/verify.sh` | backend tests ok, backend package ok, ai tests ok, frontend typecheck / lint / build ok |
 | Prompt → requirement → schema: three different requests, three distinct field sets | passed offline (`test_the_three_requests_yield_three_distinct_schemas`); **live confirmation blocked by free-tier quota**, see `docs/control/Memory.md` §2 |
 | Spring rejects an inconsistent AI requirement and blocks collection | passed — `research` never called (`verify(..., never())`) |
 | Needs-clarification returns without collecting | passed on both services |
 | Research graph on doubles | all gates exercised: schema repair, repair exhaustion, loop bound on the search path, no-answer-before-data, critique rejection and re-loop, malformed verdict, unverified URL |
+| Browser-session lifecycle against a **stub of the Firecrawl SDK client** | 19 tests: session created → prompt sent → `stop_interaction` in every path (success, SDK error, timeout), timeout returns a structured envelope with fallback advice, null fields stripped, empty lists preserved, truncation marked, non-http and empty-prompt refused **before** a session exists |
+| `interact` gating | refused when not in the run's tool set, when the engine has no sessions, when the URL was never retrieved, outside the domain policy, and in parallel batch execution |
+| Per-run action schema | generated from the enabled tools — a disabled tool is not in the enum, so the provider cannot request it; asserted on the recorded LLM call |
+| Tool ceiling | a request naming `interact` while the service excludes it → **400 `NO_PERMITTED_WEB_TOOLS`**; Java rejects unknown names, empty lists, out-of-range budgets (11 `WebToolPolicyTest` cases) |
+| SKILL.md loader | 24 tests: frontmatter subset parsing, validation reporting, discovery, domain match (exact / `www.` / suffix), traversal guard refuses `../` and absolute paths |
 | Backend jar boots; `/api/v1/health` → 200 | passed (note: 8080 is held on this machine by the **old project's** jar; use `SERVER_PORT=8090`) |
 | Backend with no credentials → **exit 1**, naming `AI_SERVICE_API_KEY`, `MYSQL_PASSWORD`, `MYSQL_USER` | passed |
 | AI service with a missing provider key → **exit 1**, naming the variable | passed |
 | Live `POST /api/v1/research` through Spring → Python, invalid for Python | **422 `AI_SERVICE_REJECTED_REQUEST`** carrying Python's own envelope |
 | Same request with an empty schema | **400 `INVALID_EXTRACTION_SCHEMA`**, and `verifyNoInteractions` proves Python was never called |
-| Java ↔ Python wire contract | camelCase round-trip test on a captured Python payload shape |
+| Java ↔ Python wire contract | camelCase round-trip test on a captured Python payload shape, now including `allowedTools`, `maxInteractionsPerRun`, `interactionsUsed`, `enabledTools`, `playbooksUsed` |
 | `npm run typecheck` / `lint` / `build` | passed; 13 pages |
 | Browser → Next → Spring → FastAPI health chain | passed (`aiService: UP`) |
 | Actuator liveness stays `UP` while MySQL is down | passed |
 | Real MySQL round-trip (`/ready` → 200) | **not achieved** — still needs a matching database user |
-| Live Gemini + Firecrawl research run | **not performed** — no `FIRECRAWL_API_KEY`, and a Gemini call would bill the account. Gated behind `RUN_LIVE_PROVIDER_TESTS=true` |
+| **Real Firecrawl execution** | **not performed.** `FIRECRAWL_API_KEY` has length 0 in both the shell and the root `.env`; `tests/test_live_firecrawl.py` skips all three cases and prints the reason. Gated behind `RUN_LIVE_FIRECRAWL_TESTS=true` |
+| Live Gemini research run | **not performed** — a call would bill a free-tier key already at its 20 requests/day ceiling. Gated behind `RUN_LIVE_PROVIDER_TESTS=true` |
 
 ## Deliberately deferred out of Phase 1
 
@@ -200,10 +209,16 @@ is kept, adapted or dropped.
    Patterns studied and independently reimplemented; the reuse map marks every such item
    `PORT (concept only)`.
 
-## Open items before Phase 2
+## Open gates
 
 - **G1 — demonstration strategy** with demo mode removed (`L` R8, `M` Phase 0). Still undecided.
-- **G2 — confirm Firecrawl Python `interact` is sufficient** (resolved by the Phase 2 spike).
+- **G2 — is Firecrawl's live `interact` sufficient?** Narrowed at Phase 4, not closed: the whole
+  session lifecycle is implemented and the Python SDK's shape is verified by introspection, so no
+  sidecar is needed for API-shape reasons. Whether a live prompt-mode session completes inside a
+  sane deadline and returns usable text is unmeasured, because there is no `FIRECRAWL_API_KEY`.
+- **S1 — site playbooks.** The loader works and is tested; the platform ships **zero** `SKILL.md`
+  playbooks, and upstream's were not copied. Writing our own means observing real sites, which
+  needs the key above. `ai-service/skills/README.md` documents the format and the rules.
 - **A MySQL user the app can actually connect as.** Phase 1 verified configuration binding and
   the probe reaching the server, but `/ready` cannot return 200 until `MYSQL_USER`/`MYSQL_PASSWORD`
   match a real account with `finalagent_dev` granted.

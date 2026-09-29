@@ -18,6 +18,7 @@ import ai.finalagent.aiclient.dto.ResearchRequest;
 import ai.finalagent.aiclient.dto.ResearchResult;
 import ai.finalagent.common.ErrorResponse;
 import ai.finalagent.research.ExtractionSchemaValidator;
+import ai.finalagent.research.WebToolPolicy;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -81,6 +82,10 @@ public class PipelineController {
     }
 
     private RequirementAnalysisDto analysedAndValidated(PromptRequest request) {
+        // Checked before anything is spent: a request that names a tool this build does not
+        // have, or a session budget it did not ask for, is the caller's mistake to fix.
+        WebToolPolicy.validate(request.limits());
+
         RequirementAnalysisDto analysis;
         try {
             analysis = aiServiceClient.analyzeRequirement(request.prompt());
@@ -105,6 +110,12 @@ public class PipelineController {
     @ExceptionHandler(ExtractionSchemaValidator.InvalidExtractionSchemaException.class)
     public ErrorResponse handleInvalidSchema(ExtractionSchemaValidator.InvalidExtractionSchemaException e) {
         return ErrorResponse.of("INVALID_EXTRACTION_SCHEMA", e.getMessage());
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(WebToolPolicy.InvalidWebToolRequestException.class)
+    public ErrorResponse handleInvalidWebTools(WebToolPolicy.InvalidWebToolRequestException e) {
+        return ErrorResponse.of("INVALID_WEB_TOOLS", e.getMessage());
     }
 
     @ExceptionHandler(AiServiceClient.AiServiceException.class)

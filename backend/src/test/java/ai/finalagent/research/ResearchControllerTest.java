@@ -1,5 +1,6 @@
 package ai.finalagent.research;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.mockito.ArgumentMatchers.any;
@@ -13,6 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -174,5 +176,56 @@ class ResearchControllerTest {
                         .content(body(jobSchema(), TOPIC)))
                 .andExpect(status().isBadGateway())
                 .andExpect(jsonPath("$.error.code", is("AI_SERVICE_UNAVAILABLE")));
+    }
+
+    @Test
+    void aRequestForAToolThisBuildDoesNotHaveIsRejectedWithoutCallingTheGraph() throws Exception {
+        mockMvc.perform(post("/api/v1/research")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyWithLimits(Map.of("maxLoops", 6, "allowedTools", List.of("crawl")))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code", is("INVALID_WEB_TOOLS")))
+                .andExpect(jsonPath("$.error.message", org.hamcrest.Matchers.containsString("crawl")));
+
+        verifyNoInteractions(aiServiceClient);
+    }
+
+    @Test
+    void aBrowserSessionBudgetForARunThatDidNotAskForSessionsIsRejected() throws Exception {
+        mockMvc.perform(post("/api/v1/research")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyWithLimits(Map.of(
+                                "allowedTools", List.of("search", "scrape"),
+                                "maxInteractionsPerRun", 3))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code", is("INVALID_WEB_TOOLS")));
+
+        verifyNoInteractions(aiServiceClient);
+    }
+
+    @Test
+    void anInteractionRequestIsForwardedToTheGraphVerbatim() throws Exception {
+        when(aiServiceClient.research(any(ResearchRequest.class))).thenReturn(sampleResult());
+
+        mockMvc.perform(post("/api/v1/research")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyWithLimits(Map.of(
+                                "allowedTools", List.of("search", "scrape", "interact"),
+                                "maxInteractionsPerRun", 2))))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<ResearchRequest> sent = ArgumentCaptor.forClass(ResearchRequest.class);
+        org.mockito.Mockito.verify(aiServiceClient).research(sent.capture());
+        assertThat(sent.getValue().limits().allowedTools())
+                .containsExactlyInAnyOrder("search", "scrape", "interact");
+        assertThat(sent.getValue().limits().maxInteractionsPerRun()).isEqualTo(2);
+    }
+
+    private static String bodyWithLimits(Map<String, Object> limits) throws Exception {
+        return new ObjectMapper().writeValueAsString(Map.of(
+                "topic", TOPIC,
+                "extractionSchema", jobSchema(),
+                "seedQueries", List.of(),
+                "limits", limits));
     }
 }

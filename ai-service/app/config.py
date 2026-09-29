@@ -16,6 +16,11 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 MIN_SHARED_SECRET_LENGTH = 32
 MIN_PROVIDER_KEY_LENGTH = 12
 
+# The web tools the Firecrawl client implements. `map`, `crawl`, `extract` and `bash` are
+# available from the SDK but deliberately not in this set: the graph's contract is
+# evidenced page content, and a crawl or an extract would outrun its budget accounting.
+KNOWN_WEB_TOOLS = frozenset({"search", "scrape", "interact"})
+
 PLACEHOLDER_MARKERS = (
     "changeme", "change_me", "replace_me", "replace-me", "your-", "your_",
     "dummy", "placeholder", "secret123", "insecure-default", "todo",
@@ -70,11 +75,20 @@ class Settings(BaseSettings):
 
     llm_request_timeout_seconds: float = 45.0
     extract_timeout_seconds: float = 180.0
+    # `interact_timeout_seconds` is a hard deadline on one browser session, ported from
+    # `toolkit.ts:4` (DEFAULT_INTERACT_TIMEOUT_MS = 60_000). Upstream disables the deadline
+    # at <= 0; this service refuses that, because a stuck session then hangs the research
+    # loop with no bound at all.
     interact_timeout_seconds: float = 60.0
     scrape_timeout_seconds: float = 60.0
+    search_timeout_seconds: float = 30.0
 
     max_schema_repairs: int = 3
     max_collect_concurrency: int = 5
+    # Browser sessions are not cheap requests: upstream bars them from parallel workers
+    # outright (`worker/index.ts:61`). A separate, smaller cap keeps one interactive run
+    # from starving the scrape queue that feeds it.
+    max_interact_concurrency: int = 2
     markdown_truncate_chars: int = 4000
     markdown_truncate_with_extract: int = 2000
 
@@ -84,6 +98,30 @@ class Settings(BaseSettings):
     max_search_results: int = 5
     max_scrapes_per_run: int = 12
     max_searches_per_run: int = 8
+    max_interactions_per_run: int = 3
+
+    # --- web tool ceiling ---
+    # `agent-core/src/toolkit.ts:188-204` builds a filtered toolkit from an allowlist the
+    # caller supplies. Here the allowlist is two-sided: this setting is the maximum any
+    # request may ask for, and a request may only narrow it. `interact` is therefore off
+    # until an operator enables it, because a browser session is the one web tool that can
+    # act on a page rather than only read it.
+    allowed_web_tools: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["search", "scrape"]
+    )
+
+    # --- skills ---
+    # `agent-core` ships six SKILL.md playbooks. None are copied here (licence and
+    # provenance: docs/audit/C-repository-reuse-map.md); this points at a directory we own.
+    # An empty or missing directory is a valid state — the graph runs with no playbooks.
+    skills_dir: str = "skills/definitions"
+
+    @field_validator("allowed_web_tools", mode="before")
+    @classmethod
+    def _split_tools(cls, value):
+        if isinstance(value, str):
+            return [part.strip().lower() for part in value.split(",") if part.strip()]
+        return value
 
     @field_validator("allowed_hosts", mode="before")
     @classmethod
@@ -112,6 +150,11 @@ class Settings(BaseSettings):
             problems.append("MAX_SCHEMA_REPAIRS must be between 0 and 10.")
         if self.max_collect_concurrency < 1 or self.max_collect_concurrency > 32:
             problems.append("MAX_COLLECT_CONCURRENCY must be between 1 and 32.")
+        if self.max_interact_concurrency < 1 or self.max_interact_concurrency > 4:
+            problems.append("MAX_INTERACT_CONCURRENCY must be between 1 and 4; a browser session is "
+                            "expensive enough that upstream forbids them in parallel workers entirely.")
+        if not 0 <= self.max_interactions_per_run <= 20:
+            problems.append("MAX_INTERACTIONS_PER_RUN must be between 0 and 20 (0 disables interact).")
         if not 1 <= self.max_loops <= 20:
             problems.append("MAX_LOOPS must be between 1 and 20; the research loop is bounded.")
         if not 1 <= self.max_search_results <= 20:
@@ -122,11 +165,20 @@ class Settings(BaseSettings):
             problems.append("MAX_SEARCHES_PER_RUN must be between 1 and 100.")
         for name, value in (
             ("SCRAPE_TIMEOUT_SECONDS", self.scrape_timeout_seconds),
+            ("SEARCH_TIMEOUT_SECONDS", self.search_timeout_seconds),
             ("LLM_REQUEST_TIMEOUT_SECONDS", self.llm_request_timeout_seconds),
             ("INTERACT_TIMEOUT_SECONDS", self.interact_timeout_seconds),
         ):
             if value <= 0:
                 problems.append(f"{name} must be greater than zero.")
+
+        unknown_tools = [t for t in self.allowed_web_tools if t not in KNOWN_WEB_TOOLS]
+        if unknown_tools:
+            problems.append(f"ALLOWED_WEB_TOOLS names unknown tools: {unknown_tools}. "
+                            f"Known: {sorted(KNOWN_WEB_TOOLS)}.")
+        if not self.allowed_web_tools:
+            problems.append("ALLOWED_WEB_TOOLS must list at least one web tool; with none enabled "
+                            "the research graph cannot gather evidence.")
 
         if problems:
             raise ConfigurationError(

@@ -84,9 +84,16 @@
 | `FIRECRAWL_SDK_VERSION` | build-time | pinned exact 4.x | Do not inherit the TS core's beta pin (`0.12.0-beta.2`) |
 | `LLM_REQUEST_TIMEOUT_SECONDS` | no | `45` | |
 | `EXTRACT_TIMEOUT_SECONDS` | no | `180` | |
-| `INTERACT_TIMEOUT_SECONDS` | no | `60` | matches the upstream hard cap |
+| `SEARCH_TIMEOUT_SECONDS` | no | `30` | Added at Phase 4: `search` had been borrowing `INTERACT_TIMEOUT_SECONDS`, so one knob governed two unrelated deadlines |
+| `SCRAPE_TIMEOUT_SECONDS` | no | `60` | |
+| `INTERACT_TIMEOUT_SECONDS` | no | `60` | Hard cap for **one browser session**, ported from `toolkit.ts:4`. Upstream allows `<= 0` to mean "no deadline"; this service rejects it, because a stuck session would then hang the loop unbounded |
 | `MAX_SCHEMA_REPAIRS` | no | `3` | ported constant |
-| `MAX_COLLECT_CONCURRENCY` | no | `5` | `asyncio.Semaphore` size |
+| `MAX_COLLECT_CONCURRENCY` | no | `5` | `asyncio.Semaphore` size for search/scrape |
+| `MAX_INTERACT_CONCURRENCY` | no | `2` | Separate, smaller cap for browser sessions. Upstream bars them from parallel workers entirely (`worker/index.ts:61`) |
+| `ALLOWED_WEB_TOOLS` | no | `search,scrape` | The **ceiling** of web tools this service may ever use. A request may name a subset; it can never add a tool. `interact` is off until an operator turns it on here, because it is the one tool that acts on a page rather than reading it |
+| `MAX_INTERACTIONS_PER_RUN` | no | `3` | Per-run cap on browser sessions, clamped downward from this value by the same request rule. `0` disables interact even when the ceiling allows it |
+| `MAX_LOOPS` / `MAX_SEARCH_RESULTS` / `MAX_SEARCHES_PER_RUN` / `MAX_SCRAPES_PER_RUN` | no | `6` / `5` / `8` / `12` | Research-graph bounds; every one is checked before the tool runs, not only at the router |
+| `SKILLS_DIR` | no | `skills/definitions` | Root of `SKILL.md` site playbooks. Relative paths resolve against the `ai-service` directory. **A missing or empty directory is valid** — the run simply has no playbooks; see `ai-service/skills/README.md` and gate **S1** |
 | `MARKDOWN_TRUNCATE_CHARS` | no | `4000` | `2000` when an extract is present |
 | `ALLOWED_HOSTS` | no | `localhost` | defense in depth; the service should never be public |
 
@@ -125,6 +132,11 @@ Startup validation, as implemented and verified in Phase 1:
 | `FRONTEND_ORIGIN` an exact origin — no wildcard, no path | `StartupRequirementsValidator` | unit-tested |
 | `AI_SERVICE_BASE_URL` absolute http(s) | same | unit-tested |
 | Port and timeout ranges | same + `app/config.py` | unit-tested |
+| `ALLOWED_WEB_TOOLS` names only implemented tools, and at least one | `app/config.py` | unit-tested — `crawl` and an empty list each abort startup |
+| `MAX_INTERACTIONS_PER_RUN` 0–20, `MAX_INTERACT_CONCURRENCY` 1–4 | `app/config.py` | unit-tested |
+| Every timeout, `SEARCH_TIMEOUT_SECONDS` included, must be > 0 | `app/config.py` | unit-tested; upstream's "`<= 0` means no deadline" for interact is refused here on purpose |
+| A request cannot widen the tool ceiling or buy more sessions than it | `resolve_limits()` in `app/api/v1/research.py`, `WebToolPolicy` in Java | `test_the_intersection_is_reported_back_to_the_caller`, `WebToolPolicyTest` |
+| `SKILLS_DIR` may point at a missing directory | `SkillLibrary` / `discover_skills` | unit-tested — an absent root is an empty library, not an error |
 | Placeholder values rejected (`REPLACE_ME`, `changeme`, `insecure-default`, …) | both services | unit-tested |
 | Every problem reported at once; values never echoed into the message | both services | unit-tested |
 | The two `AI_SERVICE_API_KEY` values agree | `X-API-Key` constant-time compare | **401 observed** |

@@ -15,13 +15,11 @@ one data contract, then submit it.
 
 ## How you may act
 
-Reply with exactly one action:
+Reply with exactly one action, chosen from the ones this run enables:
 
-- `search` — issue a web search. Provide `query`.
-- `scrape` — read one page in full. Provide `url`, which must come from a search result
-  you were given, not from memory.
-- `submit` — you believe the gathered material can fill the contract. No further fields.
-- `blocked` — the contract cannot be satisfied from public web sources. Explain why.
+{actions}
+
+{playbooks}
 
 ## Rules
 
@@ -31,7 +29,10 @@ Reply with exactly one action:
    with something plausible.
 3. Prefer primary sources over aggregators that quote them.
 4. One action per reply. Do not narrate an action you are not taking.
-5. `search` and `scrape` are bounded. Spend them on the pages most likely to carry the
-   fields above.
+5. `search`, `scrape` and `interact` are bounded. Spend them on the pages most likely to
+   carry the fields above.
+6. If you use `interact`, use it to read or navigate. Never to get past a login screen,
+   CAPTCHA, paywall or other access control. If a page requires one, report that the field
+   is not available from public sources instead of working around it.
 
 {feedback}

@@ -12,30 +12,32 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 3 — Dynamic data contract + extraction schema. **COMPLETE, with one live
-  verification blocked by provider quota** (see §2 and §5). Phases 0, 1, 1.5 and 2 are recorded
-  above. A natural-language prompt now determines the fields collected; nothing is persisted yet.
+- **Current Phase:** 4 — Firecrawl web execution inside the research graph. **COMPLETE, with the
+  real-provider half unmeasured** (no `FIRECRAWL_API_KEY`; see §2 and §5). Phases 0, 1, 1.5, 2 and 3
+  are recorded above. The graph now runs `search`, `scrape` and an opt-in `interact` through one
+  Firecrawl seam, with per-run tool allowlists and site playbooks; nothing is persisted yet.
 - **Last updated:** 2026-09-29
 - **Application code written:** three independent processes.
-  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 15 main classes, 5 test classes.
+  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 24 main source files, 10 test classes.
   - `ai-service/` — FastAPI on Python. `config.py` (fail-loud settings), `contracts.py` (Pydantic
     wire contracts), `security.py` (`X-API-Key`, constant-time), `logging_setup.py` (JSON +
     masking), `api/v1/health.py`.
   - `frontend/` — Next.js 14.2.35. PirateAgentUI design foundation copied byte-identically
     (`diff -r` verified), 10 routes, `lib/api/` typed client.
-  - Plus `database/`, `deploy/`, `scripts/`, and the root `.env.example`.
+  - Plus `database/`, `deploy/`, `scripts/`, `ai-service/skills/` (playbook loader docs), and the
+    root `.env.example`.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
   process; `scripts/verify.sh` runs every suite.
-- **Still not built:** requirement parsing from natural language, the workflow planner, the MySQL
-  schema and persistence, the quality pipeline (normalize / validate / dedupe / entity-resolve),
-  source governance, SSE monitoring, exports, and authentication. `POST /api/v1/research` runs the
-  graph and returns the result, storing nothing.
-- **Repository:** `FINALAIAGENT` is its own git repo, previously pushed to branch `implementjava`
-  of `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git`. Its history is
-  independent of `main` (old project). **Phase 1 code is not committed** — the working tree holds
-  it until authorized. Neither `main` nor the stale `implemnetedjava` branch has been touched.
-- **Blocked on:** decisions **G1**, **G2** and the **L1** licence ruling (§6); a MySQL account the
-  app can connect as; Python 3.12 before the provider extra is installed.
+- **Still not built:** the workflow planner and job engine, the MySQL schema and persistence, the
+  quality pipeline (normalize / validate / dedupe / entity-resolve), source governance (robots /
+  SSRF / host clearing before a URL is fetched *or driven*), SSE monitoring, exports, and
+  authentication. `POST /api/v1/research` runs the graph and returns the result, storing nothing.
+- **Repository:** `FINALAIAGENT` is its own git repo, pushed to branch `implementjava` of
+  `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git` after every phase, per the
+  standing rule. Its history is independent of `main` (old project), which has never been touched
+  from here. Phase 4 is the next commit to make.
+- **Blocked on:** decisions **G1**, **G2**, **S1** and the **L1** licence ruling (§6); a MySQL
+  account the app can connect as; Python 3.12 before the provider extra is installed.
 
 ## 2. Completed Phases
 
@@ -202,6 +204,66 @@ existed, and that the system was production-ready — each contradicted by its o
   surfaced, not retried), and no requirement persistence — there is still no schema to store
   a contract in, so `/api/v1/requirements/parse` is stateless.
 
+- [x] **Phase 4 (2026-09-29) — Firecrawl web execution inside the research graph.** The graph now
+  runs the three Firecrawl tools it needs — `search`, `scrape`, `interact` — through one seam, with
+  a browser-session lifecycle, a per-run tool allowlist, and site playbooks. **No second Firecrawl
+  system was created and no fourth runtime was added.**
+
+  | New / changed | Purpose |
+  |---|---|
+  | `app/firecrawl/client.py` `Interaction`, `strip_interact_nulls()`, `interact_timeout_message()`, `normalize_interact()`, `FirecrawlWeb.interact()` | one browser session per call: `browser()` → `interact(prompt=…)` → `stop_interaction()` in a `finally`; a deadline that returns a structured envelope instead of hanging the loop |
+  | `supports_interact()` + `InteractiveWebTool` / `FakeInteractiveWeb` | browser capability is an optional contract, so "this engine cannot run sessions" is a tested state, not a crash |
+  | `ResearchLimits.allowed_tools`, `max_interactions_per_run`; `StepBudget.interaction_allowed()` | the tool set and the session budget are per-run, bounded, and checked before every call |
+  | `prompts.action_schema(allowed_tools)`, `actions_help()`, `allowed_data_tools()` | the plan-action schema is **generated per run** from the enabled tools; a disabled tool is not in the enum, so the provider cannot ask for it |
+  | `tools.run_interact()`, refusal in `execute_many()` | interact requires an enabled tool, a capable engine, a URL already retrieved this run, and budget; it is refused in parallel batch execution |
+  | `app/research/skills.py` + `ai-service/skills/README.md` + `SKILLS_DIR` | `SKILL.md` frontmatter parse/validate, discovery, domain index, URL→playbook match, traversal-guarded resource read; injected into the plan turn deterministically |
+  | `Settings.allowed_web_tools` (ceiling), `search_timeout_seconds`, `max_interact_concurrency`, `skills_dir` | operator-side control; a request can narrow the ceiling but never widen it |
+  | `POST /ai/v1/research` → `resolve_limits()` | intersects request with ceiling, clamps the session budget, returns **400 `NO_PERMITTED_WEB_TOOLS`** instead of starting a run that can only report `blocked` |
+  | `backend/.../research/WebToolPolicy.java` + DTO fields `allowedTools`, `maxInteractionsPerRun` | Java rejects unknown tool names, an empty list, an out-of-range budget, and a session budget for a run that did not request `interact` — before a round trip |
+  | `/ai/v1/ready` `web` + `skills` blocks | which tools are enabled, whether the attached engine supports interact, how many playbooks loaded and how many were rejected |
+  | `tests/test_firecrawl_interact.py` (19), `tests/test_research_interact.py` (18), `tests/test_skills.py` (24), `tests/test_live_firecrawl.py` (3, gated), `WebToolPolicyTest` (11) | coverage for the lifecycle, the gates, the loader and the wire contract |
+
+  Measured with `scripts/verify.sh`: **backend 68 mvn tests passed** (was 54), `mvn package` ok,
+  **ai-service 174 pytest passed, 7 skipped** (was 98 passed / 4 skipped). 79 cases added: 19 web
+  lifecycle (`test_firecrawl_interact`), 18 graph interact (`test_research_interact`), 24 skills
+  (`test_skills`), 8 API ceiling/clamp, 7 config, and 3 gated live cases that skip. Frontend
+  typecheck, lint and build unchanged and passing.
+
+  Reuse records, in the required format:
+
+  | Repository | Source file | Feature | Destination | Method |
+  |---|---|---|---|---|
+  | web-agent-main | `agent-core/src/toolkit.ts:25-34` | `stripInteractNulls` — drop null/empty interact fields, keep empty arrays | `app/firecrawl/client.py::strip_interact_nulls` | PORT (behaviour), rewritten in Python, comment records why |
+  | web-agent-main | `agent-core/src/toolkit.ts:51-102` | interact hard timeout + structured `{error,timedOut,url,prompt}` envelope with fallback advice | `FirecrawlWeb.interact`, `interact_timeout_message` | PORT + IMPROVE — ours also stops the session (`finally`), upstream leaves it to the TTL |
+  | web-agent-main | `agent-core/src/toolkit.ts:188-204` | `createFiltered(enabled)` — build the agent's tool set from an allowlist | `prompts.allowed_data_tools` + `action_schema()` + `Settings.allowed_web_tools` | PORT (concept), inverted: the ceiling is server config, the request may only narrow |
+  | web-agent-main | `agent-core/src/worker/index.ts:61,69` | workers get search+scrape only, never a browser session | `tools.execute_many()` refusal | PORT (rule) as a hard refusal, not a prompt request |
+  | web-agent-main | `agent-core/src/agent.ts:34-39,72-88` | `DATA_TOOLS` includes `interact` as evidence; `resultHasData` treats `{error}` as no data | `ResearchState.has_tool_data()` + `ToolOutcome.ok` | ALREADY PRESENT — the ported gate covers it; verified by test |
+  | web-agent-main | `agent-core/src/skills/parser.ts` | frontmatter fields, slug rule, `validateSkillContent` (name+description+non-empty body) | `app/research/skills.py` | PORT, no `gray-matter`/YAML dependency — strict-subset parser |
+  | web-agent-main | `agent-core/src/skills/discovery.ts` | `<dir>/<skill>/SKILL.md` walk, `sites/*.md` playbooks, resource listing | `discover_skills()` | PORT + IMPROVE — upstream swallows invalid skills silently; ours returns `rejected` reasons |
+  | web-agent-main | `agent-core/src/skills/tools.ts:66-92` | URL→domain match: exact, `www.`-stripped, suffix | `domain_of()`, `lookup_playbook()` | PORT |
+  | web-agent-main | `agent-core/src/skills/tools.ts:107-110` | `path.resolve` + `startsWith` traversal guard | `SkillLibrary.read_resource()` | PORT + STRICTER — resolved-`Path` ancestry, absolute paths refused outright |
+  | web-agent-main | `agent-core/src/firecrawl-tools.ts` | Firecrawl tools come from `firecrawl-aisdk` (npm) | — | REJECTED — Node-only package; the Python SDK exposes the same endpoints (see §3, 2026-09-28) |
+  | web-agent-main | `agent-core/skills/definitions/**` | six authored SKILL.md playbooks | — | NOT COPIED — content is domain-specific to its demos; ships zero playbooks |
+  | web-agent-main | `agent-core/src/orchestrator/sub-agents.ts`, `worker/index.ts` | sub-agent spawn / parallel worker fan-out | — | DEFERRED to the Spring plan-DAG phase; two orchestrators was ruled out in Phase 0 |
+
+  Defect found and fixed by running the code rather than reading it: `FirecrawlWeb.search()` was
+  passing `interact_timeout_seconds` as its deadline. Search had the browser session's timeout and
+  `SEARCH_TIMEOUT_SECONDS` did not exist. Now `search_timeout_seconds` (30 s) with its own validation
+  and a regression test.
+
+  **Not verified, stated plainly:** *"Test real and mocked Firecrawl execution"* — only the mocked
+  half was possible. `FIRECRAWL_API_KEY` is blank in both the shell and the root `.env` (measured:
+  length 0), so `tests/test_live_firecrawl.py` skips its three cases. The browser-session path is
+  therefore verified against **a stub of the SDK client**, which does prove our own lifecycle,
+  timeout and normalisation code, but proves nothing about Firecrawl's live behaviour: whether a
+  prompt-mode session answers, how long it takes, what it costs, and whether `interact` is
+  sufficient at all (decision **G2** stays open for exactly this reason). Also unverified: real
+  SKILL.md content — none ships, so the loader is exercised only on test fixtures.
+
+  Deliberately not built in this phase: `map`, `crawl`, `extract`, `bash`/`scrapeBash` (the SDK
+  exposes them; the graph's budget model is page-evidence shaped and a crawl would outrun it),
+  per-URL robots/SSRF clearing (Spring's source-governance phase), and provider backoff.
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -246,6 +308,11 @@ existed, and that the system was production-ready — each contradicted by its o
 | 2026-09-29 | **`additionalProperties: false` stays in the internal contract; `to_gemini_schema()` projects it away for the provider only.** | Measured live: Gemini answers `400 INVALID_ARGUMENT — Unknown name "additional_properties" at generation_config.response_schema`. Dropping it everywhere would have disarmed gate 1's extra-key detection to satisfy a provider, so the strict schema is the source of truth and the provider gets a projection. Same reasoning as stripping `const`, which alone was not enough |
 | 2026-09-29 | **`RequirementValidator` (Java) deliberately mirrors `Requirement.cross_validate` (Python).** | The duplication is the point: Java is the system of record and must not persist or collect against a contract only the model vouched for. Same rules the old project's `requirement.schema.ts` declared — the difference is that it is now actually enforced, on the side that owns the data |
 | 2026-09-29 | **DTO parsing is not a contract-drift alarm** — and the code now says so rather than pretending otherwise. | I asserted that unknown JSON keys would be rejected; the test showed Spring Boot disables `FAIL_ON_UNKNOWN_PROPERTIES` and a class-level `ignoreUnknown = false` does not re-enable it, so a key added on the Python side is dropped silently. `PipelineControllerTest.unknownKeysFromTheAiServiceAreDropped` pins the real behaviour; drift has to be caught by the structural rules and a versioned envelope, not by Jackson |
+| 2026-09-29 | **Phase 4 "use actual code from `web-agent-main`" is satisfied by porting behaviours into the Python web layer, not by running its TypeScript core.** | Reported as a deviation, not hidden: `firecrawl-tools.ts` obtains every web tool from the npm package `firecrawl-aisdk`, so "use the actual Firecrawl tools code" means using an npm package. The Python SDK exposes the same endpoints (`browser`, `interact`, `stop_interaction`, `search`, `scrape` — verified by introspection of `firecrawl` 4.45.0), and Phase 0 ruled out a fourth runtime and rejected vendoring 5,035 LOC that would create a second orchestrator. What is reusable from that repo is its *hard-won logic* — the timeout envelope, null-stripping, tool filtering, the skills loader, the no-interact-in-workers rule — and all of it is now ported, with the source line cited in the code that replaced it |
+| 2026-09-29 | **`interact` is opt-in at the service ceiling (`ALLOWED_WEB_TOOLS`), and a request can only narrow it.** | It is the one web tool that acts on a page rather than reading it, and it bills a live session with a TTL. Keeping it off by default means the bypass-risk surface and the credit surface are both operator decisions; the prompt adds rule 6 (never use a session to get past a login, CAPTCHA or paywall) and `run_interact` requires a URL the run already retrieved |
+| 2026-09-29 | **Site playbooks load deterministically from observed URLs instead of being offered to the model as `load_skill` / `lookup_site_playbook` tools.** | Upstream needs two extra tool round trips and hopes the agent calls them. Here the match happens on `state.observed_urls()`, so guidance appears exactly when the run touches that domain, costs no model turn, spends no budget, and is recorded in `metadata.playbooksUsed` for the reviewer |
+| 2026-09-29 | **No SKILL.md content is copied, and the platform ships zero playbooks.** | `web-agent-main`'s six playbooks describe its own demo targets. Copying them would smuggle a hardcoded default source list back in — the defect class `00-FORENSIC-AUDIT.md` §4 was written about — and `data-enrichment-js`'s enrichment targets are licence-unresolved (**L1**). The loader is real and tested; the content is this deployment's to write and verify |
+| 2026-09-29 | **Java validates tool-request *shape*; the tool *ceiling* stays in the Python service.** | Two ceilings would be two places to keep in sync and would disagree in production. Java refuses names it cannot honour, an empty list, an out-of-range session budget, and a budget for a tool the request did not ask for; the service that runs the tools and spends the credits decides which tools exist, and reports the intersection back in `metadata.enabledTools` |
 
 ## 4. Database / Schema Changes
 
@@ -336,6 +403,7 @@ Carried from the audit as things the rebuild must **not** reproduce:
 | P5 | **Python mask regex reused the Java group indices.** The Java alternation captures, the Python one is non-capturing, so `m.group(5)` raised `IndexError` and every masked log line would have crashed the formatter. | `test_logging.py` |
 | P6 | **Framework 404s bypassed the shared error envelope** — FastAPI resolves handlers by exact exception type, so registering only `fastapi.HTTPException` left Starlette's routing 404 returning `{"detail": …}`. | `test_health.py` |
 | P7 | **`mvn package` left a 37 KB thin, non-bootable jar** because a running `java -jar` locks the artifact on Windows and the repackage step failed with its output hidden by a pipe. Cost a wasted debugging cycle against a "silent" server. | `no main manifest attribute` in the boot log |
+| P8 | **`FirecrawlWeb.search()` used `INTERACT_TIMEOUT_SECONDS` as its deadline** — the search budget was the browser session's, and `SEARCH_TIMEOUT_SECONDS` did not exist. Two tools sharing one timeout is invisible until someone reasons about a slow search. | Reading the client while adding `interact`, then fixed with a regression test that asserts the message names `search` |
 
 None of these were visible from the source alone. The lesson from `N` §N.6 held: run it.
 
@@ -361,6 +429,20 @@ Environment limits affecting verification:
     `exhaustive-deps`) inside verbatim-copied design files. Left unfixed on purpose: editing them
     would break byte-identical preservation of the design system. Zero errors.
   - Phase 1 code is **uncommitted** on the `implementjava` branch.
+- **Firecrawl has still never been called for real.** Phase 4 asked for "real and mocked Firecrawl
+  execution"; only the mocked half was possible. Measured again this session: `FIRECRAWL_API_KEY`
+  has length **0** in the shell **and** in the root `.env`, so
+  `tests/test_live_firecrawl.py` skips all three cases (`-rs` confirms the reason, not a silent
+  pass). What is verified is our own lifecycle logic against a **stub of the SDK client** — session
+  created, prompt sent as `prompt=`, deadline applied, session closed on success, on SDK failure
+  and on timeout, null fields stripped, truncation marked. What is *un*verified is Firecrawl's side
+  of that contract: whether a prompt-mode session answers, how long it takes, what it bills, and
+  whether `interact` is adequate at all (**G2**).
+- **No SKILL.md playbook ships**, so the loader is exercised only on test fixtures written in
+  `tests/test_skills.py`. `SKILLS_DIR` therefore points at a directory that does not exist in this
+  checkout; `/ai/v1/ready` reports `skills.loaded: 0` rather than failing. This is a deliberate
+  alternative to copying upstream's six playbooks, whose targets would become an unverified default
+  source list.
 - **No completed live provider call has been made.** Phase 3 sent real requests to Gemini and they
   were rejected before generation — first by our own schema bugs (now fixed), then by quota
   (`429 RESOURCE_EXHAUSTED`). Firecrawl has never been called: no `FIRECRAWL_API_KEY` exists here.
@@ -381,17 +463,14 @@ Environment limits affecting verification:
 | Gate | Question | Status |
 |---|---|---|
 | **G1** | With `DEMO_MODE` removed, how will this be demonstrated to judges? (a) test fixtures + run replay *(recommended)*, (b) guarded `SYNTHETIC_MODE` that can never trigger on a missing key, (c) funded keys and demo live. See `docs/audit/L-risks.md` R8 | **Awaiting user decision** |
-| **G2** | Is the Firecrawl Python SDK's `interact` sufficient? Fallback is the Express sidecar implementing `agent-core/openapi.yaml` — a fourth runtime requiring its own recorded decision. See `docs/audit/I-firecrawl-integration.md` §I.6 | **Narrowed at Phase 2, still open.** Introspection shows `AsyncFirecrawlApp` does expose `search`,
-`scrape` and `interact`, but `interact(job_id, code=…, prompt=…, language=…)` takes a **job id**, not
-a URL, so a browser session must exist first. Whether that composes for a real interactive task is
-unverified — no `FIRECRAWL_API_KEY` exists here. Resolve with
-`tests/test_live_provider_spike.py` once a key is available |
+| **G2** | Is the Firecrawl Python SDK's `interact` sufficient? Fallback is the Express sidecar implementing `agent-core/openapi.yaml` — a fourth runtime requiring its own recorded decision. See `docs/audit/I-firecrawl-integration.md` §I.6 | **Narrowed twice, still open on live behaviour.** Phase 4 confirmed the whole session lifecycle is expressible in Python and implemented it: `browser()` → `interact(job_id, prompt=…)` → `stop_interaction(job_id)`, all three verified present on `AsyncFirecrawlApp` in `firecrawl` 4.45.0 by introspection, with the `job_id`-first shape handled by opening the session inside the tool call. So the sidecar is not needed for *API shape* reasons. Whether a real prompt-mode session completes inside a sane deadline and returns usable text is **unmeasured** — no `FIRECRAWL_API_KEY` here. Resolve with `RUN_LIVE_FIRECRAWL_TESTS=true pytest -q tests/test_live_firecrawl.py -s` once a key exists |
 | **B1** | `finalagent_dev` needs a MySQL account the application can connect as, or `/ready` can never return 200. Options: (a) create a user on the native `MySQL96` service (needs its credentials — I will not guess them), (b) install Docker and use `database/docker-compose.yml`, which mints the user from `.env`. | **Blocking the last Phase 1 exit criterion — awaiting user choice** |
 | **L1** | Both new repositories have unresolved licences: `data-enrichment-js-main` claims `"license": "MIT"` in `package.json:7` with **no licence text anywhere in the tree**, and `ai-data-enrichment-agent-main` has **no licence at all**. May we adapt logic from either? Options: (a) treat a `package.json` declaration as sufficient, as already done for `web-agent-main` under R2, (b) verify upstream terms before Phase 2, (c) re-implement gate 3 from the behavioural description in `O` §O.4 without translating their source. | **Awaiting user ruling** (R28, R29) |
 
 | **L2** | Phase 2 research graph: depend on the `langgraph` PyPI package, or express the same topology as a plain Python state machine? Evidence says nothing in `data-enrichment-js` needs the runtime (no checkpointer, no disk writes, no interrupts — `O` §O.12), so a state machine preserves the graph without a new heavy dependency. Either satisfies the master instruction | **RESOLVED at Phase 2 — plain Python state machine, no `langgraph` dependency.** Node and edge names
 are declared on `ResearchGraph.NODES` / `EDGES`, so the template's topology is preserved and a later
 swap stays mechanical |
+| **S1** | Site playbooks: `app/research/skills.py` loads `SKILL.md` files, but this deployment ships **none**. Who writes them, against which verified targets, and does the demonstration need any? Format and rules are documented in `ai-service/skills/README.md`. | **Open — created at Phase 4.** The loader is tested (24 tests) and `SKILLS_DIR` defaults to a directory that does not exist yet, which is a supported state. Upstream's six playbooks were not copied; writing our own requires observing real sites, which needs a Firecrawl key |
 
 ## 7. Environment / How to Run
 
@@ -443,9 +522,10 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 **Awaiting authorization.** Phases have been directed out of `M-phase-plan.md` order: Phase 3
 delivered the plan's Phase 4 (requirement understanding) and part of Phase 5 (schema generation),
-while the plan's Phase 3 (authentication) and Phase 6 (the MySQL job engine) have not been built.
-That is not a problem to hide — but the ordering drift means `M` should be reconciled with reality
-before another phase is chosen.
+Phase 4 delivered the plan's Phase 6 web-execution half (Firecrawl tools inside the graph), while
+the plan's Phase 3 (authentication) and Phase 6 job engine (MySQL-backed execution) have not been
+built. That is not a problem to hide — but the ordering drift means `M` should be reconciled with
+reality before another phase is chosen.
 
 Most valuable next candidates, in dependency order:
 
@@ -453,14 +533,23 @@ Most valuable next candidates, in dependency order:
    after this one currently returns results into the void.
 2. **Authentication and tenancy** — `/api/v1/requirements/parse` and `/api/v1/research/from-prompt`
    are unauthenticated and, unlike Phase 2's endpoint, the latter now makes real provider calls, so
-   an open instance is a billing risk as well as a data one.
-3. **Close the live verification left open in Phase 3** once Gemini quota resets:
-   `RUN_LIVE_PROVIDER_TESTS=true pytest -q tests/test_live_requirements.py -s`.
-4. **Provider backoff** for 429/503, which the free-tier ceiling makes a normal condition rather
+   an open instance is a billing risk as well as a data one. `interact` raises that again: a run can
+   now drive a live browser session, so `ALLOWED_WEB_TOOLS` must never be opened up on an
+   unauthenticated deployment.
+3. **Source governance — URL clearing before collection.** Spring must clear a URL for robots
+   policy, SSRF and per-domain rate before the web layer fetches it (**R32**, now sharper: the graph
+   can also *act* on a URL). Domain allow/block lists exist per request, but nothing resolves them
+   to hosts yet.
+4. **Close the two live verifications** once credentials allow: Gemini quota for
+   `RUN_LIVE_PROVIDER_TESTS=true pytest -q tests/test_live_requirements.py -s`, and a real
+   `FIRECRAWL_API_KEY` for `RUN_LIVE_FIRECRAWL_TESTS=true pytest -q tests/test_live_firecrawl.py -s`.
+5. **Provider backoff** for 429/503, which the free-tier ceiling makes a normal condition rather
    than an edge case.
 
-Still open: **G1**, **G2** (needs a Firecrawl key), **B1** (MySQL user), **L1** (enrichment-repo
-licences).
+Still open: **G1** (demonstration strategy), **G2** (needs a Firecrawl key — see §6 for what Phase 4
+settled and what it did not), **B1** (a MySQL user), **L1** (enrichment-repo licence position — see
+`docs/control/THIRD-PARTY.md`), and new **S1** (who writes site playbooks, and whether the platform
+needs any before the demonstration).
 
 ### Carried forward from Phase 2, still true
 
@@ -473,14 +562,13 @@ licences).
   Acceptable while nothing is stored and no live provider call happens by default; it must sit
   behind workspace-scoped authorization before any data lands.
 - **R32** is the sharpest technical risk: the model names URLs, while robots / SSRF / rate-limit
-  gating is the source-governance phase. Until then callers should pass `allowedDomains`.
+  gating is the source-governance phase. Phase 4 sharpened it — a run can now *act* on a URL through
+  a browser session, so `run_interact` additionally requires that the URL was already retrieved this
+  run. Callers should still pass `allowedDomains` until Spring resolves hosts.
 - The `collection` extra resolved cleanly on Python 3.14 (cp314 wheels exist); 3.12 remains the
   pinned deployment interpreter for reliability, not installability.
 - `M` still lists gate 3 as a **Phase 8** exit criterion; it is implemented, so Phase 8 now owes
   only the wiring into a real collection run.
-
-Still open: **G1** (demonstration strategy), **G2** (needs a Firecrawl key), **B1** (a MySQL user),
-**L1** (enrichment-repo licence position — see `docs/control/THIRD-PARTY.md`).
 
 One environment note for anyone running the stack here: port **8080 is occupied by the old
 project's** `ai-data-intelligence-platform-1.0.0.jar`. It is not part of FINALAIAGENT and was left

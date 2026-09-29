@@ -47,6 +47,15 @@ services:
       # Reachable by service name from the backend, and by 127.0.0.1 from its own healthcheck.
       # A browser is never allowed to reach this service directly.
       ALLOWED_HOSTS: ai-service,127.0.0.1,localhost
+      SEARCH_TIMEOUT_SECONDS: ${SEARCH_TIMEOUT_SECONDS:-30}
+      SCRAPE_TIMEOUT_SECONDS: ${SCRAPE_TIMEOUT_SECONDS:-60}
+      INTERACT_TIMEOUT_SECONDS: ${INTERACT_TIMEOUT_SECONDS:-60}
+      # Browser sessions are opt-in and separately capped: a request cannot enable a tool
+      # the service did not start with.
+      ALLOWED_WEB_TOOLS: ${ALLOWED_WEB_TOOLS:-search,scrape}
+      MAX_INTERACT_CONCURRENCY: ${MAX_INTERACT_CONCURRENCY:-2}
+      MAX_INTERACTIONS_PER_RUN: ${MAX_INTERACTIONS_PER_RUN:-3}
+      SKILLS_DIR: ${SKILLS_DIR:-skills/definitions}
     expose:
       - "8000"
     depends_on:

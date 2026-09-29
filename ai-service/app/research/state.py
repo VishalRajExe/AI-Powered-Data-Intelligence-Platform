@@ -23,9 +23,15 @@ class ResearchLimits:
     max_search_results: int = 5
     max_searches_per_run: int = 8
     max_scrapes_per_run: int = 12
+    max_interactions_per_run: int = 0
     expected_records: int | None = None
     allowed_domains: list[str] = field(default_factory=list)
     blocked_domains: list[str] = field(default_factory=list)
+    # The web tools this run may use, already intersected with the service ceiling by the
+    # caller. Ported from `toolkit.ts:188-204`, where `createFiltered(enabled)` builds the
+    # agent's tool set from an allowlist — a tool the model is not shown is one it cannot
+    # invent a call for.
+    allowed_tools: list[str] = field(default_factory=lambda: ["search", "scrape"])
     model_id: str | None = None
 
 
@@ -73,16 +79,18 @@ class StepBudget:
 
     In `data-enrichment-js` the loop cap lived only in the post-critique router, so a
     run that kept calling search never encountered it. Here the budget gates the model
-    turn, each search and each scrape independently.
+    turn, each search, each scrape and each browser session independently.
     """
 
     max_loops: int
     max_searches: int
     max_scrapes: int
+    max_interactions: int = 0
 
     loops_used: int = 0
     searches_used: int = 0
     scrapes_used: int = 0
+    interactions_used: int = 0
 
     def note_loop(self) -> None:
         self.loops_used += 1
@@ -93,6 +101,9 @@ class StepBudget:
     def note_scrape(self, count: int = 1) -> None:
         self.scrapes_used += count
 
+    def note_interaction(self, count: int = 1) -> None:
+        self.interactions_used += count
+
     def model_allowed(self) -> bool:
         return self.loops_used < self.max_loops
 
@@ -102,6 +113,9 @@ class StepBudget:
     def scrape_allowed(self) -> bool:
         return self.scrapes_used < self.max_scrapes
 
+    def interaction_allowed(self) -> bool:
+        return self.interactions_used < self.max_interactions
+
     def exhausted_reason(self) -> str | None:
         if self.loops_used >= self.max_loops:
             return f"research loop reached its bound of {self.max_loops} iterations"
@@ -109,6 +123,8 @@ class StepBudget:
             return f"search budget exhausted ({self.max_searches} searches)"
         if self.scrapes_used >= self.max_scrapes:
             return f"scrape budget exhausted ({self.max_scrapes} pages)"
+        if self.interactions_used >= self.max_interactions and self.max_interactions:
+            return f"interaction budget exhausted ({self.max_interactions} browser sessions)"
         return None
 
 
@@ -125,6 +141,9 @@ class ResearchState:
     submitted: dict[str, Any] | None = None
     repair_attempts: int = 0
     tool_errors: list[str] = field(default_factory=list)
+    # Site playbooks whose navigation guidance was injected into a turn, recorded so a
+    # reviewer can tell whether the run used a playbook that was wrong.
+    playbooks_used: list[str] = field(default_factory=list)
 
     budget: StepBudget = field(default=None)  # type: ignore[assignment]
 
@@ -134,6 +153,7 @@ class ResearchState:
                 max_loops=self.limits.max_loops,
                 max_searches=self.limits.max_searches_per_run,
                 max_scrapes=self.limits.max_scrapes_per_run,
+                max_interactions=self.limits.max_interactions_per_run,
             )
 
     def add(self, message: Message) -> None:
@@ -146,9 +166,12 @@ class ResearchState:
                 existing.title = title
             if snippet and not existing.snippet:
                 existing.snippet = snippet
-            if source_type == "scrape":
-                # A searched-then-read URL is stronger evidence than a search hit alone.
-                existing.source_type = "search+scrape"
+            parts = existing.source_type.split("+")
+            if source_type not in parts:
+                # A searched-then-read URL is stronger evidence than a search hit alone,
+                # and read-then-acted-on is stronger still. Recording which tools touched
+                # it is what lets a reviewer distinguish the two.
+                existing.source_type = "+".join([*parts, source_type])
             return existing
         source = SourceObserved(url=url, title=title, snippet=snippet, source_type=source_type)
         self.sources[url] = source

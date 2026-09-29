@@ -34,13 +34,13 @@ from app.extraction.schema_validate import field_checklist, validate_against_sch
 from app.firecrawl.client import WebTool
 from app.llm.client import LlmClient
 from app.research import prompts, tools
+from app.research.skills import SkillLibrary
 from app.research.state import Message, ResearchLimits, ResearchState
 
 STATUS_COMPLETED = "COMPLETED"
 STATUS_COMPLETED_WITH_WARNINGS = "COMPLETED_WITH_WARNINGS"
 STATUS_FAILED = "FAILED"
 
-VALID_ACTIONS = ("search", "scrape", "submit", "blocked")
 _URL_IN_VALUE = re.compile(r"https?://[^\s\"'<>)\]]+", re.IGNORECASE)
 
 
@@ -85,10 +85,14 @@ class ResearchGraph:
         "critique": ("end", "plan_action"),
     }
 
-    def __init__(self, *, llm: LlmClient, web: WebTool, settings: Settings) -> None:
+    def __init__(self, *, llm: LlmClient, web: WebTool, settings: Settings,
+                 skills: SkillLibrary | None = None) -> None:
         self._llm = llm
         self._web = web
         self._settings = settings
+        # None means "no playbooks", which is the shipped default until this deployment
+        # writes its own. It is not a fallback to a built-in set: there is none.
+        self._skills = skills
 
     async def run(
         self,
@@ -103,10 +107,16 @@ class ResearchGraph:
             max_search_results=self._settings.max_search_results,
             max_searches_per_run=self._settings.max_searches_per_run,
             max_scrapes_per_run=self._settings.max_scrapes_per_run,
+            max_interactions_per_run=self._settings.max_interactions_per_run,
+            allowed_tools=list(self._settings.allowed_web_tools),
             model_id=self._settings.llm_model_id,
         )
         state = ResearchState(topic=topic, extraction_schema=extraction_schema, limits=resolved)
         checklist = field_checklist(extraction_schema)
+        # A tool the ceiling removed is not offered to the model at all, so an attempt to
+        # use it is a contract violation rather than a plausible-looking turn.
+        enabled_tools = [tool for tool in prompts.DATA_ACTIONS if tool in set(resolved.allowed_tools)]
+        valid_actions = (*enabled_tools, *prompts.CONTROL_ACTIONS)
         started = time.perf_counter()
 
         for query in (seed_queries or [])[: resolved.max_searches_per_run]:
@@ -123,11 +133,11 @@ class ResearchGraph:
                 )
 
             state.budget.note_loop()
-            action = await self._plan_action(state, checklist)
+            action = await self._plan_action(state, checklist, self._playbooks_for(state))
             kind = str(action.get("action", "")).strip().lower()
 
-            if kind not in VALID_ACTIONS:
-                state.feedback = f"'{kind}' is not one of {', '.join(VALID_ACTIONS)}. Choose one and act."
+            if kind not in valid_actions:
+                state.feedback = f"'{kind}' is not one of {', '.join(valid_actions)}. Choose one and act."
                 state.add(Message(role="tool", content=state.feedback, name="plan_action", status="error"))
                 continue
 
@@ -140,9 +150,9 @@ class ResearchGraph:
                     checklist=checklist,
                 )
 
-            if kind in ("search", "scrape"):
+            if kind in enabled_tools:
                 outcome = await self._collect(state, action)
-                if not outcome.ok:
+                if outcome is not None and not outcome.ok:
                     state.tool_errors.append(outcome.error or "tool failed")
                 continue
 
@@ -150,8 +160,9 @@ class ResearchGraph:
             if not state.has_tool_data():
                 # Gate 2, ported from `agent.ts:37-40,42-66`: no answer before data.
                 state.feedback = (
-                    "Nothing has been retrieved yet this run. Call search or scrape before "
-                    "submitting; a result built from prior knowledge is not acceptable."
+                    "Nothing has been retrieved yet this run. Call "
+                    f"{' or '.join(enabled_tools)} before submitting; a result built from prior "
+                    "knowledge is not acceptable."
                 )
                 state.add(Message(role="tool", content=state.feedback, name="submit", status="error"))
                 continue
@@ -200,11 +211,26 @@ class ResearchGraph:
 
     # ------------------------------------------------------------------ nodes
 
-    async def _plan_action(self, state: ResearchState, checklist: list[str]) -> dict[str, Any]:
+    def _playbooks_for(self, state: ResearchState) -> list[tuple[str, str]]:
+        """Site guidance for domains this run has actually touched.
+
+        Sorted by URL so two identical runs get the same prompt text; a set iteration order
+        that varies between turns would make the graph unreproducible.
+        """
+        if self._skills is None:
+            return []
+        found = self._skills.playbook_bodies_for(sorted(state.observed_urls()))
+        for name, _ in found:
+            if name not in state.playbooks_used:
+                state.playbooks_used.append(name)
+        return found
+
+    async def _plan_action(self, state: ResearchState, checklist: list[str],
+                           playbooks: list[tuple[str, str]] | None = None) -> dict[str, Any]:
         action = await self._llm.generate_json(
             system="You are a research agent that emits one action at a time as JSON.",
-            prompt=prompts.research_prompt(state, checklist),
-            json_schema=prompts.ACTION_SCHEMA,
+            prompt=prompts.research_prompt(state, checklist, playbooks),
+            json_schema=prompts.action_schema(state.limits.allowed_tools),
         )
         state.add(Message(role="assistant", content=str(action), name="plan_action"))
         return action
@@ -295,6 +321,9 @@ class ResearchGraph:
             "maxLoops": state.budget.max_loops,
             "searchesUsed": state.budget.searches_used,
             "scrapesUsed": state.budget.scrapes_used,
+            "interactionsUsed": state.budget.interactions_used,
+            "enabledTools": [tool for tool in prompts.DATA_ACTIONS if tool in set(state.limits.allowed_tools)],
+            "playbooksUsed": list(state.playbooks_used),
             "toolErrors": len(state.tool_errors),
             "repairAttempts": state.repair_attempts,
             "sourceCount": len(state.sources),

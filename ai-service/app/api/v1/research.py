@@ -15,6 +15,7 @@ from pydantic import Field, field_validator
 from app.config import Settings
 from app.contracts import CamelModel
 from app.llm.client import LlmError
+from app.research import prompts
 from app.research.contracts import ResearchLimitsRequest, ResearchRequest
 from app.research.graph import ResearchGraph
 from app.research.state import ResearchLimits
@@ -28,25 +29,13 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
 @router.post("/research")
 async def research(payload: ResearchRequest, request: Request):
     settings = request.app.state.settings
-    limits = ResearchLimits(
-        max_loops=payload.limits.max_loops if payload.limits else settings.max_loops,
-        max_search_results=payload.limits.max_search_results if payload.limits else settings.max_search_results,
-        max_searches_per_run=(
-            payload.limits.max_searches_per_run if payload.limits else settings.max_searches_per_run
-        ),
-        max_scrapes_per_run=(
-            payload.limits.max_scrapes_per_run if payload.limits else settings.max_scrapes_per_run
-        ),
-        expected_records=payload.limits.expected_records if payload.limits else None,
-        allowed_domains=list(payload.limits.allowed_domains) if payload.limits else [],
-        blocked_domains=list(payload.limits.blocked_domains) if payload.limits else [],
-        model_id=settings.llm_model_id,
-    )
+    limits = resolve_limits(payload.limits, settings)
 
     graph = ResearchGraph(
         llm=request.app.state.llm,
         web=request.app.state.web,
         settings=settings,
+        skills=request.app.state.skills,
     )
 
     try:
@@ -115,7 +104,8 @@ async def research_from_prompt(payload: FromPromptRequest, request: Request):
         }
 
     limits = analysis_limits(payload.limits, settings, analysis)
-    graph = ResearchGraph(llm=request.app.state.llm, web=request.app.state.web, settings=settings)
+    graph = ResearchGraph(llm=request.app.state.llm, web=request.app.state.web, settings=settings,
+                          skills=request.app.state.skills)
     try:
         outcome = await graph.run(
             topic=analysis.brief,
@@ -133,7 +123,35 @@ async def research_from_prompt(payload: FromPromptRequest, request: Request):
 
 def analysis_limits(limits: ResearchLimitsRequest | None, settings: Settings,
                     analysis: RequirementAnalysis) -> ResearchLimits:
-    resolved = limits or ResearchLimitsRequest()
+    return resolve_limits(limits, settings, expected_records=expected_records(analysis.requirement))
+
+
+def resolve_limits(payload: ResearchLimitsRequest | None, settings: Settings,
+                   *, expected_records: int | None = None) -> ResearchLimits:
+    """Turn a request into bounds the graph can be trusted with.
+
+    Every unset value falls back to the service default rather than to an unbounded run,
+    and two of them are clamped downwards: a request cannot buy more browser sessions than
+    `MAX_INTERACTIONS_PER_RUN`, and it cannot name a web tool the operator left out of
+    `ALLOWED_WEB_TOOLS`.
+    """
+    resolved = payload or ResearchLimitsRequest()
+    requested_interactions = resolved.max_interactions_per_run
+    enabled_tools = prompts.allowed_data_tools(resolved.allowed_tools, settings.allowed_web_tools)
+    if not enabled_tools:
+        # A request for a tool the operator did not enable is a contract problem, not a
+        # research run. Letting it through would produce a job that can only ever report
+        # `blocked`, which reads to the user as "no data exists" rather than "not permitted".
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "NO_PERMITTED_WEB_TOOLS",
+                "message": (
+                    f"allowedTools {resolved.allowed_tools} has no tool this service enables "
+                    f"(ALLOWED_WEB_TOOLS: {settings.allowed_web_tools})."
+                ),
+            },
+        )
     return ResearchLimits(
         max_loops=resolved.max_loops if resolved.max_loops is not None else settings.max_loops,
         max_search_results=(resolved.max_search_results if resolved.max_search_results is not None
@@ -142,8 +160,11 @@ def analysis_limits(limits: ResearchLimitsRequest | None, settings: Settings,
                               else settings.max_searches_per_run),
         max_scrapes_per_run=(resolved.max_scrapes_per_run if resolved.max_scrapes_per_run is not None
                              else settings.max_scrapes_per_run),
+        max_interactions_per_run=(settings.max_interactions_per_run if requested_interactions is None
+                                  else min(requested_interactions, settings.max_interactions_per_run)),
+        allowed_tools=enabled_tools,
         expected_records=resolved.expected_records if resolved.expected_records is not None
-        else expected_records(analysis.requirement),
+        else expected_records,
         allowed_domains=list(resolved.allowed_domains),
         blocked_domains=list(resolved.blocked_domains),
         model_id=settings.llm_model_id,

@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import Field, field_validator, model_validator
 
+from app.config import KNOWN_WEB_TOOLS
 from app.contracts import CamelModel
 
 
@@ -20,9 +21,26 @@ class ResearchLimitsRequest(CamelModel):
     max_search_results: int | None = Field(default=None, ge=1, le=20)
     max_searches_per_run: int | None = Field(default=None, ge=1, le=100)
     max_scrapes_per_run: int | None = Field(default=None, ge=1, le=100)
+    max_interactions_per_run: int | None = Field(default=None, ge=0, le=20)
     expected_records: int | None = Field(default=None, ge=1, le=5000)
     allowed_domains: list[str] = Field(default_factory=list)
     blocked_domains: list[str] = Field(default_factory=list)
+    # Which web tools this run wants. The service intersects it with ALLOWED_WEB_TOOLS, so
+    # a request can narrow the set but never widen it — `interact` is operator-enabled.
+    allowed_tools: list[str] | None = Field(default=None, min_length=1)
+
+    @field_validator("allowed_tools")
+    @classmethod
+    def _known_tools(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalised = [str(tool).strip().lower() for tool in value]
+        unknown = sorted({tool for tool in normalised if tool not in KNOWN_WEB_TOOLS})
+        if unknown:
+            raise ValueError(
+                f"allowedTools names unknown web tools: {unknown}; known: {sorted(KNOWN_WEB_TOOLS)}"
+            )
+        return normalised
 
 
 class ResearchRequest(CamelModel):

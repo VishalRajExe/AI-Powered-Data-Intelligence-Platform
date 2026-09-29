@@ -79,3 +79,52 @@ def test_allowed_hosts_accepts_a_comma_separated_environment_value(monkeypatch):
     monkeypatch.setenv("ALLOWED_HOSTS", "api.internal,  localhost ")
     settings = Settings(_env_file=None)
     assert settings.allowed_hosts == ["api.internal", "localhost"]
+
+
+# ------------------------------------------------------------------ web tools, Phase 4
+
+
+def test_web_tool_ceiling_accepts_a_comma_separated_environment_value(monkeypatch):
+    monkeypatch.delenv("ALLOWED_WEB_TOOLS", raising=False)
+    monkeypatch.setenv("ALLOWED_WEB_TOOLS", "search, SCRAPE , interact")
+    assert Settings(_env_file=None).allowed_web_tools == ["search", "scrape", "interact"]
+
+
+def test_the_default_ceiling_excludes_the_tool_that_acts_on_a_page():
+    """`interact` must be switched on deliberately, so the default cannot include it."""
+    assert construct().allowed_web_tools == ["search", "scrape"]
+
+
+def test_an_unknown_tool_name_in_the_ceiling_stops_startup():
+    with pytest.raises(ConfigurationError, match="ALLOWED_WEB_TOOLS"):
+        construct(allowed_web_tools=["search", "crawl"])
+
+
+def test_an_empty_ceiling_stops_startup():
+    """A service with no web tools cannot gather evidence, so it should not pretend to run."""
+    with pytest.raises(ConfigurationError, match="at least one web tool"):
+        construct(allowed_web_tools=[])
+
+
+def test_interaction_bounds_are_enforced():
+    with pytest.raises(ConfigurationError, match="MAX_INTERACTIONS_PER_RUN"):
+        construct(max_interactions_per_run=-1)
+    with pytest.raises(ConfigurationError, match="MAX_INTERACTIONS_PER_RUN"):
+        construct(max_interactions_per_run=21)
+    with pytest.raises(ConfigurationError, match="MAX_INTERACT_CONCURRENCY"):
+        construct(max_interact_concurrency=0)
+    # Zero sessions allowed is meaningful: it disables interact while leaving the ceiling alone.
+    assert construct(max_interactions_per_run=0).max_interactions_per_run == 0
+
+
+def test_every_timeout_must_be_positive_including_the_search_one():
+    for field in ("search_timeout_seconds", "scrape_timeout_seconds", "interact_timeout_seconds",
+                  "llm_request_timeout_seconds"):
+        with pytest.raises(ConfigurationError, match="greater than zero"):
+            construct(**{field: 0})
+
+
+def test_search_and_interact_have_their_own_timeouts():
+    """They were one setting before Phase 4: a slow search was governed by a browser deadline."""
+    settings = construct()
+    assert settings.search_timeout_seconds != settings.interact_timeout_seconds

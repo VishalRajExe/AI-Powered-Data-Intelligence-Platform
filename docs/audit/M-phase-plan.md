@@ -256,6 +256,27 @@ succeeds within 3 attempts and **fails cleanly after**, never returning approxim
 "no data collected" test asserts the gate rejects a complete-looking result. Token usage is
 persisted per step.
 
+### Delivered early — session Phase 2, 3 and 4 (2026-09-29)
+
+Most of this phase was built ahead of the plan's order, under different names. Correcting the
+names here matters: the plan's `extraction/gate.py`, `llm/prompts/extract.md` and
+`POST /ai/v1/collect/extract` **do not exist**, and nothing above is wired into a job engine.
+
+| Planned | Built as | State |
+|---|---|---|
+| `firecrawl/client.py` — async, allowlisted tools, per-URL isolation, `interact` 60 s-capped and never in parallel fan-out | same path; `allowed_web_tools` ceiling + `resolve_limits()`, `ToolOutcome` per-call isolation, `FirecrawlWeb.interact()` with `interact_timeout_seconds` (60 s) and a refusal inside `execute_many()` | **done**, verified against a stub SDK client; never against the live API |
+| `extraction/schema_validate.py` — the ported single validator | same path | done (Phase 2) |
+| `extraction/gate.py` — `MAX_SCHEMA_REPAIRS=3` + no answer before data | `app/research/graph.py` gates 1 and 2, with `state.repair_attempts` and `has_tool_data()` | done, not a separate module |
+| markdown truncation limits | `MARKDOWN_TRUNCATE_CHARS`, applied to scrape and interact output | done |
+| `records` + `sources` + `observedSourceUrls` + `schemaMismatch` + execution metadata | `POST /ai/v1/research` → `{status, records[], sources[], metadata{…interactionsUsed, enabledTools, playbooksUsed}, validation{missingFields, extraFields, unverifiedUrls, …}}` | done, under different field names; `metadata.toolsUsed`-style naming became `enabledTools` + per-tool counters |
+| `EvidenceIntegrity` — keep only tool-observed URLs; model-claimed URLs get `verified_by_tool=false` | Python side done: `SourceObserved.verified_by_tool`, `_record_provenance()` | done in `ai-service`; **the Java-side enforcement the plan describes is not built** |
+| SCRAPE / INTERACT / EXTRACT step handlers wired into the engine | — | **not started**: there is no job engine (plan Phase 6) and no step table |
+| `llm/prompts/extract.md` | `app/research/prompts/{research,submit,critique}.md` | done differently: the extraction turn is `submit.md`, driven by the caller's schema |
+| Token usage persisted per step | — | not started; `metadata` carries loops/searches/scrapes/interactions/durationMs, **no token counts**, and there is nowhere to persist them yet |
+
+Still owed by this phase after the engine exists: the live gated run, the fabricated-URL test as a
+Java-persistence assertion, and token accounting.
+
 ---
 
 ## Phase 9 — Data intelligence pipeline

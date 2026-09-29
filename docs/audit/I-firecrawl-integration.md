@@ -173,6 +173,20 @@ same contract: request carries targets + schema + tool allowlist; response carri
 sources + execution metadata. **The wire contract is the stable thing; the implementation behind
 it is swappable.**
 
+### I.6.1 Phase 4 status against those triggers (2026-09-29)
+
+Phase 4 implemented the Python route, so two of the three triggers can now be answered with
+evidence rather than expectation:
+
+| Trigger | Where it stands |
+|---|---|
+| `interact` session semantics or action set insufficient | **Not triggered, on shape grounds; unresolved on behaviour.** `firecrawl` 4.45.0 exposes `browser()`, `interact(job_id, code=None, *, prompt=None, language='node', timeout=None, origin=None)`, `stop_interaction(job_id)` and `stop_interactive_browser(job_id)` (deprecated alias) — all coroutines on `AsyncFirecrawlApp`. The `job_id`-first shape is handled by owning the session lifecycle inside the tool call. **Never yet called against the live API**: `FIRECRAWL_API_KEY` has length 0 in both the shell and the root `.env`, so `tests/test_live_firecrawl.py` skips. Latency, credit cost, prompt-mode answer quality and whether a session completes inside a 60 s deadline are all still unmeasured, so **G2 stays open** |
+| Gemini structured output too unreliable for `extractionSchema` conformance | Not reached. `to_gemini_schema()` plus bounded repair is in place and tested offline; the live question is blocked by the 20 requests/day free-tier ceiling (see `Memory.md` §5) |
+| Genuine need for autonomous multi-step behaviour (skills, subagents, compaction) | **Not triggered by Phase 4.** Skills became a deterministic playbook lookup over URLs the run already observed (`app/research/skills.py`); subagents and compaction stay out because Spring owns orchestration. If a future phase needs a *real* fan-out of autonomous workers, that is the trigger this section describes, and it would need its own recorded decision |
+
+Nothing was added to `deploy/` for a sidecar, and no npm dependency was introduced. The fallback
+remains a documented option, not a partial implementation.
+
 ## I.7 Provenance obligations
 
 MIT permits all of the above, with conditions we will honour:
