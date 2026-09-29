@@ -1,0 +1,109 @@
+name: finalagent
+
+# Full containerized stack: MySQL + Spring Boot + FastAPI + Next.js. There is no Redis and no
+# queue broker; durable job state lives in MySQL (see docs/audit/J-no-redis-job-architecture.md).
+#
+#   docker compose --env-file ../.env -f deploy/docker-compose.yml up -d --build
+#
+# Compose reads .env next to this file by default, so --env-file is required to point at the
+# single root .env. Every secret below uses ${VAR:?}: an unset value aborts the command instead
+# of provisioning a guessable default.
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set in the root .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-finalagent_dev}
+      MYSQL_USER: ${MYSQL_USER:?set in the root .env}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set in the root .env}
+    volumes:
+      - finalagent-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot --password=\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    # Not published to the host: inside this stack only the backend talks to MySQL.
+    # Use database/docker-compose.yml when you want a host-visible development database.
+
+  ai-service:
+    build: ../ai-service
+    restart: unless-stopped
+    environment:
+      AI_SERVICE_HOST: 0.0.0.0
+      AI_SERVICE_PORT: 8000
+      AI_SERVICE_API_KEY: ${AI_SERVICE_API_KEY:?set in the root .env}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set in the root .env}
+      FIRECRAWL_API_KEY: ${FIRECRAWL_API_KEY:?set in the root .env}
+      FIRECRAWL_BASE_URL: ${FIRECRAWL_BASE_URL:-https://api.firecrawl.dev}
+      LLM_MODEL_ID: ${LLM_MODEL_ID:-gemini-2.5-flash}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Reachable by service name from the backend, and by 127.0.0.1 from its own healthcheck.
+      # A browser is never allowed to reach this service directly.
+      ALLOWED_HOSTS: ai-service,127.0.0.1,localhost
+    expose:
+      - "8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/ai/v1/health',timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    environment:
+      SERVER_PORT: 8080
+      APP_ENV: ${APP_ENV:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-finalagent_dev}
+      MYSQL_USER: ${MYSQL_USER:?set in the root .env}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set in the root .env}
+      AI_SERVICE_BASE_URL: http://ai-service:8000
+      AI_SERVICE_API_KEY: ${AI_SERVICE_API_KEY:?set in the root .env}
+      AI_SERVICE_TIMEOUT_MS: ${AI_SERVICE_TIMEOUT_MS:-3000}
+    ports:
+      - "${BACKEND_PUBLISH_PORT:-8080}:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/actuator/health/liveness"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+
+  frontend:
+    build:
+      context: ../frontend
+      args:
+        # Baked into .next/routes-manifest.json at build time and needed again at runtime.
+        BACKEND_ORIGIN: http://backend:8080
+    restart: unless-stopped
+    environment:
+      BACKEND_ORIGIN: http://backend:8080
+      NODE_ENV: production
+    ports:
+      - "${FRONTEND_PUBLISH_PORT:-3000}:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  finalagent-mysql-data:

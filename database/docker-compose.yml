@@ -1,0 +1,43 @@
+name: finalagent-db
+
+# A disposable development MySQL, for running the backend and AI service natively.
+# It provisions a database and user only - no tables. Schema belongs to Flyway
+# (backend/src/main/resources/db/migration) so there is exactly one definition of the model.
+#
+#   docker compose --env-file ../.env up -d
+#
+# For the full containerized stack use deploy/docker-compose.yml instead.
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    ports:
+      # 3307 on the host, because a native MySQL service commonly owns 3306.
+      # Override with MYSQL_PUBLISH_PORT if that port is also taken.
+      - "${MYSQL_PUBLISH_PORT:-3307}:3306"
+    environment:
+      # No defaults on purpose. An unset variable fails the compose command rather than
+      # provisioning a well-known weak password - the failure mode the old project shipped
+      # in its own docker-compose.yml.
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in the root .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-finalagent_dev}
+      MYSQL_USER: ${MYSQL_USER:?set MYSQL_USER in the root .env}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in the root .env}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - finalagent-mysql-data:/var/lib/mysql
+    healthcheck:
+      # The password is read from the container environment, so it never appears in a
+      # host command line or shell history. This is a development container; a production
+      # deployment should not expose 3306 at all.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot --password=\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  finalagent-mysql-data:

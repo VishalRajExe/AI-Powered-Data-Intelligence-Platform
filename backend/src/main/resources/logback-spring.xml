@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+  <conversionRule conversionWord="maskedMsg"
+                  converterClass="ai.finalagent.logging.SecretMaskingConverter"/>
+
+  <springProperty scope="context" name="APPLICATION_NAME" source="spring.application.name"
+                  defaultValue="finalagent-backend"/>
+  <springProperty scope="context" name="LOG_LEVEL" source="logging.level.root" defaultValue="INFO"/>
+
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level ${APPLICATION_NAME} --- [%15.15thread] %-40.40logger{39} : %maskedMsg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="com.zaxxer.hikari" level="WARN"/>
+  <logger name="org.springframework.web" level="WARN"/>
+
+  <root level="${LOG_LEVEL}">
+    <appender-ref ref="CONSOLE"/>
+  </root>
+
+</configuration>

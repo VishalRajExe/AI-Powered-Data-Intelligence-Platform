@@ -1,0 +1,7 @@
+target
+*.jar
+*.original
+.env
+.env.*
+Dockerfile
+.dockerignore

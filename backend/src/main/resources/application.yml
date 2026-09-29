@@ -1,0 +1,84 @@
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+
+spring:
+  application:
+    name: finalagent-backend
+
+  # Local development reads the single root .env. Deployment supplies real environment
+  # variables instead; `optional:` means an absent file is not an error, the blank
+  # credential checks are.
+  config:
+    import:
+      - "optional:file:.env[.properties]"
+      - "optional:file:../.env[.properties]"
+
+  threads:
+    virtual:
+      enabled: true
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+  datasource:
+    # Credential defaults are deliberately absent below. Only host/port/database names have
+    # defaults, because those are topology, not secrets.
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:finalagent_dev}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${MYSQL_USER:}
+    password: ${MYSQL_PASSWORD:}
+    hikari:
+      pool-name: finalagent-hikari
+      maximum-pool-size: 10
+      minimum-idle: 0
+      connection-timeout: 5000
+      # Startup enforces that credentials are *configured*; /ready enforces that MySQL is
+      # *reachable*. Without this, a stopped database would abort boot with a stack trace
+      # instead of a 503 naming the failing component.
+      initialization-fail-timeout: -1
+
+finalagent:
+  cors:
+    allowed-origins: ${FRONTEND_ORIGIN:http://localhost:3000}
+  database:
+    host: ${MYSQL_HOST:127.0.0.1}
+    port: ${MYSQL_PORT:3306}
+    name: ${MYSQL_DATABASE:finalagent_dev}
+    username: ${MYSQL_USER:}
+    password: ${MYSQL_PASSWORD:}
+  ai-service:
+    base-url: ${AI_SERVICE_BASE_URL:http://localhost:8000}
+    api-key: ${AI_SERVICE_API_KEY:}
+    timeout-ms: ${AI_SERVICE_TIMEOUT_MS:3000}
+
+app:
+  version: 0.1.0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        # Liveness must never depend on MySQL: a database outage would otherwise make the
+        # orchestrator restart healthy processes in a loop. Readiness is where reachability
+        # belongs, and /api/v1/ready is the browser-facing form of the same judgement.
+        liveness:
+          include: livenessState,ping
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: ${LOG_LEVEL:INFO}

@@ -1,20 +1,28 @@
 [project]
 name = "finalagent-ai-service"
-version = "1.0.0"
+version = "0.1.0"
 description = "Stateless AI + collection service for FINALAIAGENT (Gemini structured output + Firecrawl)"
-requires-python = ">=3.12,<3.13"
+# 3.12 is the deployment interpreter (see docs/audit/K-environment-variables.md). The upper bound
+# admits 3.14 so the base install can be verified locally; the `collection` extra is not yet
+# resolved against 3.14 and is installed only in the Phase 2 provider spike.
+requires-python = ">=3.12,<3.15"
 dependencies = [
     "fastapi>=0.115,<1.0",
     "uvicorn>=0.30,<1.0",
     "pydantic>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
-    "google-genai>=1.0,<2.0",
-    "firecrawl==4.45.0",
-    "httpx>=0.27,<1.0",
+    "python-dotenv>=1.0,<2.0",
 ]
 
 [project.optional-dependencies]
+# Deliberately outside the base install: Phase 1 makes no provider calls, and pinning these here
+# would make the skeleton unbuildable on interpreters their wheels do not yet cover.
+collection = [
+    "google-genai>=1.0,<2.0",
+    "firecrawl==4.45.0",
+]
 dev = [
+    "httpx>=0.27,<1.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
 ]

@@ -1,0 +1,10 @@
+node_modules
+.next
+.tsbuildinfo
+*.tsbuildinfo
+.env
+.env.*
+!.env.local.example
+Dockerfile
+.dockerignore
+README.md

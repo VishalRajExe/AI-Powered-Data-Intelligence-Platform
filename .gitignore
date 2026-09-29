@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# .env.local.example and friends must stay committable: they are the documented names, never values.
+!.env.*.example
 
 # --- Node / Next.js ---
 node_modules/
