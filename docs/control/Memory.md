@@ -12,9 +12,9 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 1 — Foundation & skeleton. **COMPLETE** (scope narrowed by instruction; the
-  plan's schema and auth items moved to later phases). **Phase 1.5** integration analysis of two
-  new reference repositories also complete — documentation only, no code written.
+- **Current Phase:** 2 — Data-enrichment core integration. **COMPLETE.** Phases 0, 1, 1.5 and 2 are
+  recorded above. Phase 2 added the research graph inside `ai-service`; it added no persistence, no
+  planner and no UI.
 - **Last updated:** 2026-09-29
 - **Application code written:** three independent processes.
   - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 15 main classes, 5 test classes.
@@ -26,8 +26,10 @@ existed, and that the system was production-ready — each contradicted by its o
   - Plus `database/`, `deploy/`, `scripts/`, and the root `.env.example`.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
   process; `scripts/verify.sh` runs every suite.
-- **Still nothing business-facing:** no requirement parsing, planning, collection, quality
-  pipeline, persistence, SSE or export. There is no schema and no authentication.
+- **Still not built:** requirement parsing from natural language, the workflow planner, the MySQL
+  schema and persistence, the quality pipeline (normalize / validate / dedupe / entity-resolve),
+  source governance, SSE monitoring, exports, and authentication. `POST /api/v1/research` runs the
+  graph and returns the result, storing nothing.
 - **Repository:** `FINALAIAGENT` is its own git repo, previously pushed to branch `implementjava`
   of `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git`. Its history is
   independent of `main` (old project). **Phase 1 code is not committed** — the working tree holds
@@ -97,6 +99,64 @@ existed, and that the system was production-ready — each contradicted by its o
   - **Licence exposure is now unresolved on two repos** (R28, R29). `data-enrichment-js` claims MIT
     in `package.json:7` with no licence text anywhere in the tree; `ai-data-enrichment-agent` has
     none at all. See §6 gate **L1**.
+
+- [x] **Phase 2 (2026-09-29) — data-enrichment core integration.** `data-enrichment-js`'s research
+  graph is now the inner loop of this project's extraction step, re-implemented in Python against
+  Firecrawl. No reference repository is a build or runtime dependency.
+
+  | New | Purpose |
+  |---|---|
+  | `ai-service/app/research/{state,tools,prompts,graph,contracts}.py` + `prompts/*.md` | the bounded research graph: `plan_action → run_tools → submit_extraction → critique`, with the ported topology and bounds on every path |
+  | `ai-service/app/extraction/schema_validate.py` | gate 1, ported from `schema-validate.ts`, one validator backing checklist, gate and assessment |
+  | `ai-service/app/llm/client.py` | Gemini structured output; `RecordingLlm` double |
+  | `ai-service/app/firecrawl/client.py` | sole web engine; async SDK; `FakeWeb` double |
+  | `POST /ai/v1/research` (key-gated) | requirement + dynamic schema → records, sources, metadata, validation |
+  | `backend/.../research/ResearchController.java`, `aiclient/dto/Research{Request,Result}.java` | Spring passthrough with independent schema validation and upstream error mapping |
+  | `docs/control/THIRD-PARTY.md` | provenance and licence position for every ported item |
+
+  Measured, all run in this session: **`pytest` 74 passed**, **`mvn test` 37 passed**, live chain
+  verified — a payload valid for Java but invalid for Python came back `422
+  AI_SERVICE_REJECTED_REQUEST` carrying Python's own envelope, and an empty schema was rejected by
+  Java with `verifyNoInteractions` proving Python was never called.
+
+  **Decision L2 resolved: no LangGraph dependency.** The graph is a plain Python state machine
+  because nothing in the template needs the runtime (`compile()` takes no checkpointer, `src/`
+  writes nothing to disk, nodes reduce to a loop over a message list with a counter). The node and
+  edge names are preserved and declared on `ResearchGraph.NODES` / `EDGES`, so the architecture is
+  inspectable and swapping in `langgraph` later stays mechanical.
+
+  **SDK facts corrected by introspection** (Phase 0 had partly guessed, and the code disagrees with
+  the docs — worth keeping because later phases depend on it):
+  - `from firecrawl import Firecrawl / AsyncFirecrawl` exposes **only** paper/parse methods. The
+    verbs live on `FirecrawlApp` / `AsyncFirecrawlApp`.
+  - `AsyncFirecrawlApp.interact(job_id, code=…, prompt=…, language=…)` takes a **job id, not a URL**
+    — a browser session must exist first. This narrows what G2 can conclude.
+  - `search` returns `SearchData` with results under `.web`; `scrape` returns `ScrapeData` with
+    `.markdown` and `.metadata`. Normalizers read both attribute and dict shapes.
+  - `google-genai` 1.75.0 and `firecrawl` 4.45.0 both install on **Python 3.14** (cp314 wheels
+    present for the aiohttp stack), so the "3.12 required" constraint applies to reliability, not to
+    installability of these two.
+
+  Bugs found and fixed while building it:
+  1. `app/contracts.py` — the file inherited from before Phase 1 — **could not be imported at all**:
+     a missing `and` in a boolean chain at line 130 was a `SyntaxError`. It had never been executed
+     or tested, which is exactly why Phase 1 recorded it as unverified rather than claiming it worked.
+  2. My port of the schema validator let an **empty array pass validation** — a model returning
+     `{"records": []}` would have looked schema-valid. A test caught it; `[]` is now missing, as
+     upstream treats it.
+  3. `prompts.render` had `split(...).join(value)` inverted, raising `AttributeError` on every
+     prompt — the "literal substitution" I wrote was not valid Python.
+  4. Two test assertions were wrong about their own intent (a domain-policy case compared
+     `youtube.test` against an allow-list of `youtube.com`; a truncation case expected the budget to
+     cover the truncation marker). Corrected rather than the code bent to fit them.
+
+  **Not done, stated plainly:** no live provider run. There is no `FIRECRAWL_API_KEY` on this
+  machine, and a real Gemini call would bill the developer's account without being asked for. The
+  graph is therefore verified against doubles only; `tests/test_live_provider_spike.py` exists and
+  is skipped unless `RUN_LIVE_PROVIDER_TESTS=true`. Persistence is also absent: `POST
+  /api/v1/research` returns the run and stores nothing, because there is still no schema.
+  Risk **R32** records that the graph lets the model name URLs while robots/SSRF gating arrives with
+  the source-governance phase.
 
 ## 3. Key Architectural Decisions Log
 
@@ -265,11 +325,17 @@ Environment limits affecting verification:
 | Gate | Question | Status |
 |---|---|---|
 | **G1** | With `DEMO_MODE` removed, how will this be demonstrated to judges? (a) test fixtures + run replay *(recommended)*, (b) guarded `SYNTHETIC_MODE` that can never trigger on a missing key, (c) funded keys and demo live. See `docs/audit/L-risks.md` R8 | **Awaiting user decision** |
-| **G2** | Is the Firecrawl Python SDK's `interact` sufficient? Fallback is the Express sidecar implementing `agent-core/openapi.yaml` — a fourth runtime requiring its own recorded decision. See `docs/audit/I-firecrawl-integration.md` §I.6 | **Deferred to the Phase 2 spike** |
+| **G2** | Is the Firecrawl Python SDK's `interact` sufficient? Fallback is the Express sidecar implementing `agent-core/openapi.yaml` — a fourth runtime requiring its own recorded decision. See `docs/audit/I-firecrawl-integration.md` §I.6 | **Narrowed at Phase 2, still open.** Introspection shows `AsyncFirecrawlApp` does expose `search`,
+`scrape` and `interact`, but `interact(job_id, code=…, prompt=…, language=…)` takes a **job id**, not
+a URL, so a browser session must exist first. Whether that composes for a real interactive task is
+unverified — no `FIRECRAWL_API_KEY` exists here. Resolve with
+`tests/test_live_provider_spike.py` once a key is available |
 | **B1** | `finalagent_dev` needs a MySQL account the application can connect as, or `/ready` can never return 200. Options: (a) create a user on the native `MySQL96` service (needs its credentials — I will not guess them), (b) install Docker and use `database/docker-compose.yml`, which mints the user from `.env`. | **Blocking the last Phase 1 exit criterion — awaiting user choice** |
 | **L1** | Both new repositories have unresolved licences: `data-enrichment-js-main` claims `"license": "MIT"` in `package.json:7` with **no licence text anywhere in the tree**, and `ai-data-enrichment-agent-main` has **no licence at all**. May we adapt logic from either? Options: (a) treat a `package.json` declaration as sufficient, as already done for `web-agent-main` under R2, (b) verify upstream terms before Phase 2, (c) re-implement gate 3 from the behavioural description in `O` §O.4 without translating their source. | **Awaiting user ruling** (R28, R29) |
 
-| **L2** | Phase 2 research graph: depend on the `langgraph` PyPI package, or express the same topology as a plain Python state machine? Evidence says nothing in `data-enrichment-js` needs the runtime (no checkpointer, no disk writes, no interrupts — `O` §O.12), so a state machine preserves the graph without a new heavy dependency. Either satisfies the master instruction | **Decision needed before Phase 2 coding** |
+| **L2** | Phase 2 research graph: depend on the `langgraph` PyPI package, or express the same topology as a plain Python state machine? Evidence says nothing in `data-enrichment-js` needs the runtime (no checkpointer, no disk writes, no interrupts — `O` §O.12), so a state machine preserves the graph without a new heavy dependency. Either satisfies the master instruction | **RESOLVED at Phase 2 — plain Python state machine, no `langgraph` dependency.** Node and edge names
+are declared on `ResearchGraph.NODES` / `EDGES`, so the template's topology is preserved and a later
+swap stays mechanical |
 
 ## 7. Environment / How to Run
 
@@ -319,21 +385,33 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phase 2 — Provider spike (decision gate G2)**, `docs/audit/M-phase-plan.md`. Not started.
+**Phase 3 — Authentication & tenancy** (`docs/audit/M-phase-plan.md`). Not started; awaiting
+authorization. Phase 2 was scoped as the data-enrichment core integration, not the provider spike
+that `M` originally listed second, so the live provider work is still owed.
 
-Before it can finish cleanly:
+What Phase 2 changes for later phases:
 
-1. **B1** — a MySQL account for `finalagent_dev`, so `/ready` can be proven at 200 rather than
-   asserted. Nothing in Phase 2 needs it, but the schema phase does, and every phase after that
-   inherits an unverified database if it stays open.
-2. **G1** — still undecided; it does not block Phase 2 (which makes real calls) but it does shape
-   the demonstration story.
-3. Install Python 3.12 to resolve the `collection` extra (`google-genai`, `firecrawl==4.45.0`).
-4. Phase 2 should also promote those two packages from the extra into the base install once their
-   wheels are confirmed, so the deployed image is not silently missing them.
+- The research graph is a **stateless in-process run**. It persists nothing, so the dataset phase
+  must define how `ResearchResult` maps onto rows, columns, sources and evidence. The DTO already
+  carries per-record sources with `verifiedByTool`, which is what field-level provenance needs.
+- Graph bounds are configuration (`MAX_LOOPS`, `MAX_SEARCHES_PER_RUN`, `MAX_SCRAPES_PER_RUN`),
+  supplied per request by Spring, range-validated at boot — so a planner can lower them per step.
+- `POST /api/v1/research` is currently **unauthenticated** and guarded only by its schema check.
+  Acceptable while nothing is stored and no live provider call happens by default; it must sit
+  behind workspace-scoped authorization before any data lands.
+- **R32** is the sharpest technical risk: the model names URLs, while robots / SSRF / rate-limit
+  gating is the source-governance phase. Until then callers should pass `allowedDomains`.
+- The `collection` extra resolved cleanly on Python 3.14 (cp314 wheels exist), so item 3 below is
+  withdrawn; 3.12 remains the pinned deployment interpreter for reliability, not installability.
+- `M` still lists gate 3 as a **Phase 8** exit criterion; it is implemented, so Phase 8 now owes
+  only the wiring into a real collection run.
 
-Phase 1 left the following explicitly undone, on purpose: the Flyway schema, JPA entities, Spring
-Security and JWT, control docs (`PRD.md`, `Rules.md`, `Phases.md`), and any business endpoint.
+Still open: **G1** (demonstration strategy), **G2** (needs a Firecrawl key), **B1** (a MySQL user),
+**L1** (enrichment-repo licence position — see `docs/control/THIRD-PARTY.md`).
+
+One environment note for anyone running the stack here: port **8080 is occupied by the old
+project's** `ai-data-intelligence-platform-1.0.0.jar`. It is not part of FINALAIAGENT and was left
+running; Phase 2 verified the live chain on `SERVER_PORT=8090`.
 
 **Carried from Phase 1.5 into later phases:** extraction **gate 3** (completeness critique, bounded
 on every path, exhaustion never reported as success) is added as an exit criterion of **Phase 8 —

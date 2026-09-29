@@ -6,9 +6,9 @@ A user describes a data requirement in plain English; the system understands it,
 collection workflow, gathers data from permitted web sources, cleans and validates it, and
 produces a source-traceable dataset that can be searched, filtered and exported.
 
-**Status: Phase 1 complete — three runnable processes and one database. No business
-functionality yet.** The application layers start, refuse to start without credentials, and talk
-to each other; nothing collects, plans, or exports.
+**Status: Phase 2 complete — the data-enrichment research graph is integrated and runs inside the
+Python service.** Still no persistence, planner, quality pipeline, source governance or
+authentication: `POST /api/v1/research` runs a job and returns it, storing nothing.
 
 ---
 
@@ -36,8 +36,8 @@ FINALAIAGENT/
 ├── database/      local MySQL container + connectivity probe. Owns NO schema.
 ├── deploy/        Dockerfiles and full-stack compose (unverified: no Docker here)
 ├── scripts/       bootstrap-env, dev-{backend,ai,frontend}, verify
-├── docs/audit/    Phase 0 deliverables A–N
-└── docs/control/  Memory.md
+├── docs/audit/    Phase 0 + 1.5 deliverables A–O
+└── docs/control/  Memory.md, THIRD-PARTY.md
 ```
 
 `.env` at the root is the single configuration source for all three services. `.env.example`
@@ -56,20 +56,64 @@ bash scripts/verify.sh                     # all suites, with counts
 Each process starts independently. The frontend reaches the backend through a same-origin
 rewrite, so the browser never learns a backend origin or credential.
 
-## Verified (Phase 1, executed 2026-09-29)
+The integrated research path, once both services are up:
+
+```bash
+cat > /tmp/research.json <<'JSON'
+{
+  "topic": "find remote frontend developer jobs in India",
+  "extractionSchema": {
+    "type": "object",
+    "properties": {
+      "jobs": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "company": {"type": "string"},
+            "role": {"type": "string"},
+            "application_url": {"type": "string"}
+          },
+          "required": ["company", "role", "application_url"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["jobs"],
+    "additionalProperties": false
+  },
+  "limits": {"maxLoops": 5, "expectedRecords": 5}
+}
+JSON
+
+curl -X POST localhost:8090/api/v1/research \
+  -H 'Content-Type: application/json' --data @/tmp/research.json
+```
+
+Spring validates the contract, the Python graph plans → retrieves → extracts → critiques, and the
+response carries `records`, `sources`, `metadata` and `validation`. Nothing is stored yet. The call
+needs a working `GEMINI_API_KEY` and `FIRECRAWL_API_KEY`, because it makes real provider requests.
+
+## Verified (Phase 2, executed 2026-09-29)
+
+Every row is a command run in that session, with counts, not an assertion.
 
 | Check | Result |
 |---|---|
-| `mvn test` | **27 passed**, 0 failures |
-| Backend jar boots; `/api/v1/health` → 200 | passed |
+| `mvn test` | **37 passed**, 0 failures |
+| `pytest` | **74 passed**, 1 gated live test skipped by design |
+| Research graph on doubles | all gates exercised: schema repair, repair exhaustion, loop bound on the search path, no-answer-before-data, critique rejection and re-loop, malformed verdict, unverified URL |
+| Backend jar boots; `/api/v1/health` → 200 | passed (note: 8080 is held on this machine by the **old project's** jar; use `SERVER_PORT=8090`) |
 | Backend with no credentials → **exit 1**, naming `AI_SERVICE_API_KEY`, `MYSQL_PASSWORD`, `MYSQL_USER` | passed |
-| `pytest` | **31 passed** |
-| AI service boots; `/ai/v1/ready` without key → 401, with key → 200 | passed |
 | AI service with a missing provider key → **exit 1**, naming the variable | passed |
-| `npm run typecheck` / `lint` / `build` | passed; 13 pages generated |
-| Browser → Next → Spring → FastAPI, full chain on one `curl` | passed (`aiService: UP`) |
+| Live `POST /api/v1/research` through Spring → Python, invalid for Python | **422 `AI_SERVICE_REJECTED_REQUEST`** carrying Python's own envelope |
+| Same request with an empty schema | **400 `INVALID_EXTRACTION_SCHEMA`**, and `verifyNoInteractions` proves Python was never called |
+| Java ↔ Python wire contract | camelCase round-trip test on a captured Python payload shape |
+| `npm run typecheck` / `lint` / `build` | passed; 13 pages |
+| Browser → Next → Spring → FastAPI health chain | passed (`aiService: UP`) |
 | Actuator liveness stays `UP` while MySQL is down | passed |
-| Real MySQL round-trip (`/ready` → 200) | **not achieved** — needs credentials for a matching database user |
+| Real MySQL round-trip (`/ready` → 200) | **not achieved** — still needs a matching database user |
+| Live Gemini + Firecrawl research run | **not performed** — no `FIRECRAWL_API_KEY`, and a Gemini call would bill the account. Gated behind `RUN_LIVE_PROVIDER_TESTS=true` |
 
 ## Deliberately deferred out of Phase 1
 

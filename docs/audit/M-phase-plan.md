@@ -81,9 +81,22 @@ is not needed at all once the Next.js rewrite exists — see `K` §K.5.
 
 ---
 
-## Phase 2 — Provider spike (decision gate G2)
+## Phase 2 — Provider spike (decision gate G2) ✅ DONE AS INTEGRATION; SPIKE STILL OWED
 
-**Goal:** prove the external dependencies work before building on them. Deliberately tiny.
+**Actual Phase 2 (2026-09-29), by instruction:** the data-enrichment core integration —
+`data-enrichment-js`'s research graph ported into `ai-service/app/research/` against Firecrawl, with
+`POST /ai/v1/research` and the Spring passthrough. Measured: **74 pytest passed**, **37 mvn tests
+passed**, live Spring→Python call verified (422 propagation; Java-side rejection with
+`verifyNoInteractions`). Decision **L2** resolved — plain Python state machine, no `langgraph`
+dependency.
+
+**Deferred, still owed:** the provider spike below. It could not be honest without a
+`FIRECRAWL_API_KEY`, and a real Gemini call would bill the account, so `graph.py` is verified
+against doubles only and `tests/test_live_provider_spike.py` stays skipped until
+`RUN_LIVE_PROVIDER_TESTS=true`. **G2 therefore remains open**, narrowed by the discovery that
+`AsyncFirecrawlApp.interact(job_id, …)` takes a job id rather than a URL.
+
+**Original goal:** prove the external dependencies work before building on them. Deliberately tiny.
 
 - `ai-service/app/firecrawl/client.py`: one module owning the SDK, async, semaphored, per-call
   timeout. Call `search`, `scrape`, and `interact` against a real key and record the actual

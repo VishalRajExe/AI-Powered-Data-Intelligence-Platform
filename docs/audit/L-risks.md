@@ -245,4 +245,35 @@ bugs / verification limits" section that is mandatory rather than optional; ever
 "works" must name the test or command that proved it. If something was skipped, say it was
 skipped.
 
+## L.7 Added at Phase 1.5 — the two enrichment repositories
+
+**R28 — Adapting `data-enrichment-js` rests on a `package.json` licence claim with no licence
+text.** Severity: Moderate. Likelihood: Certain (verified: no LICENSE/COPYING/NOTICE file, no
+copyright or SPDX string anywhere in the tree). Same class as R2, and now load-bearing because the
+master instruction asks for this repo to be merged in.
+Mitigation: item 1 of `docs/control/THIRD-PARTY.md` records the port as a behavioural
+re-implementation in Python, not a translation. Confirm upstream terms or reclassify as
+concept-only before release. Gate **L1** in `Memory.md`.
+
+**R29 — `ai-data-enrichment-agent-main` has no licence at all.** Severity: Moderate. Likelihood:
+Certain. Absent a grant, copyright is reserved by default, so copying even a short function is
+exposed. Mitigation: no take. It contributes nothing the design lacks (`O` §O.3).
+
+**R30 — A completeness critique adds one LLM call per extraction round.** Severity: Moderate.
+Likelihood: High. That is the most expensive path in the system. Mitigation: hard bound already
+implemented (`MAX_LOOPS`, default 6, enforced on every path), critique runs only after the
+deterministic gate passes, and cost is measured in the provider spike.
+
+**R31 — An LLM judge can rate thin but confident data as satisfactory.** Severity: High.
+Likelihood: Medium. Mitigation: gate 1 stays mandatory and first; the critique can add work or
+downgrade to `COMPLETED_WITH_WARNINGS` but can never approve a schema-invalid submission; per-record
+source attachment flags cited URLs that no tool fetched.
+
+**R32 — A model-chosen URL reaches the network before governance exists.** Severity: High.
+Likelihood: Medium, until the source-governance phase. The research graph lets the model name
+URLs to scrape; this phase validates scheme and domain policy only, not SSRF resolution, robots.txt
+or per-domain rate limits. Mitigation: Spring is designed to pre-clear URLs before Python sees
+them (`A` §A.2); until that lands, `allowedDomains` should be supplied by callers, and live
+collection must stay behind the gated provider test.
+
 Next: `M-phase-plan.md`.
