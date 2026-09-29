@@ -12,8 +12,8 @@ typecheck → build → update `Memory.md` → **stop and report**.
 
 ## Phase 0 — Forensic audit ✅ COMPLETE
 
-This document set. No application code written. Deliverables A-M produced, plus the findings
-report `00-FORENSIC-AUDIT.md`.
+This document set. No signed-off application code. Deliverables A-N produced, plus the findings
+report `00-FORENSIC-AUDIT.md` and the executed toolchain audit `N-scripts-and-dependencies.md`.
 
 **Two decisions are required before Phase 1 begins:**
 
@@ -27,7 +27,7 @@ that **Docker is unavailable**, so integration tests run against the native MySQ
 
 ---
 
-## Phase 1 — Foundation & skeleton
+## Phase 1 — Foundation & skeleton ✅ COMPLETE (narrowed scope — see result below)
 
 **Goal:** three runnable processes, one database, zero features.
 
@@ -50,6 +50,34 @@ that **Docker is unavailable**, so integration tests run against the native MySQ
 `finalagent_dev`; all three processes start and `/ready` returns 200; **deleting any required
 env var makes the relevant process refuse to start** (test this explicitly — it is the inversion
 of the old project's core defect).
+
+### Phase 1 result — 2026-09-29 ✅ (scope narrowed by instruction)
+
+Built and measured: `backend/` (Spring Boot 3.5.16, Java 21), `ai-service/` (FastAPI),
+`frontend/` (Next.js 14 with the PirateAgentUI design foundation copied verbatim),
+`database/`, `deploy/`, `scripts/`, root `.env.example`.
+
+| Criterion | Outcome |
+|---|---|
+| `mvn test` | **27 passed**, 0 failures |
+| `pytest` | **31 passed** |
+| `next build` / `typecheck` / `lint` | passed, 13 pages; all 10 routes served by `next start` |
+| Three processes start independently | passed via `scripts/dev-*.sh` |
+| Full chain browser → Next → Spring → FastAPI | passed — `aiService: UP` over the `X-API-Key` boundary |
+| Missing env var ⇒ refuse to start | **passed, tested explicitly on both services** (exit 1, variables named, values never printed) |
+| MySQL connection **configuration** loads | passed — properties bind, driver reaches the server, `/ready` names the failure reason |
+| `/ready` returns 200 | **not achieved** — needs a real MySQL account matching `MYSQL_USER`. Reported as unmet rather than faked |
+| Liveness independent of MySQL | passed — `/actuator/health/liveness` stays `UP` while readiness is `DOWN` |
+
+**Deferred, and where it goes:** Flyway V1–V6 + the 21 tables, and JPA entities → the schema
+phase; Spring Security, JWT issuance and refresh-token storage → Phase 3; `source_domain_policy`
+and governance → Phase 7; PRD/Rules/Phases control docs → Phase 2. Docker images are written but
+unbuilt (Docker is absent). Provider SDK dependencies are held in the `collection` extra until the
+Phase 2 spike.
+
+**Two corrections to this plan as written:** the AI service needs no CORS layer (it is internal,
+Host-restricted and key-authenticated, and the browser never reaches it), and `NEXT_PUBLIC_API_URL`
+is not needed at all once the Next.js rewrite exists — see `K` §K.5.
 
 ---
 

@@ -211,6 +211,16 @@ The old project is not a write-off. These are real, tested, and well-designed:
 | 13 | `dist/` build output and `demo-exports/` artifacts are committed to the tree | repo listing |
 | 14 | `demo-scenarios.test.ts` and much of `e2e-validation.test.ts` **assert the hardcoded demo fixtures** — tests that lock in demo behaviour rather than production behaviour | `tests/` |
 | 15 | `Architecture.md` is stale: it describes Next.js API Routes as the backend, "Prisma or Drizzle", BullMQ as optional, and a `scoutly/apps/web` folder structure that was never built. `Design.md` specifies a white/blue `#3B5BFF` Inter system; the shipped UI is parchment/brown with Cormorant Garamond | `md files/` vs `PirateAgentUI/app/globals.css:6-43` |
+| 16 | **The project does not build in this checkout.** `node_modules/@aidp/backend` and `node_modules/@aidp/firecrawl-agent-core` are empty directories rather than workspace links, so the vendored package cannot resolve | `npm run typecheck` → **10 × TS2307**, exit 1 (`N` §N.2) |
+| 17 | Both lint gates fail | `npm run lint` → **14 errors**; `npm run lint:frontend` → **32 errors** (`N` §N.1) |
+| 18 | The test suite fails to load 3 of 20 files for the same reason | **195 passed / 202 collected**, not the claimed 213 (`N` §N.1, §N.3) |
+| 19 | `src/scripts/check-apis.ts` is **orphaned** — no npm script invokes it. The frontend has **no `typecheck` script** at all, so types are only checked as a side effect of `next build` | `grep -rn check-apis package.json` → no match (`N` §N.4) |
+
+§§16–19 were established by **running** the toolchain on 2026-09-29, not by reading it, and are
+documented in full in [`N-scripts-and-dependencies.md`](N-scripts-and-dependencies.md): root cause,
+the claim-vs-measured table against the old `Memory.md`, broken scripts, and dependency findings —
+including one apparent defect that turned out to be correct and must **not** be "cleaned up"
+(the seven provider `peerDependencies`).
 
 ---
 
@@ -225,6 +235,8 @@ code without a logged exception. Verified license facts:
 | `web-research-agent-master` | **MIT** (Copyright (c) 2025 Dev Dalia) | `LICENSE:1-3` | **Yes** |
 | `TheAgenticBrowser-main` | **TheAgentic Community License v1.0** — §1.1 "Excluded Purpose" bars "making available any software-as-a-service, platform-as-a-service, infrastructure-as-a-service or other similar online service that competes with TheAgentic products" | `LICENSE:1-30` | **No.** This platform is such a service |
 | `anakin-master` | **AGPL-3.0** (AnakinScraper OSS, Copyright (c) 2025 Anakin.io) | `NOTICE:1-4` | **No.** Network-use clause would copyleft the product |
+| `data-enrichment-js-main` *(added at Phase 1.5)* | **MIT declared in `package.json:7` only.** No LICENSE/COPYING/NOTICE file; no copyright or SPDX string anywhere in the tree (verified by `grep -ril`); source files open with unpiloted JSDoc | `package.json:7`; `find -iname` over the repo | **Pattern-level adaptation only.** Same posture as R2 for `agent-core` — see `O` §O.7, R28 |
+| `ai-data-enrichment-agent-main` *(added at Phase 1.5)* | **No licence at all** — no file, no manifest (there is none), no README licence section | verified across all 5 files | **No.** Absent a licence, copyright is reserved by default. Concepts only, if even that — see R29 |
 
 The old project reached the same conclusion and copied zero code from the latter two
 (`Memory.md:56,127-128,139`). Your brief asks for anakin's job architecture and
@@ -267,5 +279,11 @@ Discard the demo tree, the silent fallbacks, the fabricated route-level defaults
 hardcoded secrets and demo login, and the BullMQ/Redis layer.
 Reimplement the job engine on MySQL + Spring async, taking anakin's *patterns* (not code) and
 adding the two things anakin lacks: a durable claim mechanism and stale-job recovery.
+
+One methodological lesson, from §6 rows 16–19: that project's quality claims ("213 tests pass",
+"0 ESLint errors", "typechecks cleanly", "build succeeds") were written into its memory file and
+never re-verified against a clean install, so a **false green baseline propagated into every
+document that cited it**. FINALAIAGENT's phase exit criteria require each such claim to be a
+command run in that session, with counts reported and skipped checks named (`N` §N.6).
 
 Proceed to `A-final-architecture.md`.

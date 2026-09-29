@@ -12,17 +12,91 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 0 — Forensic audit. **COMPLETE.**
-- **Last updated:** 2026-09-28
-- **Application code written:** **none.** Phase 0 produced documentation only, as instructed.
-- **Runnable:** no — there is nothing to run yet.
-- **Blocked on:** decisions **G1** and **G2** (see §6), plus installing Python 3.12.
+- **Current Phase:** 1 — Foundation & skeleton. **COMPLETE** (scope narrowed by instruction; the
+  plan's schema and auth items moved to later phases). **Phase 1.5** integration analysis of two
+  new reference repositories also complete — documentation only, no code written.
+- **Last updated:** 2026-09-29
+- **Application code written:** three independent processes.
+  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 15 main classes, 5 test classes.
+  - `ai-service/` — FastAPI on Python. `config.py` (fail-loud settings), `contracts.py` (Pydantic
+    wire contracts), `security.py` (`X-API-Key`, constant-time), `logging_setup.py` (JSON +
+    masking), `api/v1/health.py`.
+  - `frontend/` — Next.js 14.2.35. PirateAgentUI design foundation copied byte-identically
+    (`diff -r` verified), 10 routes, `lib/api/` typed client.
+  - Plus `database/`, `deploy/`, `scripts/`, and the root `.env.example`.
+- **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
+  process; `scripts/verify.sh` runs every suite.
+- **Still nothing business-facing:** no requirement parsing, planning, collection, quality
+  pipeline, persistence, SSE or export. There is no schema and no authentication.
+- **Repository:** `FINALAIAGENT` is its own git repo, previously pushed to branch `implementjava`
+  of `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git`. Its history is
+  independent of `main` (old project). **Phase 1 code is not committed** — the working tree holds
+  it until authorized. Neither `main` nor the stale `implemnetedjava` branch has been touched.
+- **Blocked on:** decisions **G1**, **G2** and the **L1** licence ruling (§6); a MySQL account the
+  app can connect as; Python 3.12 before the provider extra is installed.
 
 ## 2. Completed Phases
 
 - [x] **Phase 0 — Forensic audit.** Full source inspection of the old project (backend,
       PirateAgentUI, control docs) and all four reference repositories. Produced
-      `docs/audit/00-FORENSIC-AUDIT.md` plus deliverables A-M. No code created.
+      `docs/audit/00-FORENSIC-AUDIT.md` plus deliverables A-M.
+- [x] **Phase 0 extension (2026-09-29) — toolchain forensics and reuse-map reformat.**
+  - Added `docs/audit/N-scripts-and-dependencies.md`: the old project's scripts and dependencies
+    were **executed**, not read. Result: typecheck, both lint gates and the test suite all fail in
+    the current checkout (§5 items 15–18).
+  - Reformatted `docs/audit/C-repository-reuse-map.md` from 4 columns to the required 6:
+    repository → useful feature → source path → **actual implementation** → reuse method →
+    destination. All ~90 rows preserved; "actual implementation" now separates verified behaviour
+    from what the docs claim, and defects are marked inline.
+- [x] **Phase 1 (2026-09-29) — Foundation & skeleton.** Three processes built, started, and tested.
+  Every number below came from a command run in this session.
+
+  | Verification | Measured |
+  |---|---|
+  | `mvn test` | **27 passed**, 0 failures, 0 skipped |
+  | `mvn package` | fat jar 28.9 MB, `java -jar` boots in ~3 s |
+  | Backend without credentials | **exit 1**, naming `AI_SERVICE_API_KEY`, `MYSQL_PASSWORD`, `MYSQL_USER`; values never printed |
+  | `pytest` | **31 passed** |
+  | AI service without `FIRECRAWL_API_KEY` | **exit 1**, naming the variable |
+  | `AI_SERVICE_API_KEY` mismatch | **401 UNAUTHENTICATED** on `/ai/v1/ready`; 200 with the key |
+  | `npm run typecheck` / `lint` / `build` | all pass; 13 pages generated |
+  | Next dev proxy → Spring → FastAPI | one `curl` returned `aiService: UP` inside the backend's `/ready` |
+  | `/actuator/health/liveness` with MySQL down | `UP` (containers will not restart-loop) |
+  | `/api/v1/ready` overall | **503, honestly** — `mysql: DOWN` because no matching database user exists |
+
+  Design foundation integrity: `diff -r` against `PirateAgentUI` confirms every copied CSS,
+  config, and component file is byte-identical; `grep` for `localStorage|NEXT_PUBLIC|AIza|fc-`
+  across `app/ components/ lib/ hooks/` returns only explanatory comments.
+
+- [x] **Phase 1.5 (2026-09-29) — integration analysis of two new reference repositories.**
+  Read-only: no code written, no Phase 2 work started, no frontend modified, nothing deleted.
+  Produced `docs/audit/O-new-repositories-integration-analysis.md` (answers the required A–K),
+  plus `C` §C.7 and the licence rows in `00` §7.
+  - `data-enrichment-js-main` — 691 lines of TypeScript. A real plan → act → **critique** → re-loop
+    graph, an enforced turn bound, configurable limits, and **zero hardcoded field names in
+    `src/`**, which structurally corroborates our "prompt determines the schema" requirement.
+    One idea adopted: the completeness critique as extraction **gate 3**, with three of its defects
+    fixed (`O` §O.4).
+  - `ai-data-enrichment-agent-main` — 166 lines, one file, no validation, no loop bound, no tests,
+    and **no licence anywhere**. Contributes nothing FINALAIAGENT does not already have in stronger
+    form. Its README promises "Returns structured JSON matching your schema"; the code never checks
+    the schema.
+  - **Bright Data and Tavily are both rejected.** Bright Data's own comment calls its unlocker a
+    tool for *"bypassing anti-bot protection"* (`enrichment_agent.py:40`), contradicting our
+    Java-fixed `allowCaptchaBypass=false` / `respectRobotsTxt=true`. Firecrawl stays the sole engine.
+  - **Three-runtime architecture stands.** Nothing in the JS graph needs the LangGraph runtime:
+    `compile()` has no checkpointer, nothing touches disk, and the nodes are a plain loop over a
+    message list with an integer counter. Answer to "what stays in TypeScript": **nothing**.
+  - Bugs recorded as not-to-copy: the turn bound guards **only the critique exit path**, so a run
+    that keeps calling search never hits it; loop exhaustion ends the run as if it succeeded;
+    `maxInfoToolCalls` is declared and defaulted but **never read** (same dead-config class as
+    anakin's `MAX_JOB_RETRIES`); prompts advertise `Search`/`ScrapeWebsite` while the registered
+    tools are named differently; `.replace(str, str)` corrupts prompts containing `$&` or `$1`;
+    `lint:all` joins steps with `&` so lint failure cannot fail CI; and `fetch` is called without
+    ever checking `response.ok`, letting a bot-block page become cited "evidence".
+  - **Licence exposure is now unresolved on two repos** (R28, R29). `data-enrichment-js` claims MIT
+    in `package.json:7` with no licence text anywhere in the tree; `ai-data-enrichment-agent` has
+    none at all. See §6 gate **L1**.
 
 ## 3. Key Architectural Decisions Log
 
@@ -47,13 +121,39 @@ existed, and that the system was production-ready — each contradicted by its o
 | 2026-09-28 | **`web-research-agent-master` (MIT) and Firecrawl `agent-core` (MIT) may be copied.** | Verified `LICENSE:1-3` (MIT, Copyright (c) 2025 Dev Dalia) and `agent-core/package.json:118` (`"license": "MIT"`). Caveat: upstream `agent-core/` ships **no LICENSE file** — the MIT declaration is metadata only. Keep notices with every copied file |
 | 2026-09-28 | **PirateAgentUI's real CSS tokens are the design system of record; the old `Design.md` is superseded.** | `Design.md` specifies white/`#3B5BFF` blue/Inter in a "Linear/Vercel" idiom. The shipped UI is parchment `#E8DFCF` / brown `#5A3928` / tan `#B78B62` with Cormorant Garamond headings (`app/globals.css:6-43`, `tailwind.config.ts:48-50`). The brief requires preserving PirateAgentUI. Tokens recorded verbatim in `docs/audit/D-frontend-reuse-map.md` |
 | 2026-09-28 | **Frontend fabrication removed on both sides of the contract.** | The UI invented confidence `90` and `sourceIds: src-1…src-n` (`datasets/[id]/page.tsx:120-131`); the API invented the *same* values (`datasets.routes.ts:240-251`) plus synthetic progress `100/50/0` (`workflows.routes.ts:92`) and `targetCount: 100` / `entity: "Record"` (`requirements.routes.ts:15,32`). Absent data must render as absent |
+| 2026-09-29 | **Every "tests pass / typecheck clean / build succeeds" claim must be produced by a command run in that session, reporting counts and naming skipped checks.** | Verified against the old project: its `Memory.md:11,244,298,332` assert 213 passing tests, 0 lint errors, clean typecheck and a successful build, but running those exact commands today gives 195/202 with 3 suites failing to load, 14 + 32 lint errors, and 10 typecheck errors. A false green baseline propagated through every doc citing it. Detail: `docs/audit/N-scripts-and-dependencies.md` |
+| 2026-09-29 | **Do not "clean up" the old project's six unimported provider packages.** | `backend` statically imports none of `@ai-sdk/anthropic`, `@ai-sdk/openai`, `@langchain/anthropic`, `@langchain/google`, `@langchain/google-genai`, `@langchain/openai` — which looks like dead weight and is **not**: the vendored core declares all seven as `peerDependencies` and `ai` resolves providers dynamically, so the consumer must install them. Recorded so a future dependency audit does not delete a working system |
+
+| 2026-09-29 | **Configuration validation lives in exactly one place per service** (`StartupRequirementsValidator` in Java, the model validator in `config.py`), not in nested Bean Validation annotations. | My first draft put `@NotBlank` on nested `Database`/`AiService` records and it **silently did nothing** — nested constraints do not cascade without `@Valid`. Enforcing nothing while advertising it is the same class of defect found in the old project (an `EXPIRED` status no sweeper ever set). The consolidated validator reports every problem at once, names variables instead of values, and is covered by 12 tests |
+| 2026-09-29 | **Backend uses `spring-boot-starter-jdbc` (Hikari + `JdbcTemplate`), not JPA, in Phase 1.** | There are no entities yet. `starter-data-jpa` would add an ORM with nothing to map. The readiness probe needs only a connection, which JDBC provides |
+| 2026-09-29 | **Container liveness must never include the database.** `/actuator/health/liveness` = `livenessState,ping`; `/actuator/health/readiness` = `readinessState,db`. | A DB outage would otherwise make the orchestrator restart perfectly healthy processes in a loop. Verified: with MySQL unreachable, liveness is `UP` and readiness is `DOWN`. The default `probes.enabled: true` alone was **not** sufficient — it put the db indicator in readiness but left the aggregate `/actuator/health` DOWN, which is what a naive healthcheck polls |
+| 2026-09-29 | **Health and ready are mapped at both `/health` and `/api/v1/health`.** | Root paths are what container and orchestrator probes expect; the prefixed paths are what the Next.js same-origin rewrite can actually forward. One handler, two path forms |
+| 2026-09-29 | **The AI service gets no CORS layer.** It uses `TrustedHostMiddleware` + `X-API-Key` and is not published to any host port in compose. | The browser never calls it — Spring is the only client. CORS there would be dead surface on a service that holds provider credentials. `ALLOWED_HOSTS` rejects foreign `Host` headers (tested: 400), closing DNS-rebinding |
+| 2026-09-29 | **Provider SDKs (`google-genai`, `firecrawl`) moved to a `collection` extra; base install is FastAPI/uvicorn/Pydantic/python-dotenv only.** | Phase 1 makes no provider calls, and pinning wheels that may not exist for the installed interpreter makes the skeleton unbuildable. Deliberately reversible, not a permanent decision — they return in Phase 2 |
+| 2026-09-29 | **`scripts/verify.sh` is the single aggregate gate for all three layers, printing counts and explicit `SKIP` reasons.** | The old project had eight disconnected scripts and no aggregate entry point, which is how "213 tests pass, 0 lint errors, typechecks cleanly" survived in its memory file after none of it was true. See `N` §N.4 |
+
+| 2026-09-29 | **Add extraction gate 3 — a completeness critique inside the research loop** — ported as a pattern from `data-enrichment-js` `graph.ts:114-136,155-225,266-291`, not copied. Gates 1 (schema-validate) and 2 (no answer before data) catch malformed or fabricated shape; neither catches *well-shaped but hollow* data. | The one genuinely non-duplicative idea in either new repository. Bounded on **every** path (unlike the original, whose bound guards only the critique exit), and exhaustion must yield `FAILED` / `COMPLETED_WITH_WARNINGS`, never a silent green. Deterministic gate 1 stays mandatory and first, so an LLM judge can add work but can never approve alone |
+| 2026-09-29 | **Firecrawl remains the sole web engine; Bright Data and Tavily are rejected outright.** | Redundancy plus a governance conflict: `ai-data-enrichment-agent` describes its Bright Data unlocker as *"bypassing anti-bot protection"* (`enrichment_agent.py:40`), which would make our `allowCaptchaBypass=false` safety literal a lie. The brief permits a second engine only for a genuinely missing capability; none was found. `data-enrichment-js`'s own scraper is a bare `fetch` with no SSRF guard, no robots check, no timeout, and no `response.ok` test (`tools.ts:44-70`) — strictly worse than Firecrawl and unsafe to imitate |
+| 2026-09-29 | **Nothing from the new repositories stays in TypeScript; no fourth runtime.** | Verified: `workflow.compile()` is called with no checkpointer (`graph.ts:309`), `src/` writes nothing to disk, and the three nodes plus two routers reduce to a while-loop over a message list with an integer counter. Wrapping ~700 LangGraph lines in a Node service to preserve a language choice would recreate exactly the two-orchestrators problem Phase 0 rejected (`A` §A.1) |
+
+| 2026-09-29 | **Two nesting levels, not two orchestrators:** Spring owns the outer plan DAG (`SEARCH → SCRAPE → EXTRACT → … → SAVE`, persisted, auditable); the `data-enrichment-js` research graph lives *inside* a single `EXTRACT` step in Python, ephemeral and bounded. | The master instruction names `data-enrichment-js` the primary research foundation and forbids collapsing it into one LLM call, while Phase 0 forbids two orchestrators. Nesting satisfies both: Spring never re-implements the research loop, and Python never decides whether a step runs. Full node-by-node mapping in `O` §O.12 |
 
 ## 4. Database / Schema Changes
 
-None yet. `docs/audit/E-database-model.md` specifies the target: 21 tables across 7 Flyway
+**No tables were created in Phase 1 — there is no schema yet.** Flyway was deliberately not
+added until there is a migration to run; wiring it with zero migrations would have been
+configuration nobody exercises.
+
+`docs/audit/E-database-model.md` specifies the target: 21 tables across 7 Flyway
 migrations (`V1__baseline_identity` … `V7__seed_dev`), translated from the old project's 16
 Prisma models plus three new tables — `workflow_jobs` (the MySQL queue), `refresh_tokens`
 (replaces Redis revocation) and `source_domain_policy` (per-domain governance config).
+
+What Phase 1 did establish about the database: the backend binds `MYSQL_HOST/PORT/DATABASE/USER/
+PASSWORD` into a Hikari `DataSource` (`initialization-fail-timeout: -1`, so an unreachable server
+degrades to a `503 /ready` rather than a stack trace at boot), and `database/` holds a disposable
+MySQL 8.4 container plus a read-only `smoke-test.sql`. Neither has been executed: Docker is absent
+and no database user matches the configured credentials.
 
 ## 5. Known Bugs / Issues / Verification Limits
 
@@ -95,16 +195,70 @@ Carried from the audit as things the rebuild must **not** reproduce:
     ever adds the class, and there is no `next-themes`.
 14. **No-op Tailwind classes** — `shadow-xs`, `h-4.5`, `w-4.5`, `translate-x-5.5` do not exist in
     Tailwind v3 or the project config and silently render nothing.
+15. **The old project does not build in this checkout.** `node_modules/@aidp/backend` and
+    `node_modules/@aidp/firecrawl-agent-core` are empty real directories (0 entries), not workspace
+    links, so `@aidp/firecrawl-agent-core` is unresolvable: `npm run typecheck` exits 1 with
+    10 × `TS2307`. `package-lock.json` is correct — nested `npm install` runs
+    (`backend/node_modules`, `packages/firecrawl-agent-core/node_modules`) alongside the root
+    workspace install are what desynced it. Measured 2026-09-29.
+16. **Its recorded quality baseline is not reproducible.** `npm run lint` → 14 errors;
+    `npm run lint:frontend` → 32 errors; `npm run test` → 3 of 20 suites fail to load,
+    **195 passed / 202 collected** against a claimed 213.
+17. **Orphaned / absent scripts.** `backend/src/scripts/check-apis.ts` is not referenced by any npm
+    script; `PirateAgentUI` has no `typecheck` script; `docs:generate` exists in `backend` but is
+    not surfaced at the root, and there is no aggregate `verify` command.
+18. **Two minor dependency defects.** `@types/bcryptjs@2.4.6` is installed for `bcryptjs@3.0.3`,
+    which ships its own types — the stale DefinitelyTyped package shadows them. `recharts` is
+    declared in the frontend and imported nowhere.
+19. **25 MB duplicate tree excluded only locally.** `.kilo/worktrees/extreme-apogee/` contains a
+    full copy of the project plus all four reference repos, excluded via `.git/info/exclude` — which
+    is **not shared on clone**, so a fresh checkout shows it as untracked. It should be in
+    `.gitignore`. Note: `FINALAIAGENT/.gitignore` was created in this session for exactly that
+    reason.
+
+### Defects found and fixed during Phase 1 (all by running, not reading)
+
+| # | Defect | How it surfaced |
+|---|---|---|
+| P1 | **Nested Bean Validation was inert** — `@NotBlank` on `Database`/`AiService` records never ran without `@Valid` cascade, so the annotations were decoration. | Writing a test for a blank field and watching it pass |
+| P2 | **Jackson serialized a derived `up` boolean** into every readiness component (`isUp()` on a record is a getter), duplicating `status` and diverging from the documented contract. | Inspecting the real `/api/v1/ready` body |
+| P3 | **Aggregate `/actuator/health` went `DOWN` with MySQL unreachable** even after enabling probe groups, so any healthcheck polling it restart-loops healthy containers. | Probing `/actuator/health` directly |
+| P4 | **`scripts/_common.sh` `load_env` exported blank `.env` assignments**, overriding a real `GEMINI_API_KEY` already in the environment and making the AI service refuse to start for what looked like a missing credential. | `dev-ai.sh` failing after the bootstrap created an empty `GEMINI_API_KEY=` line |
+| P5 | **Python mask regex reused the Java group indices.** The Java alternation captures, the Python one is non-capturing, so `m.group(5)` raised `IndexError` and every masked log line would have crashed the formatter. | `test_logging.py` |
+| P6 | **Framework 404s bypassed the shared error envelope** — FastAPI resolves handlers by exact exception type, so registering only `fastapi.HTTPException` left Starlette's routing 404 returning `{"detail": …}`. | `test_health.py` |
+| P7 | **`mvn package` left a 37 KB thin, non-bootable jar** because a running `java -jar` locks the artifact on Windows and the repackage step failed with its output hidden by a pipe. Cost a wasted debugging cycle against a "silent" server. | `no main manifest attribute` in the boot log |
+
+None of these were visible from the source alone. The lesson from `N` §N.6 held: run it.
 
 Environment limits affecting verification:
 
 - **Docker is not installed**, so Testcontainers is unavailable. Integration tests must run
   against the native MySQL 9.6 service on a disposable schema, gated by a property. Reports must
   state which tests ran and which were skipped.
-- **Python 3.14.6 is installed but too new**; bare `python` resolves to the Windows Store alias
-  and fails (`py` works). Python 3.12 must be installed before Phase 1.
+- **Python 3.14.6 is installed**, not 3.12. The Phase 1 base install (FastAPI, uvicorn, Pydantic
+  v2, pydantic-settings, python-dotenv) resolved and tested cleanly on it — 31 passed. The
+  **provider SDKs were never attempted**, which is why they sit in the `collection` extra. Install
+  3.12 before the Phase 2 spike. Bare `python` still resolves to the Windows Store alias; use `py`.
+- **Phase 1 limits, stated plainly:**
+  - `/api/v1/ready` has **never returned 200**. Every Phase 1 run reported `mysql: DOWN` because
+    `MYSQL_USER`/`MYSQL_PASSWORD` in `.env` match no account on the native `MySQL96` service. The
+    probe reaches the server and reports the reason, which is the intended behaviour, but the
+    criterion "all three processes start and `/ready` returns 200" is **not met**.
+  - No `database/smoke-test.sql` execution and no Testcontainers: Docker is absent.
+  - Nothing in `deploy/` or the three `Dockerfile`s has been built.
+  - `GEMINI_API_KEY` is present in the developer's shell environment. Phase 1 made **no provider
+    call**, so it was neither used nor billed.
+  - Frontend `npm run lint` reports **5 warnings** (custom font, three `<img>`, one
+    `exhaustive-deps`) inside verbatim-copied design files. Left unfixed on purpose: editing them
+    would break byte-identical preservation of the design system. Zero errors.
+  - Phase 1 code is **uncommitted** on the `implementjava` branch.
 - **No live external API call has been made during this audit.** Firecrawl and Gemini behaviour is
   documented from SDK/docs inspection, not execution. Phase 2 exists to verify it.
+- **Not run, on purpose:** `npm run build` (writes `backend/dist`) and `next build` (writes
+  `.next/`) in the *old* project — the audit is of the checkout as delivered, and those would have
+  modified it. Its "production build succeeds" claim is therefore recorded as **unverified**,
+  alongside the failures that were measured. `backend/dist` exists with 84 files and no newer
+  `src/`, so a build did succeed at some point while the workspace links were alive.
 
 ## 6. Open Decisions
 
@@ -112,24 +266,77 @@ Environment limits affecting verification:
 |---|---|---|
 | **G1** | With `DEMO_MODE` removed, how will this be demonstrated to judges? (a) test fixtures + run replay *(recommended)*, (b) guarded `SYNTHETIC_MODE` that can never trigger on a missing key, (c) funded keys and demo live. See `docs/audit/L-risks.md` R8 | **Awaiting user decision** |
 | **G2** | Is the Firecrawl Python SDK's `interact` sufficient? Fallback is the Express sidecar implementing `agent-core/openapi.yaml` — a fourth runtime requiring its own recorded decision. See `docs/audit/I-firecrawl-integration.md` §I.6 | **Deferred to the Phase 2 spike** |
+| **B1** | `finalagent_dev` needs a MySQL account the application can connect as, or `/ready` can never return 200. Options: (a) create a user on the native `MySQL96` service (needs its credentials — I will not guess them), (b) install Docker and use `database/docker-compose.yml`, which mints the user from `.env`. | **Blocking the last Phase 1 exit criterion — awaiting user choice** |
+| **L1** | Both new repositories have unresolved licences: `data-enrichment-js-main` claims `"license": "MIT"` in `package.json:7` with **no licence text anywhere in the tree**, and `ai-data-enrichment-agent-main` has **no licence at all**. May we adapt logic from either? Options: (a) treat a `package.json` declaration as sufficient, as already done for `web-agent-main` under R2, (b) verify upstream terms before Phase 2, (c) re-implement gate 3 from the behavioural description in `O` §O.4 without translating their source. | **Awaiting user ruling** (R28, R29) |
+
+| **L2** | Phase 2 research graph: depend on the `langgraph` PyPI package, or express the same topology as a plain Python state machine? Evidence says nothing in `data-enrichment-js` needs the runtime (no checkpointer, no disk writes, no interrupts — `O` §O.12), so a state machine preserves the graph without a new heavy dependency. Either satisfies the master instruction | **Decision needed before Phase 2 coding** |
 
 ## 7. Environment / How to Run
 
-Nothing to run yet. Target toolchain, verified present on this machine:
+Toolchain on this machine, all verified present and used by the Phase 1 run:
 
 | Tool | Version | Status |
 |---|---|---|
-| Java | 21.0.8 LTS | present |
-| Maven | 3.9.11 | present |
-| Node / npm | 24.19.0 / 11.17.0 | present |
-| MySQL | 9.6.0, service `MySQL96`, listening on 3306 + 33060 | present and running |
-| Docker | — | **not installed** |
-| Python | 3.14.6 at `…\Programs\Python\Python314`, pip 26.1.2 | present but **3.12 required**; `python` shadowed by the Windows Store alias |
+| Java | 21.0.8 LTS | used to compile and run the backend |
+| Maven | 3.9.11 | used for `test` / `package` / `spring-boot:run` |
+| Node / npm | 24.19.0 / 11.17.0 | used for install, typecheck, lint, build, dev server |
+| Python | 3.14.6 (`py`); pip 26.1.2 | used via `ai-service/.venv`; **3.12 still required for the provider extra** |
+| MySQL | 9.6.0, service `MySQL96`, port 3306 | running, reachable, **no matching application user** |
+| Docker | — | **not installed**; nothing in `database/` or `deploy/` has been built |
 
-Environment variables are specified in `docs/audit/K-environment-variables.md`. No `.env` exists
-in this project yet, and no secret value is recorded in any file here.
+### First time
+
+```bash
+bash scripts/bootstrap-env.sh                 # creates .env, generates secrets, never prints them
+cd ai-service && py -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
+cd frontend && npm install
+```
+
+### Run
+
+```bash
+bash scripts/dev-ai.sh                        # http://localhost:8000  (AI_SERVICE_PORT)
+bash scripts/dev-backend.sh                   # http://localhost:8080  (SERVER_PORT)
+bash scripts/dev-frontend.sh                  # http://localhost:3000; add `-- -p 3210` if busy
+bash scripts/verify.sh                        # 27 backend + 31 python + 3 frontend gates
+bash scripts/verify.sh backend                # one layer
+```
+
+Ports are 8080 / 8000 / 3000 and documented once, in `.env.example`. The old project's
+3000-vs-4000-vs-5173 mismatch is designed out: the frontend proxies `/api/v1/*` to
+`BACKEND_ORIGIN`, so the browser only ever sees one origin.
+
+### Secrets
+
+`.env` now exists at the repository root and contains generated secrets. It is **gitignored**
+(`git check-ignore -v .env` → `.gitignore:2:.env`), and because the root patterns carry no slash
+they also match `.env` and `.env.*` at every depth — `backend/.env`, `ai-service/.env` and
+`frontend/.env.local` are all ignored by that one file. Both example files stay committable via
+`!.env.example` and `!.env.*.example`, confirmed by `git status` listing them as untracked rather
+than by `check-ignore`, which prints the last matching pattern even when it is a negation.
+
+No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-Phase 1 — Foundation & skeleton (`docs/audit/M-phase-plan.md`). **Not started.** Per the
-discipline rule, it begins only after G1 is decided and Phase 0 is signed off.
+**Phase 2 — Provider spike (decision gate G2)**, `docs/audit/M-phase-plan.md`. Not started.
+
+Before it can finish cleanly:
+
+1. **B1** — a MySQL account for `finalagent_dev`, so `/ready` can be proven at 200 rather than
+   asserted. Nothing in Phase 2 needs it, but the schema phase does, and every phase after that
+   inherits an unverified database if it stays open.
+2. **G1** — still undecided; it does not block Phase 2 (which makes real calls) but it does shape
+   the demonstration story.
+3. Install Python 3.12 to resolve the `collection` extra (`google-genai`, `firecrawl==4.45.0`).
+4. Phase 2 should also promote those two packages from the extra into the base install once their
+   wheels are confirmed, so the deployed image is not silently missing them.
+
+Phase 1 left the following explicitly undone, on purpose: the Flyway schema, JPA entities, Spring
+Security and JWT, control docs (`PRD.md`, `Rules.md`, `Phases.md`), and any business endpoint.
+
+**Carried from Phase 1.5 into later phases:** extraction **gate 3** (completeness critique, bounded
+on every path, exhaustion never reported as success) is added as an exit criterion of **Phase 8 —
+Collection & extraction**, per `O` §O.9. The `O` §O.9 edits to `Architecture.md` and `Phases.md`
+are pending, because both files are still to be written. **L1** should be settled before Phase 2
+writes any code derived from `data-enrichment-js`.

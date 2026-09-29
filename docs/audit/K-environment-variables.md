@@ -49,8 +49,8 @@
 | `MYSQL_USER` | yes | — | |
 | `MYSQL_PASSWORD` | **yes** | — | No default. The old compose defaulted to `development-password` |
 | `SPRING_DATASOURCE_URL` | no | built from the `MYSQL_*` parts | Keep the old convenience of synthesizing the URL (`env.ts:99-105`), but never a default *credential* |
-| `JWT_ACCESS_SECRET` | **yes** | — | ≥32 chars, validated at startup, no fallback |
-| `JWT_REFRESH_SECRET` | **yes** | — | ≥32 chars, must differ from the access secret |
+| `JWT_ACCESS_SECRET` | **yes** *(auth phase)* | — | ≥32 chars, validated at startup, no fallback. Not read by anything before the authentication phase, so not yet required |
+| `JWT_REFRESH_SECRET` | **yes** *(auth phase)* | — | ≥32 chars, must differ from the access secret. Same deferral |
 | `JWT_ACCESS_TTL_MINUTES` | no | `15` | |
 | `JWT_REFRESH_TTL_DAYS` | no | `7` | |
 | `AI_SERVICE_BASE_URL` | yes | `http://localhost:8000` | internal only; never exposed to the browser |
@@ -94,58 +94,60 @@
 
 | Variable | Required | Default | Notes |
 |---|---|---|---|
-| `NEXT_PUBLIC_API_URL` | no | `/api/v1` | The **only** variable the browser sees. Currently the frontend has zero `process.env` references and hardcodes `http://localhost:4000` in `next.config.js:15-22` |
-| `API_PROXY_TARGET` | no | `http://localhost:8080` | dev-server rewrite target; server-side only |
+| `BACKEND_ORIGIN` | no | `http://localhost:8080` | Server-side only. The Next.js server rewrites `/api/v1/:path*` to it, so the browser needs no backend origin and receives no credential. **Renamed from the planned `API_PROXY_TARGET`; `NEXT_PUBLIC_API_URL` is dropped entirely** — with the rewrite in place there is no variable the browser must know, so there is no `NEXT_PUBLIC_*` surface at all. |
+
+**Build-time caveat found in Phase 1:** `next build` resolves the rewrite into
+`.next/routes-manifest.json` and `next start` never re-reads `next.config.js`. In compose,
+`BACKEND_ORIGIN` must therefore be supplied as **both** a build argument and a runtime
+environment variable; setting only the latter silently keeps the value baked into the image.
 
 No secret may ever be prefixed `NEXT_PUBLIC_`.
 
-## K.6 `.env.example` skeleton (committed; names only)
+## K.6 `.env.example`
 
-```dotenv
-# ---- shared ----
-APP_ENV=development
-LOG_LEVEL=info
-FRONTEND_ORIGIN=http://localhost:3000
+**The committed `.env.example` at the repository root is the single source of truth for variable
+names.** This document deliberately does not restate it — a second copy of the same list is
+exactly how the old project's 1,483-line hand-written `openapi.spec.ts` drifted from the routes it
+claimed to describe. Read `.env.example`; the tables above explain why each variable exists.
 
-# ---- MySQL (no Redis anywhere in this project) ----
-MYSQL_HOST=127.0.0.1
-MYSQL_PORT=3306
-MYSQL_DATABASE=finalagent_dev
-MYSQL_USER=
-MYSQL_PASSWORD=
+`scripts/bootstrap-env.sh` creates `.env` from it and generates `AI_SERVICE_API_KEY`,
+`MYSQL_PASSWORD` and `MYSQL_ROOT_PASSWORD`, then prints which names are still empty. It never
+prints a value.
 
-# ---- Spring Boot ----
-SERVER_PORT=8080
-JWT_ACCESS_SECRET=
-JWT_REFRESH_SECRET=
-AI_SERVICE_BASE_URL=http://localhost:8000
-AI_SERVICE_API_KEY=
-SOURCE_ROBOTS_USER_AGENT=FinalAgentBot/1.0 (+https://example.invalid/bot)
+Startup validation, as implemented and verified in Phase 1:
 
-# ---- FastAPI AI service ----
-GEMINI_API_KEY=
-FIRECRAWL_API_KEY=
-FIRECRAWL_BASE_URL=https://api.firecrawl.dev
-LLM_MODEL_ID=
-
-# ---- Next.js ----
-NEXT_PUBLIC_API_URL=/api/v1
-API_PROXY_TARGET=http://localhost:8080
-```
-
-Startup validation must assert: `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` present, ≥32 chars,
-and different; `GEMINI_API_KEY` and `FIRECRAWL_API_KEY` present and non-empty; the two
-`AI_SERVICE_API_KEY` values equal; `MYSQL_PASSWORD` non-empty. Any failure exits non-zero with a
-message naming the variable. `/ready` reports the same checks at runtime.
+| Rule | Enforced by | Verified how |
+|---|---|---|
+| `AI_SERVICE_API_KEY` present, ≥32 chars, not a placeholder | `StartupRequirementsValidator` + `app/config.py` | **exit 1 observed** |
+| `MYSQL_PASSWORD` present, ≥8 chars, not a placeholder | same | **exit 1 observed** |
+| `MYSQL_USER`, `MYSQL_HOST`, `MYSQL_DATABASE` present | same | unit-tested |
+| `GEMINI_API_KEY` / `FIRECRAWL_API_KEY` present, ≥12 chars, not a placeholder | `app/config.py` | **exit 1 observed** |
+| `FRONTEND_ORIGIN` an exact origin — no wildcard, no path | `StartupRequirementsValidator` | unit-tested |
+| `AI_SERVICE_BASE_URL` absolute http(s) | same | unit-tested |
+| Port and timeout ranges | same + `app/config.py` | unit-tested |
+| Placeholder values rejected (`REPLACE_ME`, `changeme`, `insecure-default`, …) | both services | unit-tested |
+| Every problem reported at once; values never echoed into the message | both services | unit-tested |
+| The two `AI_SERVICE_API_KEY` values agree | `X-API-Key` constant-time compare | **401 observed** |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` present, ≥32, distinct | **deferred to the authentication phase** | nothing reads them yet, so requiring them now would be theatre |
 
 ## K.7 Local setup notes (from the environment audit)
 
-- **MySQL** 9.6 is already installed and listening on 3306 (service `MySQL96`). Create
-  `finalagent_dev` there. `docker-compose.yml` should pin `mysql:8.4` as the supported baseline.
-- **Docker is not installed**, so compose-based setup is unavailable locally; run the three
-  processes directly.
-- **Python**: bare `python` resolves to the Windows Store alias and fails. Use `py -3.12` or a
-  venv, and install 3.12 — the present 3.14.6 is too new for reliable wheels.
-- **Java 21** and **Maven 3.9.11** are present and correct.
+- **MySQL** 9.6 is installed and listening on 3306 (service `MySQL96`). `finalagent_dev` still has
+  no matching application user, so `/ready` reports `mysql: DOWN` locally until one is granted;
+  that is the honest state, not a defect. `database/docker-compose.yml` publishes its own
+  container on host **3307** so it can sit alongside the native service.
+- **Docker is not installed**, so nothing in `database/` or `deploy/` has been built. Run the
+  three processes directly via `scripts/dev-*.sh`.
+- **Python**: bare `python` resolves to the Windows Store alias and fails; use `py`. Phase 1 was
+  installed and tested on **3.14.6** and the base dependencies (FastAPI, uvicorn, Pydantic v2,
+  pydantic-settings, python-dotenv) resolved cleanly. The **provider SDKs** — `google-genai`,
+  `firecrawl==4.45.0` — sit in the `collection` extra precisely because their wheels are the part
+  not verified on 3.14. **3.12 remains the pinned deployment interpreter**; install it before the
+  Phase 2 provider spike.
+- **Java 21** (21.0.8) and **Maven 3.9.11** are present and correct; the backend is built and run
+  with them.
+- **Windows file locking**: a running `java -jar target/…jar` prevents Maven from replacing that
+  jar, and `mvn package` then leaves a thin, non-bootable artifact behind. Stop the process before
+  rebuilding. This cost a wasted debugging cycle in Phase 1.
 
 Next: `L-risks.md`.
