@@ -84,6 +84,43 @@ public final class Json {
         }
     }
 
+    /**
+     * A decoded JSON value re-read as one of the wire DTOs, and the mirror image of {@link #write}.
+     *
+     * <p>It exists for the step-to-step handoff: an earlier step stored a typed pipeline result in
+     * its output column, and the step after it needs the typed object back rather than a hand walk
+     * over {@code Map<String, Object>} that would miss whichever key nobody thought to test.
+     */
+    public static <T> T convert(Object value, Class<T> type) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return MAPPER.convertValue(value, type);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(type.getSimpleName() + " cannot be read from stored JSON: "
+                    + e.getMessage(), e);
+        }
+    }
+
+    /** A stored JSON array re-read as a list of one DTO; absent means empty, never null. */
+    public static <T> List<T> list(Object value, Class<T> elementType) {
+        if (value == null) {
+            return List.of();
+        }
+        if (!(value instanceof List<?>)) {
+            throw new IllegalStateException("expected a JSON array of " + elementType.getSimpleName()
+                    + ", found " + value.getClass().getSimpleName());
+        }
+        try {
+            return MAPPER.convertValue(value, MAPPER.getTypeFactory()
+                    .constructCollectionType(java.util.ArrayList.class, elementType));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalStateException(elementType.getSimpleName()
+                    + " list cannot be read from stored JSON: " + e.getMessage(), e);
+        }
+    }
+
     public static String shortHash(String canonical) {
         try {
             var digest = java.security.MessageDigest.getInstance("SHA-256");

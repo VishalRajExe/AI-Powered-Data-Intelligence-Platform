@@ -1,0 +1,972 @@
+{
+  "generatedBy": "ai-service/tests/test_quality_wire_fixture.py",
+  "regenerate": "FINALAGENT_UPDATE_QUALITY_FIXTURE=true pytest -q tests/test_quality_wire_fixture.py",
+  "request": {
+    "entityType": "funded_company",
+    "objective": "list funded European deep-tech companies with their last round",
+    "fields": [
+      {
+        "key": "company_name",
+        "label": "Company",
+        "type": "STRING",
+        "required": true
+      },
+      {
+        "key": "website",
+        "label": "Website",
+        "type": "URL"
+      },
+      {
+        "key": "contact_email",
+        "label": "Contact",
+        "type": "EMAIL"
+      },
+      {
+        "key": "last_round",
+        "label": "Last round",
+        "type": "CURRENCY"
+      },
+      {
+        "key": "employee_count",
+        "label": "Employees",
+        "type": "NUMBER"
+      },
+      {
+        "key": "founded",
+        "label": "Founded",
+        "type": "DATE"
+      },
+      {
+        "key": "hiring",
+        "label": "Hiring",
+        "type": "BOOLEAN"
+      }
+    ],
+    "requiredFields": [
+      "company_name"
+    ],
+    "deduplicationKeys": [
+      "website"
+    ],
+    "validationRules": [
+      {
+        "rule": "min",
+        "field": "employee_count",
+        "params": {
+          "value": 1
+        }
+      },
+      {
+        "rule": "url_live",
+        "field": "website",
+        "params": {}
+      }
+    ],
+    "extractionSchema": {
+      "type": "object",
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "company_name": {
+                "type": "string"
+              },
+              "website": {
+                "type": "string"
+              },
+              "contact_email": {
+                "type": "string"
+              },
+              "last_round": {
+                "type": "string"
+              },
+              "employee_count": {
+                "type": "string"
+              },
+              "founded": {
+                "type": "string"
+              },
+              "hiring": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "records": [
+      {
+        "values": {
+          "company_name": "Northwind Labs",
+          "website": "https://northwind.test",
+          "contact_email": "hello@northwind.test",
+          "last_round": {
+            "amount": "4.5M",
+            "currency": "USD"
+          },
+          "employee_count": 42,
+          "founded": "2019",
+          "hiring": true,
+          "source_page": "Series B announcement"
+        },
+        "sources": [
+          {
+            "url": "https://northwind.test/about",
+            "title": "about",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": true
+          },
+          {
+            "url": "https://techcrunch.test/northwind-b",
+            "title": "northwind-b",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": true
+          }
+        ]
+      },
+      {
+        "values": {
+          "company_name": "northwind labs ",
+          "website": "https://northwind.test/",
+          "employee_count": "39"
+        },
+        "sources": [
+          {
+            "url": "https://northwind.test/careers",
+            "title": "careers",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": true
+          }
+        ]
+      },
+      {
+        "values": {
+          "company_name": "Northwind Robotics",
+          "website": "https://northwind-robotics.test",
+          "contact_email": "HELLO@northwind.test ",
+          "last_round": {
+            "amount": 6000000,
+            "currency": "usd"
+          },
+          "employee_count": "79,90"
+        },
+        "sources": [
+          {
+            "url": "https://linkedin.test/company/northwind",
+            "title": "northwind",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-03T09:00:00Z",
+            "verifiedByTool": true
+          }
+        ]
+      },
+      {
+        "values": {
+          "company_name": "Vantage Grid",
+          "website": "https://vantagegrid.test",
+          "last_round": {
+            "amount": 1200000,
+            "currency": "EUR"
+          }
+        },
+        "sources": [
+          {
+            "url": "https://twitter.test/vantagegrid",
+            "title": "vantagegrid",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": false
+          }
+        ]
+      },
+      {
+        "values": {
+          "company_name": "Halcyon Optics",
+          "website": "https://halcyonoptics.test"
+        },
+        "sources": []
+      },
+      {
+        "values": {
+          "website": "not a url",
+          "founded": "05/11/2024"
+        },
+        "sources": [
+          {
+            "url": "https://directory.test/listing-77",
+            "title": "listing-77",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": true
+          }
+        ]
+      }
+    ],
+    "rawRecordCount": 6
+  },
+  "response": {
+    "status": "COMPLETED_WITH_WARNINGS",
+    "records": [
+      {
+        "index": 0,
+        "values": {
+          "company_name": "Northwind Labs",
+          "website": "https://northwind.test/",
+          "contact_email": "hello@northwind.test",
+          "last_round": {
+            "amount": "4.5M",
+            "currency": "USD"
+          },
+          "employee_count": 42,
+          "founded": "2019",
+          "hiring": true,
+          "source_page": "Series B announcement"
+        },
+        "rawValues": {
+          "company_name": "Northwind Labs",
+          "website": "https://northwind.test",
+          "contact_email": "hello@northwind.test",
+          "last_round": {
+            "amount": "4.5M",
+            "currency": "USD"
+          },
+          "employee_count": 42,
+          "founded": "2019",
+          "hiring": true,
+          "source_page": "Series B announcement"
+        },
+        "sources": [
+          {
+            "url": "https://northwind.test/about",
+            "title": "about",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": true
+          },
+          {
+            "url": "https://techcrunch.test/northwind-b",
+            "title": "northwind-b",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": true
+          },
+          {
+            "url": "https://northwind.test/careers",
+            "title": "careers",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": true
+          },
+          {
+            "url": "https://linkedin.test/company/northwind",
+            "title": "northwind",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-03T09:00:00Z",
+            "verifiedByTool": true
+          }
+        ],
+        "isValid": false,
+        "issues": [
+          {
+            "ruleCode": "TYPE",
+            "severity": "ERROR",
+            "message": "'last_round' has a non-numeric amount: '4.5M'",
+            "fieldKey": "last_round"
+          },
+          {
+            "ruleCode": "DATE_PRECISION",
+            "severity": "INFO",
+            "message": "'founded' is '2019': the source gave less than a full day, and the missing part was not invented",
+            "fieldKey": "founded"
+          },
+          {
+            "ruleCode": "RULE_NOT_EXECUTED",
+            "severity": "WARNING",
+            "message": "validation rule 'url_live' is not implemented by this service and was not executed; it was not treated as passing",
+            "fieldKey": "website"
+          }
+        ],
+        "verificationStatus": "CONFLICTED",
+        "evidence": {
+          "sourceCount": 4,
+          "verifiedSourceCount": 4,
+          "unverifiedSourceCount": 0,
+          "distinctDomains": 3,
+          "fieldsWithEvidence": 0
+        },
+        "confidence": 0.8,
+        "duplicateOf": null,
+        "duplicateKey": null,
+        "matchType": null,
+        "reviewRequired": false,
+        "reviewReasons": [],
+        "conflicts": [
+          {
+            "fieldKey": "employee_count",
+            "keptValue": 42,
+            "rejectedValue": 39,
+            "keptSources": [
+              "https://northwind.test/about",
+              "https://techcrunch.test/northwind-b"
+            ],
+            "rejectedSources": [
+              "https://northwind.test/careers"
+            ],
+            "resolvedBy": "evidence-count"
+          },
+          {
+            "fieldKey": "company_name",
+            "keptValue": "Northwind Labs",
+            "rejectedValue": "Northwind Robotics",
+            "keptSources": [
+              "https://northwind.test/about",
+              "https://techcrunch.test/northwind-b",
+              "https://northwind.test/careers"
+            ],
+            "rejectedSources": [
+              "https://linkedin.test/company/northwind"
+            ],
+            "resolvedBy": "evidence-count"
+          },
+          {
+            "fieldKey": "website",
+            "keptValue": "https://northwind.test/",
+            "rejectedValue": "https://northwind-robotics.test/",
+            "keptSources": [
+              "https://northwind.test/about",
+              "https://techcrunch.test/northwind-b",
+              "https://northwind.test/careers"
+            ],
+            "rejectedSources": [
+              "https://linkedin.test/company/northwind"
+            ],
+            "resolvedBy": "evidence-count"
+          },
+          {
+            "fieldKey": "last_round",
+            "keptValue": {
+              "amount": "4.5M",
+              "currency": "USD"
+            },
+            "rejectedValue": {
+              "amount": 6000000,
+              "currency": "usd"
+            },
+            "keptSources": [
+              "https://northwind.test/about",
+              "https://techcrunch.test/northwind-b",
+              "https://northwind.test/careers"
+            ],
+            "rejectedSources": [
+              "https://linkedin.test/company/northwind"
+            ],
+            "resolvedBy": "evidence-count"
+          },
+          {
+            "fieldKey": "employee_count",
+            "keptValue": 42,
+            "rejectedValue": "79,90",
+            "keptSources": [
+              "https://northwind.test/about",
+              "https://techcrunch.test/northwind-b",
+              "https://northwind.test/careers"
+            ],
+            "rejectedSources": [
+              "https://linkedin.test/company/northwind"
+            ],
+            "resolvedBy": "evidence-count"
+          }
+        ],
+        "normalizationNotes": [
+          "website: URL canonicalized to 'https://northwind.test/'",
+          "founded: '2019' is not a recognized date; kept as written",
+          "website: URL canonicalized to 'https://northwind-robotics.test/'",
+          "employee_count: '79,90' uses a comma that could be a decimal point or a thousands separator; the number was not guessed"
+        ]
+      },
+      {
+        "index": 1,
+        "values": {
+          "company_name": "northwind labs",
+          "website": "https://northwind.test/",
+          "employee_count": 39
+        },
+        "rawValues": {
+          "company_name": "northwind labs ",
+          "website": "https://northwind.test/",
+          "employee_count": "39"
+        },
+        "sources": [
+          {
+            "url": "https://northwind.test/careers",
+            "title": "careers",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": true
+          }
+        ],
+        "isValid": true,
+        "issues": [
+          {
+            "ruleCode": "RULE_NOT_EXECUTED",
+            "severity": "WARNING",
+            "message": "validation rule 'url_live' is not implemented by this service and was not executed; it was not treated as passing",
+            "fieldKey": "website"
+          }
+        ],
+        "verificationStatus": "SOURCE_CITED",
+        "evidence": {
+          "sourceCount": 1,
+          "verifiedSourceCount": 1,
+          "unverifiedSourceCount": 0,
+          "distinctDomains": 1,
+          "fieldsWithEvidence": 0
+        },
+        "confidence": 0.8,
+        "duplicateOf": 0,
+        "duplicateKey": "n:https://northwind.test/",
+        "matchType": "NORMALIZED",
+        "reviewRequired": false,
+        "reviewReasons": [],
+        "conflicts": [],
+        "normalizationNotes": []
+      },
+      {
+        "index": 2,
+        "values": {
+          "company_name": "Northwind Robotics",
+          "website": "https://northwind-robotics.test/",
+          "contact_email": "hello@northwind.test",
+          "last_round": {
+            "amount": 6000000,
+            "currency": "usd"
+          },
+          "employee_count": "79,90"
+        },
+        "rawValues": {
+          "company_name": "Northwind Robotics",
+          "website": "https://northwind-robotics.test",
+          "contact_email": "HELLO@northwind.test ",
+          "last_round": {
+            "amount": 6000000,
+            "currency": "usd"
+          },
+          "employee_count": "79,90"
+        },
+        "sources": [
+          {
+            "url": "https://linkedin.test/company/northwind",
+            "title": "northwind",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-03T09:00:00Z",
+            "verifiedByTool": true
+          }
+        ],
+        "isValid": false,
+        "issues": [
+          {
+            "ruleCode": "CURRENCY_CODE",
+            "severity": "ERROR",
+            "message": "'last_round' carries 'usd', which is not an ISO-4217 three-letter code",
+            "fieldKey": "last_round"
+          },
+          {
+            "ruleCode": "TYPE",
+            "severity": "ERROR",
+            "message": "'employee_count' should be a number, found str: '79,90'",
+            "fieldKey": "employee_count"
+          },
+          {
+            "ruleCode": "RANGE",
+            "severity": "WARNING",
+            "message": "rule 'min' could not be applied to a non-numeric 'employee_count': '79,90'",
+            "fieldKey": "employee_count"
+          },
+          {
+            "ruleCode": "RULE_NOT_EXECUTED",
+            "severity": "WARNING",
+            "message": "validation rule 'url_live' is not implemented by this service and was not executed; it was not treated as passing",
+            "fieldKey": "website"
+          }
+        ],
+        "verificationStatus": "SOURCE_CITED",
+        "evidence": {
+          "sourceCount": 1,
+          "verifiedSourceCount": 1,
+          "unverifiedSourceCount": 0,
+          "distinctDomains": 1,
+          "fieldsWithEvidence": 0
+        },
+        "confidence": 0.6,
+        "duplicateOf": 0,
+        "duplicateKey": "email:hello@northwind.test",
+        "matchType": "ENTITY",
+        "reviewRequired": false,
+        "reviewReasons": [],
+        "conflicts": [],
+        "normalizationNotes": [
+          "website: URL canonicalized to 'https://northwind-robotics.test/'",
+          "employee_count: '79,90' uses a comma that could be a decimal point or a thousands separator; the number was not guessed"
+        ]
+      },
+      {
+        "index": 3,
+        "values": {
+          "company_name": "Vantage Grid",
+          "website": "https://vantagegrid.test/",
+          "last_round": {
+            "amount": 1200000,
+            "currency": "EUR"
+          }
+        },
+        "rawValues": {
+          "company_name": "Vantage Grid",
+          "website": "https://vantagegrid.test",
+          "last_round": {
+            "amount": 1200000,
+            "currency": "EUR"
+          }
+        },
+        "sources": [
+          {
+            "url": "https://twitter.test/vantagegrid",
+            "title": "vantagegrid",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": false
+          }
+        ],
+        "isValid": true,
+        "issues": [
+          {
+            "ruleCode": "RULE_NOT_EXECUTED",
+            "severity": "WARNING",
+            "message": "validation rule 'url_live' is not implemented by this service and was not executed; it was not treated as passing",
+            "fieldKey": "website"
+          },
+          {
+            "ruleCode": "SOURCE_EVIDENCE_UNVERIFIED",
+            "severity": "WARNING",
+            "message": "every source this record cites was reported by the model and never returned by a tool during the run",
+            "fieldKey": null
+          }
+        ],
+        "verificationStatus": "SOURCE_CITED_UNVERIFIED",
+        "evidence": {
+          "sourceCount": 1,
+          "verifiedSourceCount": 0,
+          "unverifiedSourceCount": 1,
+          "distinctDomains": 1,
+          "fieldsWithEvidence": 0
+        },
+        "confidence": 0.3,
+        "duplicateOf": null,
+        "duplicateKey": null,
+        "matchType": null,
+        "reviewRequired": false,
+        "reviewReasons": [],
+        "conflicts": [],
+        "normalizationNotes": [
+          "website: URL canonicalized to 'https://vantagegrid.test/'"
+        ]
+      },
+      {
+        "index": 4,
+        "values": {
+          "company_name": "Halcyon Optics",
+          "website": "https://halcyonoptics.test/"
+        },
+        "rawValues": {
+          "company_name": "Halcyon Optics",
+          "website": "https://halcyonoptics.test"
+        },
+        "sources": [],
+        "isValid": false,
+        "issues": [
+          {
+            "ruleCode": "RULE_NOT_EXECUTED",
+            "severity": "WARNING",
+            "message": "validation rule 'url_live' is not implemented by this service and was not executed; it was not treated as passing",
+            "fieldKey": "website"
+          },
+          {
+            "ruleCode": "SOURCE_EVIDENCE",
+            "severity": "ERROR",
+            "message": "the record cites no source at all, so nothing about it can be checked",
+            "fieldKey": null
+          }
+        ],
+        "verificationStatus": "UNSUPPORTED",
+        "evidence": {
+          "sourceCount": 0,
+          "verifiedSourceCount": 0,
+          "unverifiedSourceCount": 0,
+          "distinctDomains": 0,
+          "fieldsWithEvidence": 0
+        },
+        "confidence": null,
+        "duplicateOf": null,
+        "duplicateKey": null,
+        "matchType": null,
+        "reviewRequired": false,
+        "reviewReasons": [],
+        "conflicts": [],
+        "normalizationNotes": [
+          "website: URL canonicalized to 'https://halcyonoptics.test/'"
+        ]
+      },
+      {
+        "index": 5,
+        "values": {
+          "website": "not a url",
+          "founded": "05/11/2024"
+        },
+        "rawValues": {
+          "website": "not a url",
+          "founded": "05/11/2024"
+        },
+        "sources": [
+          {
+            "url": "https://directory.test/listing-77",
+            "title": "listing-77",
+            "snippet": "",
+            "sourceType": "scrape",
+            "retrievedAt": "2026-02-01T09:00:00Z",
+            "verifiedByTool": true
+          }
+        ],
+        "isValid": false,
+        "issues": [
+          {
+            "ruleCode": "REQUIRED",
+            "severity": "ERROR",
+            "message": "required field 'company_name' is absent or empty",
+            "fieldKey": "company_name"
+          },
+          {
+            "ruleCode": "FORMAT_URL",
+            "severity": "ERROR",
+            "message": "'website' is not an absolute http(s) URL: 'not a url'",
+            "fieldKey": "website"
+          },
+          {
+            "ruleCode": "FORMAT_DATE",
+            "severity": "ERROR",
+            "message": "'founded' is not an ISO date: '05/11/2024'",
+            "fieldKey": "founded"
+          },
+          {
+            "ruleCode": "RULE_NOT_EXECUTED",
+            "severity": "WARNING",
+            "message": "validation rule 'url_live' is not implemented by this service and was not executed; it was not treated as passing",
+            "fieldKey": "website"
+          }
+        ],
+        "verificationStatus": "SOURCE_CITED",
+        "evidence": {
+          "sourceCount": 1,
+          "verifiedSourceCount": 1,
+          "unverifiedSourceCount": 0,
+          "distinctDomains": 1,
+          "fieldsWithEvidence": 0
+        },
+        "confidence": 0.6,
+        "duplicateOf": null,
+        "duplicateKey": null,
+        "matchType": null,
+        "reviewRequired": false,
+        "reviewReasons": [],
+        "conflicts": [],
+        "normalizationNotes": [
+          "website: 'not a url' is not an absolute URL; kept as written",
+          "founded: '05/11/2024' is an ambiguous day/month order; kept as written"
+        ]
+      }
+    ],
+    "dataset": {
+      "columns": [
+        {
+          "key": "company_name",
+          "label": "Company",
+          "type": "STRING",
+          "required": true,
+          "position": 0
+        },
+        {
+          "key": "website",
+          "label": "Website",
+          "type": "URL",
+          "required": false,
+          "position": 1
+        },
+        {
+          "key": "contact_email",
+          "label": "Contact",
+          "type": "EMAIL",
+          "required": false,
+          "position": 2
+        },
+        {
+          "key": "last_round",
+          "label": "Last round",
+          "type": "CURRENCY",
+          "required": false,
+          "position": 3
+        },
+        {
+          "key": "employee_count",
+          "label": "Employees",
+          "type": "NUMBER",
+          "required": false,
+          "position": 4
+        },
+        {
+          "key": "founded",
+          "label": "Founded",
+          "type": "DATE",
+          "required": false,
+          "position": 5
+        },
+        {
+          "key": "hiring",
+          "label": "Hiring",
+          "type": "BOOLEAN",
+          "required": false,
+          "position": 6
+        },
+        {
+          "key": "source_page",
+          "label": "source_page",
+          "type": "STRING",
+          "required": false,
+          "position": 7
+        }
+      ],
+      "rows": [
+        {
+          "recordIndex": 0,
+          "values": {
+            "company_name": "Northwind Labs",
+            "website": "https://northwind.test/",
+            "contact_email": "hello@northwind.test",
+            "last_round": {
+              "amount": "4.5M",
+              "currency": "USD"
+            },
+            "employee_count": 42,
+            "founded": "2019",
+            "hiring": true,
+            "source_page": "Series B announcement"
+          }
+        },
+        {
+          "recordIndex": 3,
+          "values": {
+            "company_name": "Vantage Grid",
+            "website": "https://vantagegrid.test/",
+            "last_round": {
+              "amount": 1200000,
+              "currency": "EUR"
+            }
+          }
+        },
+        {
+          "recordIndex": 4,
+          "values": {
+            "company_name": "Halcyon Optics",
+            "website": "https://halcyonoptics.test/"
+          }
+        },
+        {
+          "recordIndex": 5,
+          "values": {
+            "website": "not a url",
+            "founded": "05/11/2024"
+          }
+        }
+      ]
+    },
+    "stages": [
+      {
+        "stage": "normalize",
+        "status": "COMPLETED",
+        "inputCount": 6,
+        "outputCount": 6,
+        "metrics": {
+          "declaredFields": 7,
+          "recordsWithChanges": 5,
+          "valuesNormalized": 8,
+          "keysOutsideTheContract": {
+            "source_page": 1
+          }
+        },
+        "notes": [
+          "1 value(s) arrived under keys the contract does not declare (source_page); they were kept and reported, not dropped"
+        ],
+        "error": null
+      },
+      {
+        "stage": "validate",
+        "status": "COMPLETED",
+        "inputCount": 6,
+        "outputCount": 6,
+        "metrics": {
+          "validRecords": 2,
+          "errors": 7,
+          "warnings": 8,
+          "rulesDeclaredButNotExecuted": {
+            "url_live": 6
+          }
+        },
+        "notes": [
+          "6 declared validation rule(s) could not be executed (url_live); they are reported as warnings and were not treated as passing"
+        ],
+        "error": null
+      },
+      {
+        "stage": "deduplicate",
+        "status": "COMPLETED",
+        "inputCount": 6,
+        "outputCount": 6,
+        "metrics": {
+          "duplicatesLinked": 1,
+          "blocksUsed": 11,
+          "oversizedBlocks": 0
+        },
+        "notes": [
+          "1 record(s) linked to a canonical row over website; none were deleted"
+        ],
+        "error": null
+      },
+      {
+        "stage": "resolve",
+        "status": "COMPLETED",
+        "inputCount": 6,
+        "outputCount": 6,
+        "metrics": {
+          "merged": 1,
+          "reviewRequired": 0,
+          "nameField": "company_name",
+          "comparisons": 1,
+          "blocksUsed": 8,
+          "oversizedBlocks": 0,
+          "threshold": 0.94
+        },
+        "notes": [],
+        "error": null
+      },
+      {
+        "stage": "merge",
+        "status": "COMPLETED",
+        "inputCount": 6,
+        "outputCount": 6,
+        "metrics": {
+          "recordsMerged": 2,
+          "conflictsRecorded": 5,
+          "missingFieldsFilled": 0,
+          "chainsCollapsed": 0,
+          "resolvedByRule": {
+            "evidence-count": 5
+          },
+          "linksApplied": 2,
+          "revalidatedRecords": 3
+        },
+        "notes": [
+          "5 field disagreement(s) preserved with both values and both source lists; resolved by evidence-count×5"
+        ],
+        "error": null
+      },
+      {
+        "stage": "score",
+        "status": "COMPLETED",
+        "inputCount": 6,
+        "outputCount": 6,
+        "metrics": {
+          "qualityScore": 0.5833,
+          "dimensions": {
+            "completeness": 0.75,
+            "validity": 0.25,
+            "uniqueness": 0.6667,
+            "consistency": 0.75,
+            "provenance": 0.5
+          },
+          "scoreBasis": "equal-weight mean of completeness, validity, uniqueness, consistency and provenance, each a ratio of measured counts; a summary heuristic, not a measurement of truth",
+          "recordConfidenceFormula": "record confidence = 0.5*verifiedSourceShare + 0.3*min(distinctDomains,3)/3 + 0.2*(1 if the record is valid else 0), clamped to [0,1]; derived from the evidence counts on the record itself, and absent when the record cites nothing"
+        },
+        "notes": [],
+        "error": null
+      }
+    ],
+    "quality": {
+      "rawCount": 6,
+      "normalizedCount": 6,
+      "validCount": 1,
+      "invalidCount": 3,
+      "duplicateCount": 2,
+      "reviewRequiredCount": 0,
+      "conflictCount": 5,
+      "sourceBackedCount": 3,
+      "qualityScore": 0.5833,
+      "scoreBasis": "equal-weight mean of completeness, validity, uniqueness, consistency and provenance, each a ratio of measured counts; a summary heuristic, not a measurement of truth",
+      "scoreComponents": {
+        "completeness": 0.75,
+        "validity": 0.25,
+        "uniqueness": 0.6667,
+        "consistency": 0.75,
+        "provenance": 0.5
+      },
+      "metrics": {
+        "canonicalRecords": 4,
+        "errors": 7,
+        "warnings": 8,
+        "issueCodes": {
+          "CURRENCY_CODE": 1,
+          "DATE_PRECISION": 1,
+          "FORMAT_DATE": 1,
+          "FORMAT_URL": 1,
+          "RANGE": 1,
+          "REQUIRED": 1,
+          "RULE_NOT_EXECUTED": 6,
+          "SOURCE_EVIDENCE": 1,
+          "SOURCE_EVIDENCE_UNVERIFIED": 1,
+          "TYPE": 2
+        },
+        "completenessBasis": [
+          "company_name"
+        ],
+        "fieldsWithOwnEvidence": 0,
+        "distinctSources": 6,
+        "verifiedSources": 5,
+        "provenanceScope": "FIELD_LEVEL_WHERE_DECLARED_OTHERWISE_RECORD_LEVEL",
+        "confidenceFormula": "record confidence = 0.5*verifiedSourceShare + 0.3*min(distinctDomains,3)/3 + 0.2*(1 if the record is valid else 0), clamped to [0,1]; derived from the evidence counts on the record itself, and absent when the record cites nothing"
+      }
+    },
+    "warnings": [
+      "1 value(s) arrived under keys the contract does not declare (source_page); they were kept and reported, not dropped",
+      "6 declared validation rule(s) could not be executed (url_live); they are reported as warnings and were not treated as passing",
+      "1 record(s) linked to a canonical row over website; none were deleted",
+      "5 field disagreement(s) preserved with both values and both source lists; resolved by evidence-count×5"
+    ],
+    "failureReason": null
+  }
+}

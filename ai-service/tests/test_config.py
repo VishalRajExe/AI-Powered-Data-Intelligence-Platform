@@ -180,3 +180,21 @@ def test_the_robots_error_policy_only_accepts_the_two_honest_options():
     with pytest.raises(Exception):
         construct(robots_on_error="ignore")
     assert construct(robots_on_error="allow").robots_on_error == "allow"
+
+
+def test_the_entity_threshold_that_would_merge_strangers_or_never_merge_anyone_is_refused():
+    """0.4 would call two unrelated names a possible match; 1.0 demands an exact string, which is
+    deduplication's job — and neither is a number an operator can reason about later."""
+    with pytest.raises(ConfigurationError, match="ENTITY_MATCH_THRESHOLD"):
+        construct(entity_match_threshold=0.4)
+    with pytest.raises(ConfigurationError, match="ENTITY_MATCH_THRESHOLD"):
+        construct(entity_match_threshold=1.5)
+    assert construct(entity_match_threshold=0.99).entity_match_threshold == 0.99
+
+
+def test_a_block_bound_smaller_than_a_pair_would_silently_compare_nothing():
+    with pytest.raises(ConfigurationError, match="QUALITY_MAX_BLOCK_SIZE"):
+        construct(quality_max_block_size=1)
+    with pytest.raises(ConfigurationError, match="QUALITY_MAX_BLOCK_SIZE"):
+        construct(quality_max_block_size=0)
+    assert construct(quality_max_block_size=2).quality_max_block_size == 2

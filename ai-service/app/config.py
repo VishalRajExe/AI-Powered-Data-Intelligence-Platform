@@ -139,6 +139,17 @@ class Settings(BaseSettings):
     min_relevance_score: float = 0.0
     max_candidates_per_search: int = 8
 
+    # --- data intelligence (Phase 8) ---
+    # Name similarity alone never merges two records: a shared stable identifier is required, and
+    # a pair that clears this threshold without one is marked for review instead. The default is
+    # the one the legacy resolver used (`EntityResolutionService.ts:24`), kept because it is
+    # conservative — a false merge is invisible afterwards, a false split is not.
+    entity_match_threshold: float = 0.94
+    # A blocking key shared by more records than this is reported and left uncompared. Without the
+    # bound, one pathological key (every record with an empty name) turns blocking into a quadratic
+    # scan the caller waits for.
+    quality_max_block_size: int = 400
+
     @field_validator("allowed_web_tools", mode="before")
     @classmethod
     def _split_tools(cls, value):
@@ -224,6 +235,15 @@ class Settings(BaseSettings):
         if len(self.robots_user_agent.split()) != 1:
             problems.append("ROBOTS_USER_AGENT must be a single token; robots.txt rules match on "
                             "user-agent substrings, and a phrase would match unpredictably.")
+
+        if not 0.5 <= self.entity_match_threshold <= 1.0:
+            problems.append("ENTITY_MATCH_THRESHOLD must be between 0.5 and 1.0; below 0.5 two "
+                            "unrelated names would be reported as a possible match, and 1.0 would "
+                            "require an exact string, which is deduplication's job, not this.")
+        if not 2 <= self.quality_max_block_size <= 100_000:
+            problems.append("QUALITY_MAX_BLOCK_SIZE must be between 2 and 100000; it is the bound "
+                            "that keeps one pathological blocking key from becoming a quadratic "
+                            "scan, so it cannot be smaller than a pair.")
 
         if problems:
             raise ConfigurationError(

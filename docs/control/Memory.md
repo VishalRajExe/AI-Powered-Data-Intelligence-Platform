@@ -12,41 +12,44 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 7 — Spring Boot workflow execution, **COMPLETE and live-verified against real
-  MySQL** for the first time in this project. Workflow → WorkflowPlan → WorkflowRun → WorkflowStep
-  → WorkflowJob are persisted tables; a Spring `TaskExecutor` worker pool claims MySQL-persisted
-  jobs under leases with no Redis anywhere. 185 backend tests pass, 30 of them against MySQL 9.6,
-  and the packaged jar was booted with the layer enabled. The web layer (Phases 4-5) remains
-  **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real search, scrape, session or
-  robots fetch has ever run from this project.
-- **Last updated:** 2026-09-29
+- **Current Phase:** 8 — Data intelligence pipeline, **complete and live-verified against real
+  MySQL** end to end: `collect → transform → validate`, where `transform` is the Python pipeline's
+  single pass and `validate` is Java's independent verdict on what it proposed. Nothing is stored as
+  a dataset yet — the pipeline's records travel through `workflow_steps.output_summary` — but the
+  advisory/authoritative split the architecture promised is now executable, not described.
+  247 backend tests pass (30 of them against MySQL 9.6), 349 ai-service tests pass, and the web
+  layer (Phases 4-5) remains **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real search,
+  scrape, session or robots fetch has ever run from this project.
+- **Last updated:** 2026-09-30
 - **Application code written:** three independent processes.
-  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 52 main source files, 20 test classes, 27 of
-    those files in the new `workflow/` package:
-    `domain` (state machines + row records), `repository` (the queue), `plan` (deterministic
-    planner), `execution` (worker, executor, lease guard, backoff, step handlers), `service`, `web`.
-  - `ai-service/` — FastAPI on Python 3.14 (3.12 pinned for deployment), 36 modules: config,
-    contracts, security, logging, `api/v1/{health,research,requirements}`, `llm/`, `firecrawl/`,
-    `extraction/`, `requirements/`, `research/` (graph, tools, state, prompts, skills, contracts)
-    and `curation/` (canonical, relevance, ranking, policy, robots, retry, queries, aggregation).
-    Unchanged by Phase 7 — Spring calls it, it calls nothing back.
+  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 58 main source files, 24 test classes;
+    `workflow/` (domain, repository, plan, execution, service, web) plus `quality/`
+    (`DeclaredContract`, `RowContractEnforcer`) and the `TRANSFORM` step handler.
+  - `ai-service/` — FastAPI on Python 3.14 (3.12 pinned for deployment), 46 modules: config,
+    contracts, security, logging, `api/v1/{health,research,requirements,quality}`, `llm/`,
+    `firecrawl/`, `extraction/`, `requirements/`, `research/` (graph, tools, state, prompts, skills,
+    contracts), `curation/` (canonical, relevance, ranking, policy, robots, retry, queries,
+    aggregation) and `quality/` (contracts, normalize, validate, dedupe, entity_resolution, merge,
+    score, pipeline).
   - `frontend/` — Next.js 14.2.35. PirateAgentUI design foundation copied byte-identically
-    (`diff -r` verified), 10 routes, `lib/api/` typed client.
+    (`diff -r` verified), 10 routes, `lib/api/` typed client. **Untouched by Phase 8** — the pipeline
+    is reached through the workflow API the frontend already calls.
   - Plus `database/`, `deploy/`, `scripts/`, `ai-service/skills/` (playbook loader docs), and the
     root `.env.example`.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
-  process; `scripts/verify.sh` runs every suite and now reports the MySQL-gated queue checks.
+  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated queue checks.
 - **Built:** the workflow planner and job engine, their schema and persistence, fetch-time source
-  governance (robots + domain policy + ranking + dedupe), and Java-side contract re-enforcement.
-- **Still not built:** dataset persistence (the collected records live in a step's JSON summary,
-  not in typed tables), the quality pipeline as a *stored* artefact (normalize / entity-resolve /
-  dedupe across runs), exports, SSE streaming (events are persisted and pollable, not pushed),
+  governance (robots + domain policy + ranking + dedupe), the six-stage data-intelligence pipeline,
+  and Java-side contract re-enforcement of the pipeline's own answer.
+- **Still not built:** dataset persistence (the pipeline's records live in a step's JSON summary,
+  not in typed tables), exports, SSE streaming (events are persisted and pollable, not pushed),
   host-resolution SSRF and per-domain rate, and authentication — which is what makes
-  `FINALAGENT_WORKSPACE_ID` a single-tenant stopgap rather than a design.
+  `FINALAGENT_WORKSPACE_ID` a single-tenant stopgap rather than a design. The browser
+  planner/critique loop (Phase 6 of the plan) is authorized and not started.
 - **Repository:** `FINALAIAGENT` is its own git repo, pushed to branch `implementjava` of
   `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git` after every phase, per the
   standing rule. Its history is independent of `main` (old project), which has never been touched
-  from here. Phase 7 is the next commit to make.
+  from here. Phase 8 is the next commit to make.
 - **Blocked on:** decisions **G1**, **G2**, **S1**, **Q1**, **Q2** and the **L1** licence ruling
   (§6); Python 3.12 before the provider extra is installed. **B1 (the MySQL account) is resolved**
   and no longer blocks anything.
@@ -389,6 +392,99 @@ existed, and that the system was production-ready — each contradicted by its o
   | old project (audit only) | `workflows.routes.ts:92` | progress synthesised from status (`COMPLETED→100, RUNNING→50, else 0`) | `RunRollup.derive`, `RunRepository.updateProgress` | **REPLACED.** Progress is the fraction of terminal steps, and the counters move by atomic SQL increments tied to the step transition that produced them |
   | old project (audit only) | `datasets.routes.ts:13`, `persistDataset` | client-supplied `workspaceId`; rows dropped when they lacked a verified source | `WorkflowService.workspace()`, `ValidateStepHandler` | **REJECTED.** The workspace comes from `FINALAGENT_WORKSPACE_ID` only, a foreign workspace id answers as not-found, and failing records are counted and reported, never deleted |
 
+- [x] **Phase 8 (2026-09-30) — Data intelligence pipeline.** `Raw Result → Normalize → Validate →
+      Deduplicate → Entity Resolution → Conflict Handling → Quality Report → Final Dataset`, running
+      as one Python pass behind `POST /ai/v1/quality/process` and one Java verdict behind a new
+      `TRANSFORM` workflow step. Source provenance survives every stage. Verified against five
+      dataset types, not only startups. Every number below came from a command run in this session.
+
+  The plan is now `collect → transform → validate` (`WorkflowPlanner.TRANSFORM_STEP`), and the split
+  is the one `A` §A.2 promised: Python proposes, Java disposes.
+
+  | Verification | Measured |
+  |---|---|
+  | Backend tests | `FINALAGENT_TEST_MYSQL=true mvn test` → **247 tests, 0 failures, 0 errors, 0 skipped** (was 185 after Phase 7; +62). Without the gate: 217 run, 30 report as skipped |
+  | Queue + lifecycle on real MySQL | **30/30** still green, MySQL **9.6.0** on 127.0.0.1:3306, now over the three-step plan (`WorkflowRunLifecycleMySqlTest` 16/16, `WorkflowQueueMySqlTest` 14/14) |
+  | AI service tests | `.venv/Scripts/python.exe -m pytest -q` → **349 passed, 8 skipped** (was 245/8; +104). Per file: pipeline 26, identity/dedupe/resolve/merge 27, normalize 20, validate 19, API 7, wire fixture 3, plus 2 new boot-bound checks in `test_config.py` |
+  | Frontend | `npm run typecheck`, `npm run lint`, `npm run build` all pass — untouched by this phase |
+  | Full gate | `FINALAGENT_TEST_MYSQL=true scripts/verify.sh` → 7/7 PASS |
+  | Backend jar | `target/backend-0.1.0.jar`, 29,907,273 bytes |
+  | Dataset types actually exercised | funded companies (currency + entity merge on email), job postings (salary parsing + a non-job flagged), YouTube channels (suffix expansion, URL identity), conference speakers (merge on email, **refuse** to merge on similar names), product SKUs (missing price never defaulted to 0), plus a parametrised "no record is dropped whatever its type" across all five |
+  | Pipeline runs once per run | `TRANSFORM` is a single call; `SAVE`/`EXPORT` remain absent from the plan rather than emitted-and-skipped, so the legacy double-execution at `workflow-runner.ts:160,164` cannot reappear |
+  | Nothing is dropped | asserted as arithmetic in `PipelineHandoffTest`: `rowsChecked + linkedDuplicates == records.size()` (4 + 2 = 6) on the real captured response |
+  | Cross-language contract | `backend/src/test/resources/wire/quality-process.json` is generated by the pipeline and pinned on **both** sides: `ai-service/tests/test_quality_wire_fixture.py` fails if the Python output drifts from the committed file, `QualityWireContractTest` fails if Java's DTOs stop binding it |
+
+  What the pipeline guarantees, each with a test naming it:
+
+  - **Duplicates are linked, never deleted** (`duplicateOf` + `matchType`; the dataset keeps one row
+    and the other record stays in the result pointing at it).
+  - **Invalid records are rows too**, flagged with their issues, because the caller decides what a
+    dataset may contain.
+  - **Nothing is invented.** Ambiguous `79,90` and `05/11/2024` are kept as written with a note rather
+    than guessed; a currency keeps its unit or has none; `confidence` is null when a record cites
+    nothing — a zero would read as "weak evidence" when the truth is "none".
+  - **Conflicts keep both values, both source lists, and the rule that chose** (`evidence-count`,
+    `recency`, `canonical-position`).
+  - **Provenance survives every stage**: merged canonicals carry the union of sources, and
+    `rawValues` is kept beside `values` so a surprising value can be traced to the rule.
+  - **A rule that could not be executed is a WARNING** (`RULE_NOT_EXECUTED`), never a silent pass.
+  - **The score names its own formula** (`scoreBasis`, `scoreComponents`) because it is a heuristic
+    over five measured ratios, not a measurement of truth.
+  - **A stage that died is a `FAILED` entry**, not a missing number — except `normalize`, whose
+    failure ends the run because there would otherwise be no records to report on.
+
+  Java's re-enforcement (`quality/RowContractEnforcer` + `quality/DeclaredContract`) is a second
+  opinion, not a copy: it reads the **plan's** typed field list, folds keys the way `fold_key` folds
+  them, and reports a disagreement in both directions — `ADVISORY_PASSED_HERE_REJECTED` (the
+  fabricated pass) and `ADVISORY_REJECTED_HERE_PASSED` (this gate being stricter than it needs to be).
+  On the captured six-record run the two disagree once, exactly where the pipeline called a record
+  valid whose only citation was never retrieved by a tool.
+
+  Defects **in my own Phase 8 code** found by compiling and running, not by reading:
+
+  | # | Defect | How it surfaced |
+  |---|---|---|
+  | P22 | **`RowContractEnforcer` reported only the first fault in a currency.** `{amount:"4.5M", currency:"usd"}` produced `CURRENCY_CODE` and swallowed the non-numeric amount, because `currencyFinding` returned on its first hit — so fixing the unit would leave a text amount in a numeric column with nothing said about it. Type rules now return a list. | `a_currency_amount_that_is_not_a_number_or_a_unit_that_is_not_iso4217_is_rejected` expected both codes and got one |
+  | P23 | **The `TRANSFORM` step re-added `recordsFound` and `recordsRaw` that `EXTRACT` had already counted,** so a three-step run would report twice the records it collected — the same class as P17, reintroduced by the new step. It now owns exactly one counter: duplicates linked. | `a_completed_run_stores_the_pipeline_records…` asserted the row count in the summary and found the run totals inflated |
+  | P24 | **`advisoryValidCount` in the `VALIDATE` summary read 0 for a pipeline that had reported 2.** The handoff re-parsed the *renamed* quality view (`advisoryValidCount`, not `validCount`) as a `Quality`, and Jackson silently filled the gap with a zero. The advisory counts are now read out of the view they came from instead of being reconstructed. | `theStepThatRanRecordedWhatItProduced…` against real MySQL, where the stored column showed `"advisoryValidCount": 0` |
+  | P25 | **`DeclaredContract.fromFields` mis-registered a required field that was not in the plan's field list** — an add/remove/add sequence that left the key in `types` but out of `keys`, so it would have been reported as an undeclared extra on every row. Found by re-reading the method against its own test before running anything. | `a_required_field_the_plan_never_typed_is_required_and_type_unchecked` |
+  | P26 | **The pipeline's record shape was being stored with renamed keys** (`isValid → advisoryValid`), which made the JSON column unreadable as the DTO the next step needed. `TRANSFORM` now stores the typed records exactly as the pipeline sent them and marks the verdict advisory in a separate summary key. | First draft of `ValidateStepHandler` could not reconstruct the records; caught while writing `the_records_are_stored_as_the_pipeline_sent_them…` |
+  | P27 | **Test-side assumption, not product-side:** the wire fixture expected a null `confidence` somewhere in the response and found none, because every record I had written cited at least one source. The null case is a record that cites *nothing*, so the fixture needed that record. | `test_the_fixture_carries_every_shape_the_java_dto_has_to_bind`; the added record is now the `SOURCE_EVIDENCE` case Java's gate exists for |
+
+  Environment fact worth remembering: **MySQL reformats stored JSON** (`{"k": v}` with a space after
+  the colon), so an assertion on a JSON column must match keys and values, not the bytes Jackson
+  wrote. Recorded in `theStepThatRanRecordedWhatItProduced…`.
+
+  Reuse records:
+
+  | Repository | Source file | Feature | Destination | Method |
+  |---|---|---|---|---|
+  | old project (`ai-data-intelligence-platform`) | `data-intelligence/NormalizationService.ts:4-15,147,211-225` | alias→canonical map, key folding, placeholder-becomes-absent, URL/date/phone/currency/number coercion, currency-field heuristic, `Intl.DisplayNames` country names, first-non-empty-wins with alias conflicts noted | `ai-service/app/quality/normalize.py` | **PORT + FIX.** `Intl.DisplayNames` (locale-dependent, untestable across environments) replaced by canonicalizing a place against **the spellings the requirement itself declared**; `rawValues` kept so every change is traceable; ambiguous values refused rather than resolved |
+  | old project | `data-intelligence/ValidationService.ts:17,26-30,142` | per-record source-evidence check, REQUIRED/TYPE/URL/EMAIL/DATE/ENUM, `isValid` derivation, verification states, per-field confidence heuristic `min(0.7, 0.45+0.1*(sources-1))`, unimplemented rules downgraded to WARNING rather than passed | `ai-service/app/quality/validate.py` (advisory) + `backend/…/quality/RowContractEnforcer.java` (authoritative) | **PORT + REIMPLEMENT + MOVE.** The downgrade-rather-than-fake behaviour kept deliberately. The heuristic confidence replaced by evidence counts plus a documented formula. Audit `C` predicted `backend/…/dataset/RowContractEnforcer.java`; it lives in `quality/` because `dataset/` does not exist until persistence lands |
+  | old project | `data-intelligence/DeduplicationService.ts:20` | deterministic blocking on the rule keys, EXACT vs NORMALIZED only, FUZZY_REVIEW excluded from auto-merge, duplicate→canonical links | `ai-service/app/quality/dedupe.py` | **PORT + FIX.** Added the block-size bound (`quality_max_block_size`, default 400) so one pathological key cannot become a quadratic scan, and an oversized block is *reported and left uncompared* rather than silently skipped |
+  | old project | `data-intelligence/EntityResolutionService.ts:14,15,24,94-101,127-144` | name-field ordering rule, legal-suffix stripping, blocking on first-2-chars + normalized identifiers, Levenshtein ratio, threshold 0.94, merge **only** with a shared stable identifier | `ai-service/app/quality/entity_resolution.py` | **PORT + DEVIATION.** "Identifier required to merge" kept as the load-bearing rule — similarity alone yields `REVIEW_REQUIRED`, never a merge. **`rapidfuzz`/`commons-text` not adopted** (audit `C` suggested them): Levenshtein ratio is implemented in-house, because a compiled dependency for one bounded string distance is not worth it here |
+  | old project | `data-intelligence/DataQualityService.ts:35-46,77-79` | the weight-soup score (`clamp(0.2+0.15+…-conflicts*0.1, 0.05, 0.95)`), 0.05 when not source-backed, and `rawRecordCount` falling back to the current length | `ai-service/app/quality/score.py` | **REPLACED.** Five measured ratios averaged with equal weight, and the score carries its own `scoreBasis` plus `scoreComponents`; `null` instead of a number when there is nothing to score. The raw-count fallback was the defect: the caller now supplies `rawRecordCount` and an absent one is reported as "any earlier loss is not visible here" |
+  | old project | `workflow-runner.ts:160,164` | the whole quality chain executed at **both** the MERGE and the SAVE step | `workflow/execution/TransformStepHandler` | **PORT + FIX.** One pass per run, behind one step; the stages stay separately reported inside the response, which is the property that mattered |
+  | this project | `ai-service/app/curation/canonical.py` | the URL canonicalizer the curation stage already uses | `ai-service/app/quality/normalize.py`, `dedupe.py` | **REUSED, not reimplemented.** One canonicalization for the whole service — the legacy project had three that disagreed |
+  | `data-enrichment-js`, `data-enrichment-py`, `web-research-agent-master`, `web-agent-main`, `anakin`, `TheAgenticBrowser` | — | nothing was taken for this phase | — | **NO TAKE.** None of them has a normalization/entity-resolution/quality-scoring pipeline; `data-enrichment-js` persists whatever the model claims, which is the defect class this phase exists to close |
+
+  Deliberate non-additions: no dataset tables (persistence is still unbuilt, so the pipeline's output
+  travels through `workflow_steps.output_summary` and the handoff is tested as a JSON round trip), no
+  `SAVE`/`EXPORT` steps, no embeddings or vector store for entity resolution, no second web engine,
+  no `rapidfuzz`, and no LLM in the pipeline — it is pure CPU-bound Python behind a synchronous
+  FastAPI handler so it runs on the threadpool rather than blocking the event loop.
+
+  **Not verified, stated plainly:** the pipeline has only ever seen records that this project's tests
+  constructed or that the mocked collection step produced. `FIRECRAWL_API_KEY` is still blank, so no
+  real scraped record has passed through normalization, and three things remain unmeasured on real
+  data: whether `entity_match_threshold = 0.94` is right for messy live names rather than tidy
+  fixtures, how the pipeline behaves on a record set large enough for the block-size bound to
+  actually bite (400 records per block is a reasoned number, never a measured one), and how long the
+  synchronous pass takes in-process at 500 records — the step's 240 s budget and the quality client's
+  socket patience are sized by reasoning about `stepTimeoutMs + 5000`, not by observation. The
+  threshold and block bound are both overridable per request and validated at boot, so the first live
+  run can narrow them without a code change.
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -462,12 +558,20 @@ existed, and that the system was production-ready — each contradicted by its o
 | 2026-09-29 | **The planner is deterministic code, not a language model, and it emits only steps this build executes.** | Phase 3's structured call already produced the requirement, schema and queries; deriving the DAG from them keeps the same-input → same-`planHash` property and keeps a model out of the space between the contract and the queue. `SAVE` and `EXPORT` are *absent* rather than present-and-skipped, inverting the old `EXPORT_NOT_IN_PHASE` placeholder that let a plan look complete while doing nothing (`workflow-runner.ts:167-169`) |
 | 2026-09-29 | **A job carries its own config snapshot** — `PlanSteps.payloadFor` copies the step's config into `workflow_jobs.payload` at enqueue time. | A job reclaimed an hour later must execute the plan that was current when it was created, not whatever the mutable plan row says now |
 | 2026-09-29 | **Steps are materialised up front; jobs are created only when their dependencies are satisfied.** | Then every `PENDING` job in the queue is genuinely executable, so no worker has to claim work, discover its predecessors are unfinished and put it back. Materialising the steps is also what lets `GET /runs/{id}` show the whole plan, including the parts still waiting |
-| 2026-09-29 | **The `VALIDATE` step is Java re-enforcing Python's claim, and it deletes nothing.** | `WorkflowService.plan` refuses to store a plan from an unverified AI answer, and `ValidateStepHandler` refuses to call a record valid because the graph said so: required fields present and non-blank, a source with `verifiedByTool`, and a dedupe identity. Failures are counted and reported by index (max 50, plus `issuesTruncated`), because the old `persistDataset` dropped unevidenced rows in silence (`00-FORENSIC-AUDIT.md` §5 item 8) |
+| 2026-09-29, **extended 2026-09-30** | **The `VALIDATE` step is Java re-enforcing Python's claim, and it deletes nothing.** | `WorkflowService.plan` refuses to store a plan from an unverified AI answer, and `ValidateStepHandler` refuses to call a record valid because the graph said so: required fields present and non-blank, a source with `verifiedByTool`, and a dedupe identity. Failures are counted and reported by index (max 50, plus `issuesTruncated`), because the old `persistDataset` dropped unevidenced rows in silence (`00-FORENSIC-AUDIT.md` §5 item 8). **Phase 8 changed what it reads:** it no longer examines the raw collection output but the pipeline's records out of the `TRANSFORM` step's summary, and the checks moved from ad-hoc loop logic into `RowContractEnforcer` with the plan's typed field list, so type conformance, duplicate-link integrity and conflict preservation are checked as well as presence and evidence |
 | 2026-09-29 | **The activity log is written before anything is broadcast, always,** and a failed monitoring write is logged with the run id rather than swallowed. | It is what makes post-restart history and SSE replay correct without Redis pub/sub: the table is the truth and a stream is a convenience |
 | 2026-09-29 | **Tenancy stays in configuration while authentication does not exist, and a foreign id answers as not-found.** | `FINALAGENT_WORKSPACE_ID` is never read from a request; `require(runId)` returns the same 404 for another workspace's run as for a nonexistent one, because confirming that an id exists is itself a leak. `Principals.UNAUTHENTICATED` (nil UUID) is the actor: "we do not know who", not a placeholder that resembles an account |
 | 2026-09-29 | **Flyway is tied to `WORKFLOW_EXECUTION_ENABLED`, with `baseline-on-migrate: false`.** | One switch for the layer and the schema it needs, so nothing can start the queue against an unmigrated database; and baselining away a pre-existing schema would skip precisely the unique keys and compound FKs the guarantees live in |
 | 2026-09-29 | **`AiServiceClient` gets a second `RestClient` for research calls.** | The 3 s JSON parse timeout is right for requirement analysis and wrong for a multi-minute collection. The research client reads `min(300 s, stepTimeout + 5 s)` so the caller gives up slightly *after* the step's own budget, and the step timeout — not a socket default — remains what actually bounds a job |
 | 2026-09-29 | **The MySQL integration tests are gated by `FINALAGENT_TEST_MYSQL=true`, and `verify.sh` reports them as SKIPPED when it is off.** | A queue's locking guarantees cannot be shown against doubles — mocking `claim()` would be a test of Mockito. The gate means an environment without a database says "not run" out loud instead of implying it ran |
+| 2026-09-30 | **The quality pipeline runs once per run, behind one `TRANSFORM` step — not once per stage-bearing step.** | The legacy runner executed the whole chain at both its MERGE and its SAVE steps (`workflow-runner.ts:160,164`), so a plan with both normalized, validated and deduplicated the same records twice. Splitting the six stages across six workflow steps would have reintroduced that in a new shape and serialized the record set through a JSON column six times before there is a dataset table to hold it. What the caller needs — seeing what each stage did — is provided by the per-stage `StageReport` inside one response |
+| 2026-09-30 | **Java enforces the plan's field list, never the dataset columns the pipeline emitted.** | `A` §A.2 only means something if the second opinion is independent. A checker that reads its spec from the thing it is checking can only confirm what the other side decided, and a column the pipeline invented (an undeclared `source_page`, typed `STRING` by default) would silently become the rule. `DeclaredContract` carries a `basis` — `plan` or the weaker `pipeline-columns` — and the fallback announces itself in the step summary |
+| 2026-09-30 | **`RowContractEnforcer` reports disagreement in both directions instead of overwriting either verdict.** | `ADVISORY_PASSED_HERE_REJECTED` is the fabricated pass this gate exists to catch; `ADVISORY_REJECTED_HERE_PASSED` is evidence that Java is stricter than it needs to be. Both are findings, neither is resolved by whichever implementation ran last, and the run's counters take Java's number while the pipeline's stay visible as `advisory*` |
+| 2026-09-30 | **Duplicates are linked, invalid records are flagged, and neither is ever deleted — by Java and Python alike.** | The old `persistDataset` skipped rows whose sources did not hash-match a persisted `Source` (`workflow-execution.repository.ts:271-272`), so a dataset could land short with no explanation. Here `rowsChecked + linkedDuplicates == records.size()` is an assertion, and a record that is neither a row nor a link is a *structural* failure |
+| 2026-09-30 | **Entity resolution keeps "a shared stable identifier is required to merge"; name similarity alone yields `REVIEW_REQUIRED`.** | The conservative half of `EntityResolutionService.ts:20,24` from the old project, kept deliberately: a false merge is invisible afterwards and a false split is not. Threshold 0.94 inherited because it is the stricter number, not because it was measured here |
+| 2026-09-30 | **Levenshtein is implemented in-house; `rapidfuzz`/`commons-text` were not added.** | Audit `C` suggested a library. One bounded string distance does not justify a compiled dependency in a service whose base install is FastAPI/uvicorn/Pydantic/dotenv, and this project has twice preferred no new dependency over a convenience |
+| 2026-09-30 | **`POST /ai/v1/quality/process` is a synchronous `def`, and the pipeline holds no state.** | An `async def` handler would run CPU-bound text processing on the event loop and stall every other request; a sync handler is dispatched to FastAPI's threadpool. Being pure means nothing is lost on restart, which is what keeps the no-Redis constraint safe |
+| 2026-09-30 | **The wire contract between the two languages is pinned on both sides by one generated fixture.** | `backend/src/test/resources/wire/quality-process.json` is written by the pipeline itself; `test_quality_wire_fixture.py` fails if Python's output drifts from it and `QualityWireContractTest` fails if Java's DTOs stop binding it. A hand-written snapshot on either side would age silently — Spring drops unknown properties, so drift never shows up as a parse error, only as a dataset of nulls three steps later |
 
 ## 4. Database / Schema Changes
 
@@ -486,6 +590,20 @@ renumbered or edited** — Flyway verifies checksums of what it has run — so w
 arrives as `V3__baseline_identity.sql`, and the `workspace_id` / `created_by_id` columns that are
 `NOT NULL` today with **no foreign key** get theirs then. That is a real gap, recorded here and in
 `E`, not a design choice.
+
+**Phase 8 added no schema.** That is worth saying out loud rather than leaving a reader to check: the
+step-type ENUM in `V2__execution.sql` already declared `TRANSFORM`, `VALIDATE`, `DEDUPLICATE`,
+`MERGE`, `VERIFY` and `SAVE` before any of them had code, so the pipeline's `TRANSFORM` step landed in
+a column that was waiting for it and no migration was needed or written. The plan now materialises
+three `workflow_steps` rows instead of two, and the pipeline's records travel through
+`workflow_steps.output_summary_json` — which is the same JSON column Phase 7 put the collected records
+in, and the reason dataset persistence is still the sharpest gap (§8). What the *run* counters changed:
+`TRANSFORM` now owns `duplicates` and contributes nothing to `records_found` / `records_raw`, which
+`EXTRACT` already added (P23).
+
+Two new ai-service settings arrived instead of columns, both range-validated at boot so a bad value
+stops the process rather than changing what a dataset means: `ENTITY_MATCH_THRESHOLD` (default 0.94,
+bounded 0.5-1.0) and `QUALITY_MAX_BLOCK_SIZE` (default 400, bounded 2-100000).
 
 Changes made to the DDL *because MySQL disagreed with it* (both P12/P13 in §2):
 
@@ -599,6 +717,35 @@ connected to MySQL 9.6, the worker logged its lease and pool, `GET /api/v1/workf
 200 with worker stats, and `/api/v1/ready` answered **503** with `workflowQueue UP` but
 `aiService DOWN (reachable:false)` — correct, because the Python service was not running. The
 last Phase 1 exit criterion (B1, an account the application can connect as) is closed.
+
+### Verification limits introduced by Phase 8 (what the pipeline tests do *not* prove)
+
+104 new ai-service cases and 62 new backend cases say the pipeline behaves as designed on records this
+project wrote. Four things remain genuinely unproven:
+
+- **No real scraped record has ever passed through it.** `FIRECRAWL_API_KEY` is still blank, so every
+  input is test-constructed or produced by the mocked collection step. Normalization is exercised
+  against values chosen to be awkward; how often an actual Firecrawl scrape yields `"4.5M"` versus
+  `4500000` for a funding amount, and what other shapes real pages bring, is unmeasured.
+- **The thresholds are reasoned, not tuned.** 0.94 came from the old service because it is the
+  conservative number, and 400 records per block is a bound that prevents a quadratic scan, not one
+  derived from a real dataset. Neither has been run against data large or messy enough to say whether
+  they are right — `test_a_pathological_block_is_reported_for_both_comparisons_it_prevented` proves
+  the *reporting* works, not that the bound is the correct size.
+- **Scale of the synchronous pass is unknown.** The pipeline is CPU-bound Python on FastAPI's
+  threadpool, and the client's socket patience is `min(300 s, stepTimeout + 5 s)`. At 500 records the
+  pass has never been timed, so the pairing of those two budgets against real duration is Phase 7's
+  open question (§5, third bullet) restated for a second call.
+- **The two verdicts have only disagreed in one direction on real captured data.** On the wire fixture
+  Java rejects four canonical rows and the pipeline agrees on three, disagreeing on exactly the record
+  whose only citation was never tool-retrieved. `ADVISORY_REJECTED_HERE_PASSED` — Java being stricter
+  than it needs to be — is covered by a synthetic case only. If it turns up on live runs at a high
+  rate, that is evidence this gate is over-typed and should be read as a defect in Java's rules, not
+  in the data.
+
+Also unchanged: the pipeline is reachable through `POST /ai/v1/quality/process` behind the shared
+`X-API-Key`, and the workflow endpoints that call it are still unauthenticated, so a caller who can
+start a run can now also make Spring spend Python CPU on it.
 
 ### Defects found and fixed during Phase 1 (all by running, not reading)
 
@@ -763,9 +910,8 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phase 7 is complete and pushed; awaiting authorization for the next one.** Phases have been
-directed out of `M-phase-plan.md` order, and that drift is now worth stating precisely rather than
-in a footnote:
+**Phase 8 is complete; awaiting authorization for the next one.** Phases have been directed out of
+`M-phase-plan.md` order, and that drift is now worth stating precisely rather than in a footnote:
 
 | Planned | Delivered | Where it went |
 |---|---|---|
@@ -774,36 +920,50 @@ in a footnote:
 | Phase 5 — schema generation | part, Phase 3 | `derive_extraction_schema` + `ExtractionSchemaValidator` |
 | Phase 6 — job engine | **Phase 7** | `workflow/` — plan, run, step, job, worker, MySQL queue, retries, leases, cancellation |
 | Phase 7 — source governance | mostly, Phase 5 (at fetch time) | `curation/` — robots, policy, ranking, dedupe, retry, aggregation. **Not** built: host-resolution SSRF and per-domain rate |
-| Phase 8 — dataset persistence | **not built** | records currently live in `workflow_steps.output_summary` JSON |
+| **Phase 6 — browser planner / critique** | **authorized, explicitly deferred, not started** | the next candidate below |
+| Phase 8 — data intelligence pipeline | **Phase 8** (2026-09-30) | `ai-service/app/quality/` behind `POST /ai/v1/quality/process`, executed as the `TRANSFORM` step and disposed of by `RowContractEnforcer` in Java |
+| Phase 8's dataset persistence | **not built** | the pipeline's records live in `workflow_steps.output_summary` JSON, as the collected records did before it |
 
 Most valuable next candidates, in dependency order:
 
-1. **Dataset persistence (the plan's Phase 8).** This is now the sharpest gap: the queue executes a
-   run, Java validates the records, and then the records sit in a JSON column on a step row. A
-   `datasets` / `dataset_records` / `sources` set of tables, the record→evidence mapping, and the
-   `EXTRACT` step's payload moving out of `output_summary` and into typed rows. Everything the phase
-   needs to join on already exists — `workflow_runs.id`, per-record `sources[].verifiedByTool`, and
-   the counters that say how much was collected.
-2. **Authentication and tenancy (the plan's Phase 3).** `/api/v1/workflows/*` is unauthenticated and
+1. **Browser planner → act → critique → correct (the plan's Phase 6, already authorized).** The
+   constraint it must be built inside is the one the user set: no second independent agent, Firecrawl
+   stays the actual web engine, and it is used only where a workflow needs browser interaction or
+   verification. `interact` already exists in the graph with a per-run interaction budget and the
+   "URL was retrieved this run" rule (Phase 4), and the critique idea already exists as extraction
+   gate 3 (completeness critique, bounded, exhaustion never reported as success) — so the honest scope
+   is a *verification* pass over a step's result and a bounded correction, not a new planner.
+   `TheAgenticBrowser` is patterns-only under its Community Licence (`docs/control/THIRD-PARTY.md`,
+   open decision **L1**).
+2. **Dataset persistence.** Sharper than it was before Phase 8: the pipeline now produces a typed
+   dataset — columns with types, canonical rows, linked duplicates, per-record sources with
+   `verifiedByTool`, conflicts with both sides kept, and Java's own verdict per row — and all of it is
+   serialized into a JSON column on a step row. `datasets` / `dataset_records` / `record_sources` /
+   `record_conflicts` tables would make the pipeline's output queryable and would let a later run
+   resolve against records it stored rather than re-collecting. The `SAVE` and `EXPORT` step types
+   already exist in the ENUM and are still deliberately absent from every plan until there is code
+   behind them.
+3. **Authentication and tenancy (the plan's Phase 3).** `/api/v1/workflows/*` is unauthenticated and
    now *starts billed work*, which is worse than the read-only endpoints that came before it: a
-   caller who can POST /runs can spend Firecrawl credits and Gemini quota. `interact` raises it
-   again, because a run can drive a live browser session. The queue itself is safe to leave as is —
-   the workspace is server-configured and a foreign id answers as not-found — but
+   caller who can POST /runs can spend Firecrawl credits and Gemini quota, and since Phase 8 can also
+   make Spring run a CPU-bound pipeline over records on Python's threadpool. The queue itself is safe
+   to leave as is — the workspace is server-configured and a foreign id answers as not-found — but
    `FINALAGENT_WORKSPACE_ID` and `Principals.UNAUTHENTICATED` are placeholders that must not survive
    into a shared deployment, and `workspace_id` / `created_by_id` need their foreign keys (V3).
-3. **SSE monitoring over the durable event log.** `activity_events` is already written before any
+4. **SSE monitoring over the durable event log.** `activity_events` is already written before any
    broadcast and is cursor-addressable (`id > ?`), so the streaming endpoint is a reader over a table
    that exists rather than new plumbing.
-4. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
+5. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
    fetch (private/link-local/loopback refusal) and enforce
    `SearchStrategy.max_requests_per_domain_per_minute`, which is produced and reported but still
    consumed by nothing.
-5. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
+6. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
    the queue retries (`Backoff`), but the Gemini client still surfaces a rate limit as an error —
    normal on a free tier capped at 20 requests/day, not an edge case.
-6. **Right-size the budgets against one real run.** `WORKFLOW_STEP_TIMEOUT_MS=240000` inside
+7. **Right-size the budgets against one real run.** `WORKFLOW_STEP_TIMEOUT_MS=240000` inside
    `WORKFLOW_LEASE_SECONDS=300` was reasoned about, never measured: no step has ever collected from
-   the live web here.
+   the live web here, and Phase 8 added a second long call (`/ai/v1/quality/process`) under the same
+   budget without measuring that either.
 
 Still open: **G1** (demonstration strategy), **G2** (needs a Firecrawl key — see §6 for what Phase 4
 settled and what it did not), **L1** (enrichment-repo licence position — see

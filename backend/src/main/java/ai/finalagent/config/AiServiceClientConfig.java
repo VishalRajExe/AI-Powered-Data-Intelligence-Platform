@@ -12,10 +12,11 @@ import org.springframework.web.client.RestClient;
  * parameter, so it cannot leak into access logs.
  *
  * <p>Two clients, because the calls have opposite shapes. Requirement analysis is a single
- * structured completion that should fail fast if the boundary is broken; a research run is
- * searches, scrapes and possibly browser sessions bounded by the plan's step timeout, so it needs
- * the longer socket patience and the shorter one keeps everywhere else. Sharing one timeout would
- * mean either cancelling real collection or letting a dead boundary hang a request thread.
+ * structured completion that should fail fast if the boundary is broken; a step call is long work
+ * bounded by the plan's step timeout — a research run reaches search, scrape and possibly browser
+ * sessions, and a quality run can be hundreds of records of text processing — so those two need the
+ * longer socket patience and the short one keeps everywhere else. Sharing one timeout would mean
+ * either cancelling real work or letting a dead boundary hang a request thread.
  */
 @Configuration
 public class AiServiceClientConfig {
@@ -25,9 +26,9 @@ public class AiServiceClientConfig {
         return build(properties, Duration.ofMillis(properties.aiService().timeoutMs()));
     }
 
-    /** Used only by the workflow executor for {@code POST /ai/v1/research}. */
+    /** The step-scoped client: {@code /ai/v1/research} and {@code /ai/v1/quality/process}. */
     @Bean
-    RestClient researchRestClient(FinalAgentProperties properties) {
+    RestClient stepRestClient(FinalAgentProperties properties) {
         int stepTimeoutMs = properties.execution().stepTimeoutMs();
         // A small margin over the step timeout, so the executor's own timeout is what normally
         // decides a step is over — not the socket dropping the call first and losing the reason.

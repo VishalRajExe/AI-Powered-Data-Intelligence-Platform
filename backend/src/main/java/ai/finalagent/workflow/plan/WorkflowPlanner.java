@@ -1,9 +1,11 @@
 package ai.finalagent.workflow.plan;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import ai.finalagent.requirement.RequirementAnalysisDto;
 import ai.finalagent.requirement.RequirementDto;
@@ -23,6 +25,12 @@ import ai.finalagent.workflow.support.Json;
  * {@code EXPORT_NOT_IN_PHASE} placeholders for a step its runner never implemented
  * ({@code workflow-runner.ts:167-169}), which is how a plan came to look complete while doing
  * nothing. They appear when dataset persistence and export exist.
+ *
+ * <p>The chain is {@code collect → transform → validate}, and the two ends are not interchangeable.
+ * {@code transform} is the pipeline's single pass over the raw records — one call, because running
+ * the same chain twice is exactly the bug the legacy runner had — and {@code validate} is Java's
+ * independent verdict on the dataset that came out of it. Both steps carry the plan's own field list,
+ * so neither has to ask the AI service what the contract was.
  */
 public final class WorkflowPlanner {
 
@@ -36,6 +44,7 @@ public final class WorkflowPlanner {
     }
 
     public static final String COLLECT_STEP = "collect";
+    public static final String TRANSFORM_STEP = "transform";
     public static final String VALIDATE_STEP = "validate";
 
     private WorkflowPlanner() {
@@ -66,14 +75,33 @@ public final class WorkflowPlanner {
         collectConfig.put("limits", limits);
         collectConfig.put("seedQueries", analysis.searchQueries() == null ? List.of() : analysis.searchQueries());
 
+        // The pipeline builds its field map from what it is sent, so the typed field list travels
+        // into the step's own payload. `required` is derived here from the requirement's required
+        // list rather than trusted from the model's per-field flag, which is the same field the
+        // validator already had an opinion about.
+        List<Map<String, Object>> fieldSpecs = fieldSpecs(requirement);
+
+        Map<String, Object> transformConfig = new LinkedHashMap<>();
+        transformConfig.put("extractionSchema", schema);
+        transformConfig.put("entityType", requirement.entityType());
+        transformConfig.put("objective", requirement.objective());
+        transformConfig.put("fields", fieldSpecs);
+        transformConfig.put("requiredFields", requirement.requiredFields());
+        transformConfig.put("deduplicationKeys", requirement.deduplicationKeys());
+        transformConfig.put("validationRules", requirement.validationRules());
+
+        // Java enforces the contract against its own reading of the plan, so the same field list is
+        // handed to the validating step too — independently, from the same authoritative source.
         Map<String, Object> validateConfig = new LinkedHashMap<>();
         validateConfig.put("extractionSchema", schema);
+        validateConfig.put("fields", fieldSpecs);
         validateConfig.put("requiredFields", requirement.requiredFields());
         validateConfig.put("deduplicationKeys", requirement.deduplicationKeys());
 
         List<PlanStep> steps = List.of(
                 new PlanStep(COLLECT_STEP, "EXTRACT", List.of(), collectConfig),
-                new PlanStep(VALIDATE_STEP, "VALIDATE", List.of(COLLECT_STEP), validateConfig));
+                new PlanStep(TRANSFORM_STEP, "TRANSFORM", List.of(COLLECT_STEP), transformConfig),
+                new PlanStep(VALIDATE_STEP, "VALIDATE", List.of(TRANSFORM_STEP), validateConfig));
 
         Map<String, Object> completion = Map.of(
                 "requireSourceEvidence", true,
@@ -131,6 +159,30 @@ public final class WorkflowPlanner {
             keys.add(step.key());
         }
         return keys;
+    }
+
+    /**
+     * The plan's field list, as a plain map per field.
+     *
+     * <p>{@code required} is derived from the requirement's own required-field list instead of read
+     * off the model's per-field flag: the validator treats that list as the statement of what must be
+     * present, and a field list that disagrees with it would make the run's contract depend on which
+     * of the two happened to be consulted.
+     */
+    private static List<Map<String, Object>> fieldSpecs(RequirementDto requirement) {
+        Set<String> required = new HashSet<>(requirement.requiredFields() == null
+                ? List.of() : requirement.requiredFields());
+        List<Map<String, Object>> specs = new ArrayList<>();
+        for (RequirementDto.Field field : requirement.fields() == null
+                ? List.<RequirementDto.Field>of() : requirement.fields()) {
+            Map<String, Object> spec = new LinkedHashMap<>();
+            spec.put("key", field.key());
+            spec.put("label", field.label() == null ? "" : field.label());
+            spec.put("type", field.type() == null ? "STRING" : field.type());
+            spec.put("required", required.contains(field.key()));
+            specs.add(spec);
+        }
+        return specs;
     }
 
     private static void putIfPresent(Map<String, Object> target, String key, Object value) {

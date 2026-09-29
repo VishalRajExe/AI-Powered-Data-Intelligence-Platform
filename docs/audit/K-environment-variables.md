@@ -121,6 +121,8 @@ per-step override would need the plan schema to carry it first.
 | `MIN_RELEVANCE_SCORE` | no | `0.0` | 0.0 ranks without dropping anything, so the scrape budget decides how many pages are read. Lexical scale, saturating at four matched terms — not a probability; gate **Q1** |
 | `MAX_SOURCES_PER_DOMAIN` | no | `2` | Candidates per publisher per search batch; 0 disables the rule. `root_domain()` is a last-two-labels heuristic, documented as one |
 | `MAX_CANDIDATES_PER_SEARCH` | no | `8` | How many ranked candidates the tool result shows the model; the rest are reported as excluded, not hidden |
+| `ENTITY_MATCH_THRESHOLD` | no | `0.94` | Data-intelligence entity resolution (Phase 8). Name similarity **alone** never merges — a shared stable identifier is required, and a pair clearing this threshold without one becomes `REVIEW_REQUIRED`. Inherited from the old `EntityResolutionService.ts:24` because it is the conservative number, not because it was measured here; the per-request `entityMatchThreshold` can narrow it. Gate: never tuned on live data |
+| `QUALITY_MAX_BLOCK_SIZE` | no | `400` | Records sharing one blocking key before the block is reported and left uncompared. It is what keeps a pathological key (every record with an empty name) from turning dedup and resolution into a quadratic scan; an oversized block appears in the stage notes rather than silently reducing coverage |
 | `MARKDOWN_TRUNCATE_CHARS` | no | `4000` | `2000` when an extract is present |
 | `ALLOWED_HOSTS` | no | `localhost` | defense in depth; the service should never be public |
 
@@ -167,6 +169,7 @@ Startup validation, as implemented and verified in Phase 1:
 | `RETRY_MAX_ATTEMPTS` 1-5, backoff ceiling ≥ first delay | `app/config.py` + `RetryPolicy` | unit-tested |
 | `ROBOTS_USER_AGENT` is a single non-blank token; `ROBOTS_ON_ERROR` ∈ {restrict, allow} | `app/config.py` | unit-tested — a phrase agent is refused, `ignore` is refused |
 | `MIN_RELEVANCE_SCORE` ∈ [0,1], `MAX_SOURCES_PER_DOMAIN` ∈ [0,10], `MAX_CANDIDATES_PER_SEARCH` ∈ [1,20] | `app/config.py` | unit-tested |
+| `ENTITY_MATCH_THRESHOLD` ∈ [0.5,1.0], `QUALITY_MAX_BLOCK_SIZE` ∈ [2,100000]; the same range re-checked on the per-request override | `app/config.py` + `app/quality/contracts.py` | unit-tested — `test_config.py`, `test_quality_api.py` (`test_out_of_range_bounds_are_refused_rather_than_silently_clamped`); a 0.4 threshold or a 1-record block stops the service at boot instead of quietly changing what a merge means |
 | Java refuses an impossible curation request before calling Python | `SourceCurationPolicy.java` | `SourceCurationPolicyTest` (10), `ResearchControllerTest.anImpossibleRelevanceFloorIsRejectedLocally` |
 | Placeholder values rejected (`REPLACE_ME`, `changeme`, `insecure-default`, …) | both services | unit-tested |
 | Every problem reported at once; values never echoed into the message | both services | unit-tested |

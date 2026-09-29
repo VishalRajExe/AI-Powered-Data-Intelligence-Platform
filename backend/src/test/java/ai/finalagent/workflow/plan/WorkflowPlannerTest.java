@@ -71,12 +71,36 @@ class WorkflowPlannerTest {
         // SAVE and EXPORT do not exist yet. Emitting them as skipped placeholders is how the
         // previous project's plans looked complete while doing nothing.
         assertThat(WorkflowPlanner.stepKeys(WorkflowPlanner.plan(analysis(20, Map.of())).steps()))
-                .containsExactly(WorkflowPlanner.COLLECT_STEP, WorkflowPlanner.VALIDATE_STEP);
+                .containsExactly(WorkflowPlanner.COLLECT_STEP, WorkflowPlanner.TRANSFORM_STEP,
+                        WorkflowPlanner.VALIDATE_STEP);
         assertThat(WorkflowPlanner.plan(analysis(20, Map.of())).steps())
-                .extracting(WorkflowPlanner.PlanStep::type).containsExactly("EXTRACT", "VALIDATE");
+                .extracting(WorkflowPlanner.PlanStep::type)
+                .containsExactly("EXTRACT", "TRANSFORM", "VALIDATE");
         assertThat(WorkflowPlanner.plan(analysis(20, Map.of())).steps())
                 .extracting(WorkflowPlanner.PlanStep::dependsOn)
-                .containsExactly(List.of(), List.of(WorkflowPlanner.COLLECT_STEP));
+                .containsExactly(List.of(), List.of(WorkflowPlanner.COLLECT_STEP),
+                        List.of(WorkflowPlanner.TRANSFORM_STEP));
+    }
+
+    @Test
+    void theTransformStepCarriesEverythingThePipelineNeedsWithoutReReadingThePlan() {
+        Map<String, Object> config = WorkflowPlanner.plan(analysis(20, Map.of()))
+                .steps().get(1).config();
+
+        assertThat(config).containsEntry("entityType", "youtube_channel")
+                .containsEntry("requiredFields", List.of("channel_name", "subscribers"))
+                .containsEntry("deduplicationKeys", List.of("channel_name"));
+        assertThat(config.get("extractionSchema")).isEqualTo(SCHEMA);
+        assertThat(config.get("objective")).isEqualTo(
+                "list popular YouTube channels that teach programming");
+        assertThat((List<?>) config.get("validationRules")).hasSize(1);
+        // The field list is the pipeline's type map and Java's contract in one, so it is sent to both
+        // steps rather than being re-derived by whoever asks for it later.
+        assertThat(fieldsOf(config)).containsExactly(
+                Map.of("key", "channel_name", "label", "Channel", "type", "string",
+                        "required", true),
+                Map.of("key", "subscribers", "label", "Subscribers", "type", "integer",
+                        "required", true));
     }
 
     @Test
@@ -147,10 +171,21 @@ class WorkflowPlannerTest {
 
     @Test
     void theValidateStepCarriesTheContractJavaWillReEnforce() {
-        Map<String, Object> config = WorkflowPlanner.plan(analysis(20, Map.of())).steps().get(1).config();
+        Map<String, Object> config = WorkflowPlanner.plan(analysis(20, Map.of()))
+                .steps().get(2).config();
+
         assertThat(config).containsEntry("requiredFields", List.of("channel_name", "subscribers"))
                 .containsEntry("deduplicationKeys", List.of("channel_name"));
         assertThat(config.get("extractionSchema")).isEqualTo(SCHEMA);
+        // Java enforces against the plan's own field list, not the columns the pipeline emits, so the
+        // same typed list the pipeline was handed travels into this step too.
+        assertThat(fieldsOf(config)).isEqualTo(fieldsOf(
+                WorkflowPlanner.plan(analysis(20, Map.of())).steps().get(1).config()));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> fieldsOf(Map<String, Object> config) {
+        return (List<Map<String, Object>>) config.get("fields");
     }
 
     @Test
@@ -164,7 +199,10 @@ class WorkflowPlannerTest {
     @Test
     void theStoredStepsJsonParsesBackIntoTheSameNodesThePlannerBuilt() {
         WorkflowPlanner.Planned planned = WorkflowPlanner.plan(analysis(20, Map.of()));
-        assertThat(PlanSteps.parse(planned.stepsJson()).order()).containsExactly("collect", "validate");
+        assertThat(PlanSteps.parse(planned.stepsJson()).order())
+                .containsExactly("collect", "transform", "validate");
+        assertThat(PlanSteps.parse(planned.stepsJson()).payloadFor("transform", "TRANSFORM")
+                .get("config")).isInstanceOf(Map.class);
     }
 
     private static Map<String, Object> limitsOf(WorkflowPlanner.Planned planned) {

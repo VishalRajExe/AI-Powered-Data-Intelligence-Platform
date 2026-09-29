@@ -15,6 +15,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -34,6 +35,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import ai.finalagent.aiclient.AiServiceClient;
+import ai.finalagent.aiclient.dto.QualityRequest;
+import ai.finalagent.aiclient.dto.QualityResult;
 import ai.finalagent.aiclient.dto.ResearchRequest;
 import ai.finalagent.aiclient.dto.ResearchResult;
 import ai.finalagent.requirement.RequirementAnalysisDto;
@@ -184,8 +187,71 @@ class WorkflowRunLifecycleMySqlTest {
                         List.of(), List.of(), 0, List.of(), List.of(), List.of()), null);
     }
 
-    /** Created and planned through the service, ready to start: the workflow id. */
-    private String plannedWorkflow(int quantity) {
+    /**
+     * The pipeline's answer for the records a run collected: the same values and the same provenance,
+     * with the advisory verdict the Python side would give. Every record comes back {@code isValid},
+     * which is the point — where the collection cited nothing a tool retrieved, Java's own gate is the
+     * one that says no.
+     */
+    private static QualityResult processed(int count) {
+        List<QualityResult.Record> records = new ArrayList<>();
+        for (int i = 1; i <= count; i++) {
+            String url = "https://youtube.test/c/channel-" + i;
+            records.add(processedRecord(i - 1, "Channel " + i, url, true));
+        }
+        return pipelineAnswer(records);
+    }
+
+    private static QualityResult processed(List<ResearchResult.Record> records) {
+        List<QualityResult.Record> processed = new ArrayList<>();
+        for (int index = 0; index < records.size(); index++) {
+            ResearchResult.Record record = records.get(index);
+            ResearchResult.Source first = record.sources().isEmpty() ? null : record.sources().get(0);
+            processed.add(processedRecord(index, String.valueOf(record.values().get("channel_name")),
+                    first == null ? "" : first.url(),
+                    first != null && first.verifiedByTool()));
+        }
+        return pipelineAnswer(processed);
+    }
+
+    private static QualityResult.Record processedRecord(int index, String name, String url,
+                                                        boolean verified) {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("channel_name", name);
+        values.put("channel_url", url);
+        return new QualityResult.Record(index, values, values,
+                List.of(new QualityResult.Source(url, "A channel", "snippet", "scrape",
+                        Instant.now().toString(), verified)),
+                true, List.of(), verified ? "SOURCE_CITED" : "SOURCE_CITED_UNVERIFIED", null, null,
+                null, null, null, false, List.of(), List.of(), List.of());
+    }
+
+    private static QualityResult pipelineAnswer(List<QualityResult.Record> records) {
+        int rows = 0;
+        List<QualityResult.Row> datasetRows = new ArrayList<>();
+        for (QualityResult.Record record : records) {
+            datasetRows.add(new QualityResult.Row(record.index(), record.values()));
+            rows++;
+        }
+        QualityResult.Quality quality = new QualityResult.Quality(records.size(), records.size(),
+                rows, 0, records.size() - rows, 0, 0, rows, 0.5,
+                "equal-weight mean of five measured ratios", Map.of("completeness", 1.0), Map.of());
+        return new QualityResult("COMPLETED", records, new QualityResult.Dataset(
+                List.of(new QualityResult.Column("channel_name", "Channel", "STRING", true, 0),
+                        new QualityResult.Column("channel_url", "Channel URL", "URL", true, 1)),
+                datasetRows),
+                List.of(new QualityResult.Stage("normalize", "COMPLETED", records.size(),
+                        records.size(), Map.of(), List.of(), null)),
+                quality, List.of(), null);
+    }
+
+    /** The two upstream calls a healthy run makes, stubbed together so a step never sees null. */
+    private void collecting(int count) {
+        when(aiServiceClient.research(any())).thenReturn(collected(count));
+        when(aiServiceClient.processQuality(any())).thenReturn(processed(count));
+    }
+
+    /** Created and planned through the service, ready to start: the workflow id. */    private String plannedWorkflow(int quantity) {
         when(aiServiceClient.analyzeRequirement(PROMPT)).thenReturn(analysis(quantity));
         String workflowId = service.create("lifecycle test", PROMPT).id();
         service.plan(workflowId);
@@ -244,14 +310,15 @@ class WorkflowRunLifecycleMySqlTest {
     // --------------------------------------------------------------------- the flow
 
     @Test
-    void aPromptBecomesAPlanARunTwoStepsAndCollectedRecordsThroughTheQueueOnly() {
+    void aPromptBecomesAPlanARunThreeStepsAndCollectedRecordsThroughTheQueueOnly() {
         String workflowId = plannedWorkflow(2);
-        when(aiServiceClient.research(any())).thenReturn(collected(2));
+        collecting(2);
 
         Run started = service.startRun(workflowId);
         // Only the first step is queued: a job exists once its dependencies are done, so no worker
-        // can claim validation before collection has produced anything.
+        // can claim the pipeline before collection has produced anything.
         assertThat(jobs.findByRun(started.id())).hasSize(1);
+        assertThat(step(started.id(), "transform").status()).isEqualTo(JobStatus.PENDING);
         assertThat(step(started.id(), "validate").status()).isEqualTo(JobStatus.PENDING);
 
         Run finished = driveToTerminal(started.id(), Duration.ofSeconds(60));
@@ -262,6 +329,7 @@ class WorkflowRunLifecycleMySqlTest {
         assertThat(finished.recordsValid()).isEqualTo(2);
         assertThat(finished.finishedAt()).isNotNull();
         assertThat(step(started.id(), "collect").status()).isEqualTo(JobStatus.COMPLETED);
+        assertThat(step(started.id(), "transform").status()).isEqualTo(JobStatus.COMPLETED);
         assertThat(step(started.id(), "validate").status()).isEqualTo(JobStatus.COMPLETED);
         assertThat(jobs.findByRun(started.id()))
                 .allSatisfy(job -> assertThat(job.status()).isEqualTo(JobStatus.COMPLETED));
@@ -270,7 +338,7 @@ class WorkflowRunLifecycleMySqlTest {
     @Test
     void theStepThatRanRecordedWhatItProducedAndTheRunKeepsTheEventTrail() {
         String workflowId = plannedWorkflow(2);
-        when(aiServiceClient.research(any())).thenReturn(collected(2));
+        collecting(2);
         Run run = service.startRun(workflowId);
 
         driveToTerminal(run.id(), Duration.ofSeconds(60));
@@ -281,6 +349,18 @@ class WorkflowRunLifecycleMySqlTest {
         assertThat(collect.startedAt()).isNotNull();
         assertThat(collect.finishedAt()).isAfterOrEqualTo(collect.startedAt());
 
+        // The handoff between the two later steps is this column: whatever the pipeline answered has
+        // to still be readable by the step that runs after it, out of the database.
+        Step transform = step(run.id(), "transform");
+        assertThat(transform.outputSummaryJson()).contains("pipelineStatus")
+                .contains("channel_name")
+                .contains("verifiedByTool");
+        String validated = step(run.id(), "validate").outputSummaryJson();
+        // MySQL's JSON column reformats spacing, so this checks the keys and values it stored, not
+        // the exact bytes Jackson wrote.
+        assertThat(validated).contains("contractBasis").contains("\"plan\"")
+                .contains("javaValid").contains("structuralFailures");
+
         List<Map<String, Object>> events = activity.forRun(run.id(), 0, 100);
         assertThat(events).extracting(event -> event.get("action"))
                 .contains("workflow.run.started", "workflow.step.scheduled",
@@ -290,7 +370,7 @@ class WorkflowRunLifecycleMySqlTest {
     @Test
     void theRequestThatLeavesForTheResearchRunIsBuiltFromTheJobPayload() {
         String workflowId = plannedWorkflow(2);
-        when(aiServiceClient.research(any())).thenReturn(collected(2));
+        collecting(2);
         Run run = service.startRun(workflowId);
 
         Job collectJob = jobForStep(run.id(), "collect");
@@ -309,12 +389,24 @@ class WorkflowRunLifecycleMySqlTest {
         assertThat(sent.limits().preferredDomains()).containsExactly("youtube.com");
         assertThat(sent.limits().maxScrapesPerRun()).isEqualTo(5);
         assertThat(sent.seedQueries()).containsExactly("coding tutorial channels india");
+
+        // Same rule for the pipeline: it is configured from the job payload it was given, and the
+        // records it received are exactly the ones the collection step stored.
+        ArgumentCaptor<QualityRequest> qualitySent = ArgumentCaptor.forClass(QualityRequest.class);
+        verify(aiServiceClient, atLeast(1)).processQuality(qualitySent.capture());
+        QualityRequest pipeline = qualitySent.getValue();
+        assertThat(pipeline.requiredFields()).containsExactly("channel_name", "channel_url");
+        assertThat(pipeline.deduplicationKeys()).containsExactly("channel_url");
+        assertThat(pipeline.entityType()).isEqualTo("youtube_channel");
+        assertThat(pipeline.fields()).hasSize(2);
+        assertThat(pipeline.records()).hasSize(2);
+        assertThat(pipeline.rawRecordCount()).isEqualTo(2);
     }
 
     @Test
     void theRunIsNotReportedCompleteBeforeEveryStepHasFinished() {
         String workflowId = plannedWorkflow(2);
-        when(aiServiceClient.research(any())).thenReturn(collected(2));
+        collecting(2);
         Run run = service.startRun(workflowId);
 
         worker.pollOnce();
@@ -322,9 +414,10 @@ class WorkflowRunLifecycleMySqlTest {
 
         Run midWay = runs.findById(run.id()).orElseThrow();
         assertThat(midWay.status()).isEqualTo(RunStatus.RUNNING);
-        // Half the plan finished, half the progress. The number a caller sees is the fraction of
-        // steps that reached a terminal state, which is the only progress this layer reports.
-        assertThat(midWay.progress()).isEqualTo(50);
+        // One third of the plan finished, one third of the progress. The number a caller sees is the
+        // fraction of steps that reached a terminal state, which is the only progress this layer
+        // reports — and a plan with a pipeline step in the middle does not get to look done at 50.
+        assertThat(midWay.progress()).isEqualTo(33);
         assertThat(midWay.finishedAt()).isNull();
         assertThat(step(run.id(), "validate").status()).isEqualTo(JobStatus.PENDING);
     }
@@ -335,6 +428,7 @@ class WorkflowRunLifecycleMySqlTest {
         when(aiServiceClient.research(any()))
                 .thenThrow(new AiServiceClient.AiServiceException(503, "no upstream", null))
                 .thenReturn(collected(2));
+        when(aiServiceClient.processQuality(any())).thenReturn(processed(2));
 
         Run finished = driveToTerminal(service.startRun(workflowId).id(), Duration.ofSeconds(90));
 
@@ -401,6 +495,8 @@ class WorkflowRunLifecycleMySqlTest {
                 new ResearchResult.Validation(true, List.of(), List.of(), 0, true, List.of(),
                         List.of(), List.of(1), 0, List.of(), List.of(),
                         List.of("expected at least 5 records, collected 2")), null));
+        // The pipeline vouches for both rows; the record citing nothing a tool retrieved fails here.
+        when(aiServiceClient.processQuality(any())).thenReturn(processed(records));
 
         Run finished = driveToTerminal(service.startRun(workflowId).id(), Duration.ofSeconds(60));
 
@@ -409,8 +505,11 @@ class WorkflowRunLifecycleMySqlTest {
         assertThat(finished.errorMessage()).contains("1").contains("5");
         assertThat(finished.recordsFound()).isEqualTo(2);
         assertThat(finished.recordsValid()).isEqualTo(1);
-        // Nothing was deleted for want of evidence: the unusable record is named in the step output.
-        assertThat(step(finished.id(), "validate").outputSummaryJson()).contains("issues");
+        // Nothing was deleted for want of evidence: the unusable row is named in the step output, and
+        // so is the fact that the two implementations disagreed about it.
+        assertThat(step(finished.id(), "validate").outputSummaryJson())
+                .contains("findings").contains("SOURCE_EVIDENCE_UNVERIFIED")
+                .contains("ADVISORY_PASSED_HERE_REJECTED");
     }
 
     @Test
@@ -437,7 +536,7 @@ class WorkflowRunLifecycleMySqlTest {
     @Test
     void cancellingAQueuedRunStopsTheRemainingWorkAndLeavesNothingForTheSweeperToRevive() {
         String workflowId = plannedWorkflow(2);
-        when(aiServiceClient.research(any())).thenReturn(collected(2));
+        collecting(2);
         Run run = service.startRun(workflowId);
 
         // Let the first step finish, so what is left is a genuinely queued second step.
@@ -449,15 +548,21 @@ class WorkflowRunLifecycleMySqlTest {
         assertThat(cancelled.cancelRequestedAt()).isNotNull();
         assertThat(cancelled.status()).isEqualTo(RunStatus.CANCELLED);
         assertThat(step(run.id(), "collect").status()).isEqualTo(JobStatus.COMPLETED);
+        // Both steps behind the one that finished are abandoned: the pipeline would have nothing to
+        // hand on, and a PENDING row beside a CANCELLED run reads as work still to come. The
+        // validating step never even had a job — it is queued only when the step it depends on is
+        // done, which is the property that makes the cancellation safe.
+        assertThat(step(run.id(), "transform").status()).isEqualTo(JobStatus.CANCELLED);
         assertThat(step(run.id(), "validate").status()).isEqualTo(JobStatus.CANCELLED);
-        assertThat(jobForStep(run.id(), "validate").status()).isEqualTo(JobStatus.CANCELLED);
+        assertThat(jobForStep(run.id(), "transform").status()).isEqualTo(JobStatus.CANCELLED);
+        assertThat(jobs.findByRun(run.id())).hasSize(2);
         assertThat(jobs.findClaimable()).isEmpty();
     }
 
     @Test
     void theApiSeesTheSameRunTheDatabaseDoes() throws Exception {
         when(aiServiceClient.analyzeRequirement(PROMPT)).thenReturn(analysis(2));
-        when(aiServiceClient.research(any())).thenReturn(collected(2));
+        collecting(2);
 
         String created = mockMvc.perform(post("/api/v1/workflows")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -485,7 +590,7 @@ class WorkflowRunLifecycleMySqlTest {
                 .andExpect(jsonPath("$.run.status").value(RunStatus.COMPLETED.name()))
                 .andExpect(jsonPath("$.run.progress").value(100))
                 .andExpect(jsonPath("$.run.recordsValid").value(2))
-                .andExpect(jsonPath("$.steps", org.hamcrest.Matchers.hasSize(2)))
+                .andExpect(jsonPath("$.steps", org.hamcrest.Matchers.hasSize(3)))
                 .andExpect(jsonPath("$.jobs[0].payload").doesNotExist());
 
         mockMvc.perform(get("/api/v1/workflows/runs"))
@@ -513,7 +618,7 @@ class WorkflowRunLifecycleMySqlTest {
     @Test
     void twoRunsOfTheSameWorkflowAreSeparateExecutionsWithTheirOwnStepsAndJobs() {
         String workflowId = plannedWorkflow(2);
-        when(aiServiceClient.research(any())).thenReturn(collected(2));
+        collecting(2);
 
         Run first = service.startRun(workflowId);
         driveToTerminal(first.id(), Duration.ofSeconds(60));
@@ -521,7 +626,7 @@ class WorkflowRunLifecycleMySqlTest {
 
         assertThat(second.attempt()).isEqualTo(first.attempt() + 1);
         assertThat(second.id()).isNotEqualTo(first.id());
-        assertThat(steps.findByRun(second.id())).hasSize(2);
+        assertThat(steps.findByRun(second.id())).hasSize(3);
         assertThat(jobs.findByRun(first.id()))
                 .allSatisfy(job -> assertThat(job.runId()).isEqualTo(first.id()));
 
@@ -556,7 +661,7 @@ class WorkflowRunLifecycleMySqlTest {
                 "ok", "finalagent-ai-service", "0.1.0",
                 new ai.finalagent.aiclient.dto.AiServiceHealth.Credentials(true, false, true)));
         String workflowId = plannedWorkflow(2);
-        when(aiServiceClient.research(any())).thenReturn(collected(2));
+        collecting(2);
         service.startRun(workflowId);
 
         // One queued job, nothing claimed yet: the loop is driven by hand in this class.

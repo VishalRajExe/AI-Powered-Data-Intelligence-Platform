@@ -6,6 +6,8 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import ai.finalagent.aiclient.dto.AiServiceHealth;
+import ai.finalagent.aiclient.dto.QualityRequest;
+import ai.finalagent.aiclient.dto.QualityResult;
 import ai.finalagent.aiclient.dto.ResearchRequest;
 import ai.finalagent.aiclient.dto.ResearchResult;
 import ai.finalagent.config.FinalAgentProperties;
@@ -18,14 +20,14 @@ import ai.finalagent.config.FinalAgentProperties;
 public class AiServiceClient {
 
     private final RestClient restClient;
-    private final RestClient researchClient;
+    private final RestClient stepClient;
     private final String baseUrl;
 
     public AiServiceClient(@Qualifier("aiServiceRestClient") RestClient aiServiceRestClient,
-                           @Qualifier("researchRestClient") RestClient researchRestClient,
+                           @Qualifier("stepRestClient") RestClient stepRestClient,
                            FinalAgentProperties properties) {
         this.restClient = aiServiceRestClient;
-        this.researchClient = researchRestClient;
+        this.stepClient = stepRestClient;
         this.baseUrl = properties.aiService().baseUrl();
     }
 
@@ -41,21 +43,34 @@ public class AiServiceClient {
     }
 
     /**
-     * Runs the research graph. Non-2xx responses are re-thrown with the AI service's own
-     * error code where it supplied one, so a 422 from schema validation does not become an
-     * opaque 500 at this boundary.
-     */
-    /**
      * Runs the research graph — searches, scrapes and possibly browser sessions inside one
-     * request. Uses the long-timeout client, and is the only call that does.
+     * request. Uses the step-scoped client, and so does the quality pipeline: both are bounded by
+     * the plan's step timeout rather than by a three-second JSON parse budget.
      */
     public ResearchResult research(ResearchRequest request) {
         try {
-            return researchClient.post()
+            return stepClient.post()
                     .uri("/ai/v1/research")
                     .body(request)
                     .retrieve()
                     .body(ResearchResult.class);
+        } catch (RestClientResponseException e) {
+            throw new AiServiceException(e.getStatusCode().value(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Runs the data-intelligence pipeline over collected records. Its answer is advisory:
+     * {@code RowContractEnforcer} re-checks the contract in Java before anything is believed, so a
+     * wrong verdict here costs a re-run rather than a bad dataset.
+     */
+    public QualityResult processQuality(QualityRequest request) {
+        try {
+            return stepClient.post()
+                    .uri("/ai/v1/quality/process")
+                    .body(request)
+                    .retrieve()
+                    .body(QualityResult.class);
         } catch (RestClientResponseException e) {
             throw new AiServiceException(e.getStatusCode().value(), e.getMessage(), e);
         }
