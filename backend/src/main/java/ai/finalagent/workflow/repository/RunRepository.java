@@ -4,13 +4,16 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import javax.sql.DataSource;
 
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
@@ -70,6 +73,59 @@ public class RunRepository {
     public List<Run> findRecent(String workspaceId, int limit) {
         return jdbc.query("SELECT * FROM workflow_runs WHERE workspace_id = ? "
                 + "ORDER BY created_at DESC LIMIT ?", ROW, workspaceId, limit);
+    }
+
+    /** One workflow's run history — every attempt, newest first, none of them rewritten. */
+    public List<Run> findByWorkflow(String workspaceId, String workflowId, int limit, int offset) {
+        return jdbc.query("SELECT * FROM workflow_runs WHERE workspace_id = ? AND workflow_id = ?"
+                + " ORDER BY created_at DESC, id LIMIT ? OFFSET ?", ROW, workspaceId, workflowId,
+                limit, offset);
+    }
+
+    public int countByWorkflow(String workspaceId, String workflowId) {
+        Integer total = jdbc.queryForObject("SELECT COUNT(*) FROM workflow_runs WHERE workspace_id = ?"
+                + " AND workflow_id = ?", Integer.class, workspaceId, workflowId);
+        return total == null ? 0 : total;
+    }
+
+    /**
+     * Runs grouped by status, in one pass.
+     *
+     * <p>The map carries every {@link RunStatus} including the zero ones, because a monitoring surface
+     * that omits a status makes "none" and "not counted" indistinguishable — and a dashboard reading
+     * the second as the first is how a stuck queue looks healthy.
+     */
+    public Map<String, Integer> statusCounts(String workspaceId) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (RunStatus status : RunStatus.values()) {
+            counts.put(status.name(), 0);
+        }
+        jdbc.query("SELECT status, COUNT(*) AS run_count FROM workflow_runs WHERE workspace_id = ?"
+                        + " GROUP BY status",
+                (RowCallbackHandler) rs -> counts.put(rs.getString("status"), rs.getInt("run_count")),
+                workspaceId);
+        return counts;
+    }
+
+    /** What the workspace has ever collected, summed from the runs rather than from a cache. */
+    public Map<String, Integer> recordTotals(String workspaceId) {
+        Map<String, Integer> totals = new LinkedHashMap<>();
+        jdbc.query("SELECT COALESCE(SUM(records_raw), 0) AS records_raw,"
+                        + " COALESCE(SUM(records_found), 0) AS records_found,"
+                        + " COALESCE(SUM(records_valid), 0) AS records_valid,"
+                        + " COALESCE(SUM(duplicate_count), 0) AS duplicates,"
+                        + " COALESCE(SUM(sources_processed), 0) AS sources_processed,"
+                        + " COALESCE(SUM(sources_failed), 0) AS sources_failed"
+                        + " FROM workflow_runs WHERE workspace_id = ?",
+                rs -> {
+                    totals.put("recordsRaw", rs.getInt("records_raw"));
+                    totals.put("recordsFound", rs.getInt("records_found"));
+                    totals.put("recordsValid", rs.getInt("records_valid"));
+                    totals.put("duplicates", rs.getInt("duplicates"));
+                    totals.put("sourcesProcessed", rs.getInt("sources_processed"));
+                    totals.put("sourcesFailed", rs.getInt("sources_failed"));
+                }, workspaceId);
+        return totals;
     }
 
     public Optional<Run> findByWorkflowAndAttempt(String workflowId, int attempt) {

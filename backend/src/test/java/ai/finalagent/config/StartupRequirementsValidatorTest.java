@@ -19,6 +19,11 @@ class StartupRequirementsValidatorTest {
         return new FinalAgentProperties.Execution(false, "", 500, 4, 4, 8, 100, 300, 30, 3, 1, 120, 240_000);
     }
 
+    /** The shipped defaults: none of these numbers is what a bounds test below is about. */
+    static FinalAgentProperties.Export defaultExport() {
+        return new FinalAgentProperties.Export("./var/exports", 500, 200_000);
+    }
+
     private static FinalAgentProperties properties(String aiServiceKey, String dbPassword,
                                                    String dbUser, String aiBaseUrl,
                                                    List<String> origins) {
@@ -26,7 +31,7 @@ class StartupRequirementsValidatorTest {
                 new FinalAgentProperties.Cors(origins),
                 new FinalAgentProperties.Database("127.0.0.1", 3306, "finalagent_dev", dbUser, dbPassword),
                 new FinalAgentProperties.AiService(aiBaseUrl, aiServiceKey, 3000),
-                disabledExecution());
+                disabledExecution(), defaultExport());
     }
 
     private static FinalAgentProperties valid() {
@@ -133,7 +138,7 @@ class StartupRequirementsValidatorTest {
                 badPort.cors(),
                 new FinalAgentProperties.Database("127.0.0.1", 0, "finalagent_dev", "finalagent",
                         "a-real-database-password"),
-                badPort.aiService(), disabledExecution());
+                badPort.aiService(), disabledExecution(), defaultExport());
 
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(withBadPort))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
@@ -143,7 +148,7 @@ class StartupRequirementsValidatorTest {
                 badPort.cors(), badPort.database(),
                 new FinalAgentProperties.AiService("http://127.0.0.1:8000",
                         badPort.aiService().apiKey(), 10),
-                disabledExecution());
+                disabledExecution(), defaultExport());
 
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(withBadTimeout))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
@@ -157,7 +162,7 @@ class StartupRequirementsValidatorTest {
                 base.cors(),
                 new FinalAgentProperties.Database("", 3306, "finalagent_dev", "finalagent",
                         "a-real-database-password"),
-                base.aiService(), disabledExecution())))
+                base.aiService(), disabledExecution(), defaultExport())))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("MYSQL_HOST");
 
@@ -165,7 +170,7 @@ class StartupRequirementsValidatorTest {
                 base.cors(),
                 new FinalAgentProperties.Database("127.0.0.1", 3306, "", "finalagent",
                         "a-real-database-password"),
-                base.aiService(), disabledExecution())))
+                base.aiService(), disabledExecution(), defaultExport())))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("MYSQL_DATABASE");
     }
@@ -183,7 +188,14 @@ class StartupRequirementsValidatorTest {
 
     private static FinalAgentProperties withExecution(FinalAgentProperties.Execution execution) {
         FinalAgentProperties base = valid();
-        return new FinalAgentProperties(base.cors(), base.database(), base.aiService(), execution);
+        return new FinalAgentProperties(base.cors(), base.database(), base.aiService(), execution,
+                defaultExport());
+    }
+
+    private static FinalAgentProperties withExport(FinalAgentProperties.Export export) {
+        FinalAgentProperties base = valid();
+        return new FinalAgentProperties(base.cors(), base.database(), base.aiService(),
+                disabledExecution(), export);
     }
 
     private static FinalAgentProperties.Execution execution(String workspaceId, int pollInterval,
@@ -303,6 +315,35 @@ class StartupRequirementsValidatorTest {
         assertThatCode(() -> StartupRequirementsValidator.validate(
                 withExecution(new FinalAgentProperties.Execution(false, "", 20, 0, 8, 4, 100, 90,
                         30, 99, 1, 120, 240_000))))
+                .doesNotThrowAnyException();
+    }
+
+    // ------------------------------------------------------------- the export writer's bounds
+
+    @Test
+    void anExportDirectoryMustBeNamedBecauseARequestNeverGetsToChooseOne() {
+        assertThatThrownBy(() -> StartupRequirementsValidator.validate(
+                withExport(new FinalAgentProperties.Export("  ", 500, 200_000))))
+                .isInstanceOf(MissingRequiredConfigurationException.class)
+                .hasMessageContaining("FINALAGENT_EXPORT_DIR");
+    }
+
+    @Test
+    void aChunkBiggerThanTheCeilingWouldWritePastItBeforeNoticing() {
+        assertThatThrownBy(() -> StartupRequirementsValidator.validate(
+                withExport(new FinalAgentProperties.Export("./var/exports", 5_000, 100))))
+                .isInstanceOf(MissingRequiredConfigurationException.class)
+                .hasMessageContaining("FINALAGENT_EXPORT_CHUNK_ROWS");
+    }
+
+    @Test
+    void anUnboundedOrNonsensicalRowCeilingIsRefused() {
+        assertThatThrownBy(() -> StartupRequirementsValidator.validate(
+                withExport(new FinalAgentProperties.Export("./var/exports", 500, 0))))
+                .isInstanceOf(MissingRequiredConfigurationException.class)
+                .hasMessageContaining("FINALAGENT_EXPORT_MAX_ROWS");
+
+        assertThatCode(() -> StartupRequirementsValidator.validate(valid()))
                 .doesNotThrowAnyException();
     }
 }

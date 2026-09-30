@@ -12,22 +12,23 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 10 — source and evidence system, **complete**, built on the Phase 9 dataset
-  platform immediately before it. A run's answer is now rows in MySQL — `datasets`,
-  `dataset_columns`, `dataset_rows`, `dataset_sources`, `dataset_row_sources`,
-  `dataset_field_evidence`, `dataset_conflicts` (V3, applied by Flyway against real MySQL 9.6) — read
-  through nine `/api/v1/datasets*` endpoints with search, filter, sort and pagination. Every saved row
-  carries Java's verdict beside the pipeline's, its pages with their retrieval time and
-  `verifiedByTool`, and field-level attribution **only** where the attribution is real.
-  288 backend tests pass, 47 of them against MySQL 9.6; 362 ai-service tests pass unchanged, because
-  no Python change was needed. The web layer remains **mocked-only**: `FIRECRAWL_API_KEY` is still
-  blank, so no real browser session, search, scrape or robots fetch has ever run from this project.
+- **Current Phase:** 11 — operations: history, activity, monitoring and CSV/JSON/XLSX exports,
+  **complete**, built on the Phase 9/10 dataset platform immediately before it. An export is now a
+  `workflow_jobs` row with `job_type='EXPORT'` claimed by the same MySQL-backed pool as a step — one
+  lease, one heartbeat, one sweeper, no Redis — and its percentage is derived by the only writer of that
+  column, from `written_rows` against a `COUNT(*)` taken before the first byte. `V4__exports_and_monitoring.sql`
+  adds `export_jobs`; ten new endpoints cover workflow/run/step history, the activity cursor, monitoring
+  and the three file formats. **307 backend tests pass, 58 of them against real MySQL 9.6**; 362
+  ai-service tests pass unchanged, because no Python change was needed. The web layer remains
+  **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real browser session, search, scrape or
+  robots fetch has ever run from this project.
 - **Last updated:** 2026-09-30
 - **Application code written:** three independent processes.
-  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 66 main source files, 27 test classes:
+  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 76 main source files, 30 test classes:
     `workflow/` (domain, repository, plan, execution, service, web), `quality/`
-    (`DeclaredContract`, `RowContractEnforcer`) and `dataset/` (domain, repository, service, web) —
-    including the `SAVE` step that writes it all.
+    (`DeclaredContract`, `RowContractEnforcer`), `dataset/` (domain, repository, service, web,
+    **export** — the writers, the runner and the save step that fills it all) and **`operations/`**
+    (the history, activity and monitoring read model).
   - `ai-service/` — FastAPI on Python 3.14 (3.12 pinned for deployment), 46 modules: config,
     contracts, security, logging, `api/v1/{health,research,requirements,quality}`, `llm/`,
     `firecrawl/`, `extraction/`, `requirements/`, `research/` (graph, tools, state, prompts, skills,
@@ -35,26 +36,30 @@ existed, and that the system was production-ready — each contradicted by its o
     aggregation) and `quality/` (contracts, normalize, validate, dedupe, entity_resolution, merge,
     score, pipeline).
   - `frontend/` — Next.js 14.2.35. PirateAgentUI design foundation copied byte-identically
-    (`diff -r` verified), 10 routes, `lib/api/` typed client. **Untouched by Phases 9 and 10** — the
-    dataset API is new read surface and no screen consumes it yet.
+    (`diff -r` verified), 10 routes, `lib/api/` typed client. **Untouched by Phases 9, 10 and 11** —
+    the dataset and operations APIs are new read surface and no screen consumes them yet.
   - Plus `database/`, `deploy/`, `scripts/`, `ai-service/skills/` (playbook loader docs), and the
     root `.env.example`.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
-  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated checks.
+  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated checks — now all four
+  `*MySqlTest` classes rather than the two the queue needed.
 - **Built:** the workflow planner and job engine, their schema and persistence, fetch-time source
   governance (robots + domain policy + ranking + dedupe), the six-stage data-intelligence pipeline,
-  Java-side contract re-enforcement of the pipeline's answer, verified browser actions, and the
-  dataset platform with row- and field-level source traceability.
-- **Still not built:** exports (`EXPORT` is still in the step ENUM and still absent from every plan,
-  because nothing writes a file), SSE streaming (events are persisted and pollable, not pushed),
-  host-resolution SSRF and per-domain rate, and authentication — which is what makes
-  `FINALAGENT_WORKSPACE_ID` a single-tenant stopgap rather than a design. `datasets.workspace_id` and
-  every `dataset_*.workspace_id` carry **no foreign key to a `workspaces` table**, because that table
-  does not exist yet; it arrives with identity, now V4.
+  Java-side contract re-enforcement of the pipeline's answer, verified browser actions, the dataset
+  platform with row- and field-level source traceability, and the operations surface — history,
+  activity, monitoring and three export formats written by the queue.
+- **Still not built:** SSE streaming (events are persisted, cursor-paged and now served as a feed, not
+  pushed), export-file retention (nothing sweeps `var/exports`), host-resolution SSRF and per-domain
+  rate, and authentication — which is what makes `FINALAGENT_WORKSPACE_ID` a single-tenant stopgap
+  rather than a design, and which Phase 11 made more urgent: `/api/v1/datasets/*/exports` is
+  unauthenticated and now hands back a file of another tenant's rows the moment tenancy is real.
+  `datasets.workspace_id`, every `dataset_*.workspace_id` and `export_jobs.workspace_id` carry **no
+  foreign key to a `workspaces` table**, because that table does not exist yet; it arrives with
+  identity, now V5.
 - **Repository:** `FINALAIAGENT` is its own git repo, pushed to branch `implementjava` of
   `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git` after every phase, per the
   standing rule. Its history is independent of `main` (old project), which has never been touched
-  from here. Phase 8 is the next commit to make.
+  from here. Phase 11 is the next commit to make.
 - **Blocked on:** decisions **G1**, **G2**, **S1**, **Q1**, **Q2** and the **L1** licence ruling
   (§6); Python 3.12 before the provider extra is installed. **B1 (the MySQL account) is resolved**
   and no longer blocks anything.
@@ -698,6 +703,121 @@ existed, and that the system was production-ready — each contradicted by its o
   dataset (unmeasured — no run has collected at that scale), and whether `position` ordering survives
   a schema where the model legitimately puts a field nobody asked for first.
 
+- [x] **Phase 11 (2026-09-30) — operations: history, activity, monitoring, and three export formats.**
+      Workflow, run and step history, an activity feed, one monitoring summary, and CSV/JSON/XLSX exports
+      written by the same MySQL-backed queue that runs steps — no Redis, no second job system, and no
+      progress number that was not measured. `EXPORT` enters as a *job type*, not as a fifth step:
+      nothing about it is invented to fill a plan, and a run's status is not moved by a file somebody
+      downloaded from it afterwards.
+
+  **An export is a job, not a request.** `V4__exports_and_monitoring.sql` adds `export_jobs`, and the work
+  it describes is a `workflow_jobs` row with `job_type = 'EXPORT'` and `step_id NULL` — one table, one
+  claim, one lease, one heartbeat, one sweeper, one retry policy for every piece of asynchronous work in
+  the service. `WorkflowJobExecutor.run` now dispatches on job type. The `EXPORT` branch keeps the lease
+  guard, the `stillOwning` check and the guarded `REQUIRES_NEW` terminal write, and does **no** run
+  rollup: an export reads a dataset a run produced, it is not a step of it, and its outcome must not move
+  that run's status or progress. The branch has no timeout wrapper, which is a stated difference from a
+  step rather than an oversight — a step's budget exists because it waits on an external service that may
+  never answer, while an export waits on the database and the local disk, both already bounded by their
+  drivers. The lease is what stops a wedged export, and a second timer on top would mostly succeed in
+  cutting off a large job that was making real progress. Priority 200 keeps exports behind steps
+  (100+sequence) in the same claim order.
+  
+  **Progress is measured, never narrated.** `total_rows` is a `COUNT(*)` taken in `ExportService.request`
+  — on the request thread, before a job exists — which is also what rejects a filter naming a column the
+  dataset never declared as a `400` rather than as a job that fails minutes later. `written_rows` advances
+  only by rows physically handed to a writer. `ExportRepository.advance` is the **only** percentage writer
+  in the build: it derives the figure from those two counts and caps at 99 until the record is completed,
+  so 100 is unreachable while work remains and no caller can submit a share it has not earned. There is no
+  code path that accepts a progress value from outside.
+  
+  `ExportProgressMySqlTest` makes the middle of a run observable instead of asserting only its end: the
+  supplier the runner calls at every chunk boundary reads the record back, so five rows at the test
+  profile's chunk of two are *seen* at `0, 2, 4` written and `0, 40, 80` percent, each below 100, with 100
+  arriving only once `written = total = 5`. That is the specific inversion of the project this build
+  replaced, which mapped status to a percentage (`RUNNING → 50`) so a job wedged for twenty minutes looked
+  half finished.
+  
+  **Nothing half-written is ever visible.** Each writer streams into `<name>.part`; the file is renamed
+  only after `finish()`, and the published name, byte count and SHA-256 go on the row. The download re-
+  derives the path from the export id — the stored `file_path` is a record of where the writer put it, not
+  an input — and sends the digest as `X-Content-Sha256` so a caller can check what arrived against what
+  was measured. CSV carries a UTF-8 BOM (without it Excel reads the file in the local code page and every
+  non-ASCII value arrives mangled), CRLF and RFC 4180 quoting. JSON carries the dataset meta, the columns
+  *with their `origin`*, and each row's sources and issues — provenance is the reason that format exists.
+  XLSX goes through POI's SXSSF with numbers written as numbers. All three are asserted by reading the
+  bytes back, the workbook through POI itself.
+  
+  | Verification | Result |
+  |---|---|
+  | `mvn -B -ntp test` with `FINALAGENT_TEST_MYSQL=true` | **307 tests, 0 failures, 0 skipped** — all four MySQL classes ran |
+  | `ExportWriterTest` (5) | BOM/CRLF/doubled-quote bytes; the formula guard on `=`, `@`, `+` and *not* on `12 % off`; JSON columns parsed back with `origin` intact; XLSX read through POI with `CellType.NUMERIC` preserved, a label header rather than a field key, and a blank absent cell; an empty dataset still producing a header-only file that says so |
+  | `ExportProgressMySqlTest` (11) | progress at chunk boundaries `0 → 40 → 80` then 100; a claimed job run by the real executor and downloaded with a matching digest; mid-write cancel leaving 4 rows, 66 %, `CANCELLED` and neither file nor `.part`; a lease taken over producing no terminal write and exactly one `lease_lost` event; `EXPORT_TOO_LARGE` at `max-rows + 1` refusing with both counts named; cancel moving the record *and* its unclaimed job, leaving nothing claimable; a reclaimed job over a finished export skipped so one checksum cannot describe two files; `salary:gte:70000` read the ordinary way (3 rows) and exported as exactly those 3; an undeclared filter key refused before any row existed; `409 EXPORT_NOT_COMPLETED` versus `404 EXPORT_NOT_FOUND`; and the monitoring/history surface asserting every run status present including the zeros, `recordsFound` equal to the sum of its rows, dataset totals equal to `COUNT(*)`, `runCount` and `latestPlanVersion` per workflow, step history with its job attached, and an activity cursor that pages to empty |
+  | `StartupRequirementsValidatorTest` (25) | the export block added: a blank directory named in the refusal, a chunk larger than the ceiling refused, the ceiling's own bounds, and every pre-existing rule still passing |
+  | `DatasetPlatformMySqlTest` / `WorkflowQueueMySqlTest` / `WorkflowRunLifecycleMySqlTest` | 17 / 14 / 16 — unchanged after the executor dispatch, the `cancelPendingForRun` scope and the shared filter parser |
+  | `scripts/verify.sh backend` | green: tests, package, and the MySQL check, which now names all four classes instead of two |
+  | Secrets in the commit set | none — Java, SQL, YAML, one `properties` file, `pom.xml` and `verify.sh`; the export directory lives under the existing `exports/` ignore rule |
+  
+  **Defects found and fixed in this phase.**
+  
+  | # | Defect | How it surfaced | Fix |
+  |---|---|---|---|
+  | P39 | **The download resolved its path from a system property nothing in this build sets.** `ExportService.file()` read `System.getProperty("finalagent.export.dir")` while the writer honoured `FINALAGENT_EXPORT_DIR`, so a configured deployment would write to one directory and offer files from another | Reading the wiring while adding the `EXPORT` branch — the two paths had to agree, and they did not | the path is re-derived from the export id through the runner's own `fileFor`, so one method decides where a file lives, and the stored path is a record rather than an input. A row someone had edited can no longer name a file the process can read |
+  | P40 | **Every JSON export of a real dataset failed on the first row.** `rowSources` returns `retrievedAt` as a `java.time.Instant` and `JsonFile` serialized through a bare `ObjectMapper`, which refuses JSR-310 types — the provenance block, which is the entire reason the format exists, was what it could not write | `theClaimedJobRunsThroughTheExecutorAndItsFileIsDownloadable` went `FAILED` with `InvalidDefinitionException`, while the direct-runner test (CSV) passed. A unit test of one format hid a fault in another | the writer serializes through a mapper carrying `JavaTimeModule` with `WRITE_DATES_AS_TIMESTAMPS` off, so a timestamp in a file is the same ISO string the read APIs print |
+  | P41 | **A refusal left two answers to one question.** `EXPORT_TOO_LARGE` and `DATASET_NOT_FOUND` failed the *job* while `export_jobs` still said `QUEUED`, because only the I/O path wrote the record | The ceiling test asserted `FAILED` and read `QUEUED` | both paths now write the record and the job with the same code and the same sentence |
+  | P42 | **The CSV formula guard sat inside the quoting.** `=HYPERLINK(…)` became `"'=HYPERLINK(…)"`: Excel reads a quoted cell as text anyway, so the apostrophe survived as visible content and the guard was decoration rather than protection | `ExportWriterTest` comparing the exact cell bytes | quoting is applied to the value and the apostrophe is prefixed *outside* it, which is where Excel reads it as "this cell is text" rather than as data |
+  | P43 | **The runner silently overrode its own configuration**: `Math.max(50, chunkRows)` meant a deployment asking for a row at a time got fifty, and a test profile at two rows per chunk saw one checkpoint for the whole file | Reading the config through: `StartupRequirementsValidator` already bounds the chunk between 1 and 10 000 and refuses one larger than the ceiling, so the floor duplicated a rule that had a home | the clamp is gone; the validator is the one place the bound lives |
+  | P44 | **Cancelling a run cancelled somebody's export.** `cancelPendingForRun` moved every PENDING job of the run, and an export job carries that run id for traceability | Reading the new job type against the existing statement | scoped to `job_type = 'WORKFLOW_STEP'`. An export is a reader of a dataset the run produced, not work the run still owes |
+  | P45 | **The XLSX writer would have buffered the whole workbook in memory** to measure it, defeating the reason SXSSF was chosen | Reading `finish()` before it shipped: a `ByteArrayOutputStream` sized to the file, then copied | the workbook is written straight through the counting stream, so the byte figure is the file's size and memory stays at the chunk |
+  | P46 | **A run-history index ordered on a random UUID.** `idx_runs_workflow_recent (workspace_id, workflow_id, id DESC)` would serve a listing that looks sorted to the database and arrives in no order a human can read | Reading V4 before Flyway ever applied it — the same mistake the export listing made, caught in the same pass | runs and exports order by `created_at` (with `id` as a stable tie-break); activity keeps `id`, which does increase, and is therefore also a safe cursor |
+  
+  Also corrected before it shipped: `JsonFile` called a `JsonFactory.createGenerator` overload that does not
+  exist, and `Xlsx` referenced an unimported stream. Both were compile errors rather than defects, and both
+  are listed here only because the phase's files had not been compiled until the branch was wired.
+  
+  **Two structural changes that belong to this phase rather than to exports.**
+  - `config/Workspace.java` makes "the workspace comes from server configuration and never from a request"
+    one component instead of one private method per service. A duplicated security rule drifts, and this one
+    is the rule the audit's §5 item 1 says the old project broke.
+  - `DatasetQueryRepository.Filter.parse` owns the `key:operator:value` grammar, and `DatasetController`
+    calls it rather than holding its own copy. An export is requested with the scope of the listing it came
+    from; two parsers of one grammar become two behaviours, and the stored scope would stop meaning what the
+    rows endpoint means.
+  
+  **Endpoints added.** `POST /api/v1/datasets/{id}/exports` (`202`, queues, never writes on the request
+  thread), `GET /api/v1/exports`, `GET /api/v1/exports/{id}` (with its job row — lease, attempts, last
+  error, the queue's own words rather than a paraphrase), `GET /api/v1/exports/{id}/download`,
+  `POST /api/v1/exports/{id}/cancel`, `GET /api/v1/workflows`, `GET /api/v1/workflows/{id}/runs`,
+  `GET /api/v1/workflows/runs/{runId}/steps`, `GET /api/v1/activity` (cursor on the event id, plus an
+  `action` prefix filter) and `GET /api/v1/monitoring`. A step's history names the job that ran it because
+  the step row holds only the *latest* outcome — a step that failed twice before succeeding is invisible
+  unless both rows are read together. Every run status appears in `monitoring`, including the zero ones, so
+  "none" is never read as "not counted"; queue depth is labelled `queue-wide` because the worker pool is
+  shared and a per-workspace number would imply an isolation that does not exist.
+  
+  Reuse records for this phase:
+  
+  | Repository | Source file | Feature | Destination | Method |
+  |---|---|---|---|---|
+  | old project | `export.service.ts:41-53` | generating a file inside the HTTP request and holding the job in a promise | `dataset/service/ExportService.request` (row + job, then return), `dataset/export/ExportRunner` | **REVERSAL, not port.** Upstream's state lived in the process that started it, so a restart stranded every export in `RUNNING` with nothing able to recover it. Here the queue owns the work and every reader reads what it recorded |
+  | old project | `event-broadcaster.ts:56-99` | write the event, then broadcast it | already adopted in Phase 7; `OperationsService.feed` is the cursor reader over that log | **PORT (reader side).** The streaming endpoint the audit deferred is now a `SELECT … WHERE id > ?` over a table that already exists, which is why SSE stayed out of this phase rather than being half-built |
+  | this project | `docs/audit/J-no-redis-job-architecture.md` §J.1-§J.13 | conditional-UPDATE claim, lease, heartbeat, sweeper, guarded terminal write | `workflow_jobs` rows with `job_type='EXPORT'`, dispatched by `WorkflowJobExecutor.runExport` | **REUSED AS IS.** No second queue, no new lock, no Redis. The one deliberate deviation is the absent timeout wrapper, documented above with its reason |
+  | Apache POI | `poi-ooxml:5.4.1`, `SXSSFWorkbook` | writing an OOXML workbook without holding it in memory | `ExportWriter.Xlsx` | **NEW DEPENDENCY, TAKEN.** Writing the zip package by hand is a bug farm; the justification and the streaming requirement are recorded in `pom.xml` beside the coordinate |
+  | anakin, web-agent-main, web-research-agent-master, data-enrichment-js, ai-data-enrichment-agent, TheAgenticBrowser-main | — | nothing | — | **NO TAKE.** None of the six has an export pipeline that survives a restart; `anakin` and `data-enrichment-js` generate files in-request the way the old project did, which is the defect this phase inverts |
+  
+  **Honest limits after this phase.**
+  1. Exports are readable only through the API's own directory and **nothing sweeps old files**. The
+     `ON DELETE CASCADE` comment in V4 anticipates a retention rule; it is not implemented, so disk growth
+     is an operator concern until it is.
+  2. A large export occupies a worker for its duration. Intended (priority 200, bounded pool, lease
+     reclaim), but unmeasured here: every dataset in this build is a handful of rows, so "how long does a
+     200 000-row XLSX take, and does it starve steps" is still a question rather than a number.
+  3. `monitoring` is a set of point-in-time reads. There is no time series, so "is it slower than usual"
+     cannot be answered from it.
+  4. Everything here is still unauthenticated and single-workspace by configuration — Phase 12's task, and
+     made more urgent by this one: `POST /api/v1/datasets/{id}/exports` both starts billed-adjacent work and
+     hands back a file of another tenant's rows the moment tenancy is real.
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -841,16 +961,34 @@ verified by 17 tests that run against that server, not against doubles:
 Phase 10 added no further tables: it wrote the traceability *through* these — `run_id` and `step_id` on
 every row and source, so a value names the run, the step and the page that produced it.
 
+**Phase 11 added `V4__exports_and_monitoring.sql`,** applied by Flyway against the same MySQL 9.6.0 and
+verified by the 11 tests of `ExportProgressMySqlTest`, run against that server:
+
+| Object | What it holds | What its keys and columns guarantee |
+|---|---|---|
+| `export_jobs` | one requested file: dataset, format, the requester's scope as JSON, `total_rows` / `written_rows` / `progress_percent`, the published name, path, byte count and SHA-256, error code and reason, and a timestamp for each transition | `uq_export_scope (workspace_id, id)` so a child can reference the pair; `fk_export_dataset` on `(dataset_id, workspace_id)` `ON DELETE CASCADE`, so a dataset's export records cannot outlive it as references to files nobody can attribute; `status` an ENUM whose `RUNNING` is set only by the worker that claimed the job |
+| `idx_events_workspace_recent` | `(workspace_id, id DESC)` on `activity_events` | the workspace feed and its cursor. `idx_events_run` served one run at a time; a workspace-wide listing sorted the whole table |
+| `idx_runs_workflow_recent` | `(workspace_id, workflow_id, created_at DESC)` on `workflow_runs` | run history per workflow, ordered by the column that actually means recency — P46 caught this index written against `id` before it was ever applied, and run ids are random UUIDs |
+
+Progress has nowhere to be invented. `progress_percent` is derived by `ExportRepository.advance` from
+`written_rows` against `total_rows`, capped at 99 until the record completes, and that is the only
+statement in the codebase that writes the column — the schema offers no slot for a figure a caller
+claimed.
+
 Tenant scoping turned out to be structural rather than polite. Every child carries `workspace_id` and
 foreign-keys to `(dataset_id, workspace_id)`, so MySQL **refuses** to move a dataset header out from
-under its own rows; P38 found that by trying, and the assertion stayed.
+under its own rows; P38 found that by trying, and the assertion stayed. Phase 11 inherited the same
+consequence for exports: `export_jobs` keys its FK on that pair, so a requested file cannot be re-homed
+either.
 
-**The numbering decision the audit will want checked.** `E-database-model.md` reserved `V3` for
-`baseline_identity`, and identity is still unbuilt. Rather than create empty tables to fill a slot —
-the same reasoning that made V1 workflows rather than identity — the slot gave way to code that
-exists, and authentication arrives as `V4`. No applied migration was renumbered or edited, because
-Flyway verifies checksums of what it has run; `flyway_schema_history` now holds 1, 2, 3, all
-`success = 1`, and the schema has 14 tables.
+**The numbering decision the audit will want checked.** `E-database-model.md` reserved `V3` and `V4` for
+`baseline_identity`, and identity is still unbuilt. Rather than create empty tables to fill a slot — the
+same reasoning that made V1 workflows rather than identity — both slots gave way to code that exists:
+the dataset platform took V3 in Phase 9, and exports and monitoring took V4 here. No applied migration
+was renumbered or edited, because Flyway verifies checksums of what it has run;
+`flyway_schema_history` now holds 1, 2, 3, 4, all `success = 1`, and the schema has 15 tables.
+**Authentication arrives as `V5__baseline_identity.sql`**, and that is the last slot the audit's numbering
+still owns.
 
 `workflow_steps.output_summary_json` is still written and still read: the save step reads the
 pipeline's records out of the transform step's summary and Java's verdicts out of the validating
@@ -873,9 +1011,10 @@ the schema had never been applied anywhere but this local dev database; the tabl
 both migrations re-applied, and `flyway_schema_history` now holds exactly 2 rows. Against a shared
 or deployed database the same fix would have had to be a new `V3`.
 
-Still deliberately absent: `source_domain_policy`, `users`, `workspaces`, `refresh_tokens`,
-`export_jobs`. What is no longer absent is the dataset model itself, which this section listed as a
-gap until Phase 9.
+Still deliberately absent: `source_domain_policy`, `users`, `workspaces`, `refresh_tokens` — all four
+are identity's, and they arrive together as V5. What is no longer absent is the dataset model itself,
+which this section listed as a gap until Phase 9, and `export_jobs`, which it listed as a gap until
+Phase 11.
 
 What the schema is *not*: it is not JPA-generated. `pom.xml` carries `flyway-core` + `flyway-mysql`
 and no JPA provider for these tables; the queue needs conditional `UPDATE … WHERE status = ? AND
@@ -1047,6 +1186,31 @@ this machine can produce. What that does **not** establish:
   Whether models actually change course on `[verification: …]` rather than resubmitting is a live
   provider behaviour, untested with a real key.
 
+### Verification limits introduced by Phase 11
+
+The export and operations tests run against real MySQL but against fixtures, so what they establish is
+the machinery, not its behaviour at the sizes that matter. What they do **not** establish:
+
+- **How a large export behaves.** The ceiling test refuses at `max-rows + 1`, but every dataset here is
+  a handful of rows. How long a 200 000-row XLSX takes, whether the heartbeat keeps its lease through
+  one, and what it does to the pool's capacity for steps are unmeasured — a long export occupies a
+  worker by design, and no test here has made one long enough to watch that happen.
+- **That SXSSF's memory claim holds.** The writer streams and the byte count comes from the counting
+  stream, both asserted; the *reason* it streams — constant memory on a big file — has never been
+  observed, because nothing here has produced a big file.
+- **What the monitoring figures look like when they are wrong.** Every number is a `COUNT(*)` or a
+  `SUM` over real tables, verified equal to the tables in one test. What is not tested is the operator's
+  question — "is it slower than usual" — because there is no time series, only point-in-time reads.
+- **Export-file retention does not exist.** Nothing sweeps `var/exports`, so disk growth is an operator
+  concern until it is implemented, and the `ON DELETE CASCADE` comment in V4 anticipates a rule rather
+  than describing one.
+- **The activity feed is polled, never pushed.** `nextCursor` and the `action` prefix filter are
+  asserted by paging to empty; the SSE layer that would sit on the same log is unbuilt, so "events
+  arrive promptly" is still not a claim this project can make.
+- **Everything is still single-tenant by configuration.** An export is now an endpoint that hands back a
+  file of another workspace's rows the moment tenancy is real, which makes the Phase 12 work on
+  `/api/v1/*` more urgent than it was when the only unauthenticated route started work.
+
 ### Defects found and fixed during Phase 1 (all by running, not reading)
 
 | # | Defect | How it surfaced |
@@ -1210,7 +1374,7 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phases 9 and 10 are complete; awaiting authorization for the next one.** Phases have been directed out of
+**Phase 11 is complete; awaiting authorization for Phase 12 (Spring Security).** Phases have been directed out of
 `M-phase-plan.md` order, and that drift is now worth stating precisely rather than in a footnote:
 
 | Planned | Delivered | Where it went |
@@ -1223,30 +1387,33 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 | **Phase 6 — browser planner / critique** | **Phase 6** (2026-09-30) | taken as two patterns inside the one existing research graph: `run_interact` verifies its own effect (`CHANGED` / `UNCHANGED` / `UNKNOWN`) and `critique_prompt` receives what was actually read. Upstream's three-agent topology, local Playwright, screenshot judging and CSP/automation evasion were **refused** |
 | Phase 8 — data intelligence pipeline | **Phase 8** (2026-09-30) | `ai-service/app/quality/` behind `POST /ai/v1/quality/process`, executed as the `TRANSFORM` step and disposed of by `RowContractEnforcer` in Java |
 | Phase 8's dataset persistence | **Phases 9 and 10** (2026-09-30) | `V3__dataset_platform.sql` — seven tables, the `SAVE` step that writes them, and nine read endpoints; Phase 10 completed the traceability through the same schema |
-| Exports | **not built** | `EXPORT` is still in the step ENUM and still absent from every plan, because nothing writes a file |
+| Exports | **Phase 11** (2026-09-30) | CSV, JSON and XLSX as `workflow_jobs` rows with `job_type='EXPORT'` — the same claim, lease, heartbeat, sweeper and guarded terminal write that runs a step. `EXPORT` is a **job type**, not a fifth step: it enters no plan, and no run's status or progress moves because somebody downloaded one |
+| Phase 11's history / activity / monitoring | **Phase 11** (2026-09-30) | `operations/` reads the tables the queue already writes: `GET /api/v1/workflows`, `/{id}/runs`, `runs/{id}/steps`, `/api/v1/activity` (cursor on the event id) and `/api/v1/monitoring` |
 
 Most valuable next candidates, in dependency order:
 
-1. **Authentication and tenancy (the plan's Phase 3), now V4.** It moves to the top because
-   `/api/v1/datasets*` is the first read surface over *stored* user data, which is a different
-   exposure from the read-only endpoints before it: a caller who can list datasets can read another
-   tenant's collected records if the scope is ever widened. Today the workspace is
-   server-configured, a foreign id answers as not-found, and the compound foreign keys mean a dataset
-   cannot even be re-homed away from its rows (P38) — but `FINALAGENT_WORKSPACE_ID` and
+1. **Authentication and tenancy (the plan's Phase 3), now `V5`.** It moves to the top because Phase 11
+   gave the API two things a read-only surface never had: an unauthenticated `POST` that starts billed,
+   worker-executed work, and an unauthenticated file download. `POST /api/v1/datasets/{id}/exports`
+   spends a worker and a disk write, and `GET /api/v1/exports/{id}/download` hands back every row of a
+   dataset the requester filtered — so the exposure is no longer "read another tenant's records if the
+   scope is ever widened" but "ask for them as a file". Today the workspace is server-configured, a
+   foreign id answers as not-found, and the compound foreign keys mean neither a dataset nor an export
+   can be re-homed away from its rows (P38, and the same rule in V4) — but `FINALAGENT_WORKSPACE_ID` and
    `Principals.UNAUTHENTICATED` are single-tenant placeholders, `workspace_id` / `created_by_id` still
-   have no foreign keys, and no `workspaces` / `users` table exists. `/api/v1/workflows/*` remains
-   unauthenticated too, and can start billed work: Firecrawl credits, Gemini quota, a CPU-bound
-   pipeline pass, and — where an operator enables it — live browser sessions.
-2. **Exports.** The `EXPORT` step type exists in the ENUM and in `workflow_plans.output_configuration`
-   and is still in no plan — deliberately, because the old runner shipped `EXPORT_NOT_IN_PHASE`
-   placeholders for work it never did. A CSV/JSON writer over `dataset_rows` with a listing's filter
-   and sort applied to it is the whole feature, and it is what a user who can see a dataset asks for
-   next.
-3. **SSE monitoring over the durable event log.** `activity_events` is already written before any
-   broadcast, is cursor-addressable (`id > ?`), and now carries a `workflow.dataset.saved` event, so
-   the streaming endpoint is a reader over a table that exists rather than new plumbing.
-4. **Frontend for the dataset API.** Ten routes exist and none reads `/api/v1/datasets`: a listing, a
-   schema-aware table over the dynamic columns, and a row's evidence trail. The design foundation is
+   have no foreign keys, and no `workspaces` / `users` / `refresh_tokens` table exists.
+   `/api/v1/workflows/*` remains unauthenticated too, and can start billed work: Firecrawl credits,
+   Gemini quota, a CPU-bound pipeline pass, and — where an operator enables it — live browser sessions.
+2. **SSE monitoring over the durable event log.** `activity_events` is already written before any
+   broadcast, is cursor-addressable (`id > ?`), now carries a `workflow.dataset.saved` event and
+   `export.completed` / `export.failed` events, and is served by `/api/v1/activity` as a polled cursor.
+   The streaming endpoint is a reader over that same method rather than new plumbing.
+3. **Export-file retention.** Nothing sweeps `var/exports`, so a completed export's file lives forever:
+   `ON DELETE CASCADE` drops the *records* when a dataset goes, and says so in V4, but the disk is an
+   operator concern until a job prunes it. This is a queue job too, for the same reason exports are.
+4. **Frontend for the dataset and operations APIs.** Ten routes exist and none reads
+   `/api/v1/datasets`, `/api/v1/exports` or `/api/v1/monitoring`: a listing, a schema-aware table over
+   the dynamic columns, a row's evidence trail, and an export's progress. The design foundation is
    byte-identical from `PirateAgentUI` and `lib/api/` is a typed client, so this is new pages rather
    than a redesign.
 5. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
@@ -1256,11 +1423,13 @@ Most valuable next candidates, in dependency order:
 6. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
    the queue retries (`Backoff`), but the Gemini client still surfaces a rate limit as an error —
    normal on a free tier capped at 20 requests/day, not an edge case.
-7. **Right-size the budgets against one real run, and a dataset read against one real size.**
+7. **Right-size the budgets against one real run, and both new reads against one real size.**
    `WORKFLOW_STEP_TIMEOUT_MS=240000` inside `WORKFLOW_LEASE_SECONDS=300` was reasoned about, never
    measured: no step has ever collected from the live web here, Phase 8 added a second long call
    (`/ai/v1/quality/process`) under the same budget, Phase 6 made an unverifiable browser session
-   visible, and a filtered read of a large dataset is a JSON scan nobody has timed (§5).
+   visible, and Phase 11 added two more unmeasured numbers — a filtered dataset read is a JSON scan
+   nobody has timed (§5), and an export's chunk size is the only thing standing between a large file
+   and a worker held for its duration.
 
 Still open: **G1** (demonstration strategy), **G2** (narrowed again by Phase 6 — the API shape and
 lifecycle are settled, and sessions are now verifiable in principle, but no live session has run here,

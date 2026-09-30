@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -342,6 +343,31 @@ public class DatasetRepository {
     }
 
     private record Query(String where, List<Object> args) {
+    }
+
+    /**
+     * Rows, valid rows and sources across the workspace, summed from the tables that hold them.
+     *
+     * <p>From {@code dataset_rows} and {@code dataset_sources}, not from the {@code row_count} columns
+     * on the dataset headers: a monitoring figure has to be the count of the things, or it reports what
+     * the writer last believed rather than what is on disk.
+     */
+    public Map<String, Integer> rowTotals(String workspaceId) {
+        Map<String, Integer> totals = new LinkedHashMap<>();
+        jdbc.query("""
+                SELECT (SELECT COUNT(*) FROM dataset_rows WHERE workspace_id = ?) AS rows_stored,
+                       (SELECT COUNT(*) FROM dataset_rows WHERE workspace_id = ? AND valid = 1
+                          AND duplicate_of_row_id IS NULL) AS rows_valid,
+                       (SELECT COUNT(*) FROM dataset_sources WHERE workspace_id = ?) AS sources,
+                       (SELECT COUNT(*) FROM dataset_sources WHERE workspace_id = ?
+                          AND verified_by_tool = 1) AS sources_verified
+                """, rs -> {
+            totals.put("rows", rs.getInt("rows_stored"));
+            totals.put("validRows", rs.getInt("rows_valid"));
+            totals.put("sources", rs.getInt("sources"));
+            totals.put("verifiedSources", rs.getInt("sources_verified"));
+        }, workspaceId, workspaceId, workspaceId, workspaceId);
+        return totals;
     }
 
     /**

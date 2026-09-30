@@ -7,7 +7,7 @@ import java.util.Map;
 
 import org.springframework.stereotype.Service;
 
-import ai.finalagent.config.FinalAgentProperties;
+import ai.finalagent.config.Workspace;
 import ai.finalagent.dataset.domain.DatasetRows.Column;
 import ai.finalagent.dataset.domain.DatasetRows.Dataset;
 import ai.finalagent.dataset.domain.DatasetRows.Row;
@@ -38,22 +38,17 @@ public class DatasetService {
 
     private final DatasetRepository datasets;
     private final DatasetQueryRepository queries;
-    private final FinalAgentProperties properties;
+    private final Workspace currentWorkspace;
 
     public DatasetService(DatasetRepository datasets, DatasetQueryRepository queries,
-                          FinalAgentProperties properties) {
+                          Workspace currentWorkspace) {
         this.datasets = datasets;
         this.queries = queries;
-        this.properties = properties;
+        this.currentWorkspace = currentWorkspace;
     }
 
     public String workspace() {
-        String configured = properties.execution().workspaceId();
-        if (configured == null || configured.isBlank()) {
-            throw new IllegalStateException("FINALAGENT_WORKSPACE_ID is not configured; this service "
-                    + "does not accept a workspace id from a request");
-        }
-        return configured;
+        return currentWorkspace.current();
     }
 
     public Dataset require(String datasetId) {

@@ -24,6 +24,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import ai.finalagent.config.FinalAgentProperties;
+import ai.finalagent.dataset.export.ExportRunner;
 import ai.finalagent.workflow.domain.JobStatus;
 import ai.finalagent.workflow.domain.Records.Job;
 import ai.finalagent.workflow.domain.Records.Plan;
@@ -71,6 +72,7 @@ public class WorkflowJobExecutor {
     private final RunRepository runs;
     private final WorkflowRepository workflows;
     private final ActivityRepository activity;
+    private final ExportRunner exportRunner;
     private final Map<String, StepHandler> handlers;
     private final FinalAgentProperties.Execution config;
     private final Backoff backoff;
@@ -82,6 +84,7 @@ public class WorkflowJobExecutor {
 
     public WorkflowJobExecutor(JobRepository jobs, StepRepository steps, RunRepository runs,
                                WorkflowRepository workflows, ActivityRepository activity,
+                               ExportRunner exportRunner,
                                List<StepHandler> handlerList, FinalAgentProperties properties,
                                Backoff backoff, WorkerIdentity identity,
                                @Qualifier("leaseScheduler") ScheduledExecutorService leaseScheduler,
@@ -93,6 +96,7 @@ public class WorkflowJobExecutor {
         this.runs = runs;
         this.workflows = workflows;
         this.activity = activity;
+        this.exportRunner = exportRunner;
         this.handlers = indexHandlers(handlerList);
         this.config = properties.execution();
         this.backoff = backoff;
@@ -117,9 +121,14 @@ public class WorkflowJobExecutor {
     public void run(Job job) {
         long started = System.nanoTime();
 
+        if ("EXPORT".equals(job.jobType())) {
+            runExport(job, started);
+            return;
+        }
+
         if (!"WORKFLOW_STEP".equals(job.jobType())) {
             finish(job, null, Terminal.rejected("JOB_TYPE_NOT_IMPLEMENTED",
-                    "this build executes WORKFLOW_STEP jobs only; " + job.jobType()
+                    "this build executes WORKFLOW_STEP and EXPORT jobs; " + job.jobType()
                             + " has no handler and will not be rolled up as success"), started);
             return;
         }
@@ -175,7 +184,7 @@ public class WorkflowJobExecutor {
         }
 
         if (!leaseHeld || !stillOwning(job)) {
-            abandonLostLease(job, step, run);
+            abandonLostLease(job, step);
             return;
         }
 
@@ -191,6 +200,59 @@ public class WorkflowJobExecutor {
             return;
         }
         finish(job, step, Terminal.rejected(failure.code(), text(failure.getMessage())), started);
+    }
+
+    /**
+     * Runs an export job on the same claim, lease, heartbeat and guarded terminal write as a step.
+     *
+     * <p>There is no timeout wrapper here, and that is a deliberate difference from a step. A step's
+     * budget exists because it waits on an external service that may never answer; an export waits on
+     * the database and the local disk, both of which the driver already bounds. What stops a wedged
+     * export is the lease: the heartbeat is the only thing keeping the claim alive, the writer checks
+     * it every chunk, and a worker that stops reporting gets reclaimed by the sweeper exactly as a step
+     * worker would. Adding a second timer on top would mostly succeed in cutting off a large export
+     * that was making real progress.
+     *
+     * <p>No rollup follows. An export is a reader of a dataset a run produced, not a step of it, so its
+     * outcome must not move that run's status or progress.
+     */
+    private void runExport(Job job, long started) {
+        String exportId;
+        try {
+            exportId = ExportRunner.exportIdOf(job.payloadJson());
+        } catch (RuntimeException e) {
+            finish(job, null, Terminal.rejected("EXPORT_PAYLOAD_UNUSABLE",
+                    text(e.getMessage())), started);
+            return;
+        }
+
+        ExportRunner.Outcome outcome;
+        try (LeaseGuard lease = LeaseGuard.start(job.id(), identity.value(), jobs, leaseScheduler,
+                config.leaseSeconds(), config.heartbeatSeconds())) {
+            outcome = exportRunner.run(job.workspaceId(), exportId, lease::holdsLease,
+                    () -> exportRunner.settled(job.workspaceId(), exportId));
+        } catch (RuntimeException e) {
+            log.error("export job {} raised an unclassified failure", job.id(), e);
+            outcome = new ExportRunner.Outcome(JobStatus.FAILED, Map.of(), "UNEXPECTED_EXPORT_FAILURE",
+                    e.getClass().getSimpleName() + ": " + text(e.getMessage()));
+        }
+
+        if (!stillOwning(job)) {
+            abandonLostLease(job, null);
+            return;
+        }
+
+        boolean succeeded = outcome.status() == JobStatus.COMPLETED;
+        finish(job, null, new Terminal(WriteKind.FINAL, outcome.status(), outcome.status(),
+                Json.write(outcome.summary()), outcome.errorCode(), outcome.errorMessage(), null,
+                elapsedMs(started), 0), started);
+        activity.record(job.workspaceId(), job.runId(), null,
+                succeeded ? "export.completed" : "export.failed", "export_job", job.id(),
+                "export " + exportId + " finished as " + outcome.status()
+                        + (outcome.errorCode() == null ? "" : " (" + outcome.errorCode() + ")"),
+                Map.of("exportId", exportId, "rowsWritten",
+                        outcome.summary().getOrDefault("rowsWritten", 0),
+                        "elapsedMs", elapsedMs(started)));
     }
 
     private StepOutcome invokeWithTimeout(StepHandler handler, StepContext context) {
@@ -230,13 +292,20 @@ public class WorkflowJobExecutor {
                 .orElse(false);
     }
 
-    private void abandonLostLease(Job job, Step step, Run run) {
-        log.warn("discarding the result of job {}: its lease was reclaimed while the step ran", job.id());
-        activity.record(run.workspaceId(), run.id(), null, "workflow.job.lease_lost", "workflow_job",
+    /**
+     * Records that this worker's result was thrown away.
+     *
+     * <p>Addressed from the job row, not from a run loaded for the occasion: the write happens on the
+     * lease-lost path, where the rows this worker read may no longer be what the current holder sees.
+     */
+    private void abandonLostLease(Job job, Step step) {
+        log.warn("discarding the result of job {}: its lease was reclaimed while it ran", job.id());
+        activity.record(job.workspaceId(), job.runId(), null, "workflow.job.lease_lost", "workflow_job",
                 job.id(), "a worker finished this job after its lease had already been given to "
                         + "another worker; its result was discarded rather than overwriting the "
                         + "current holder's",
-                Map.of("stepKey", step == null ? "(none)" : step.stepKey(), "worker", identity.value()));
+                Map.of("stepKey", step == null ? "(none)" : step.stepKey(), "jobType", job.jobType(),
+                        "worker", identity.value()));
     }
 
     // ------------------------------------------------------------------ terminal writes
@@ -273,11 +342,7 @@ public class WorkflowJobExecutor {
                             terminal.jobStatus(), terminal.errorCode(), terminal.errorMessage(),
                             terminal.resultSummaryJson());
             if (!written) {
-                Run run = runs.findById(job.runId()).orElse(null);
-                abandonLostLease(job, step, run == null
-                        ? new Run(job.runId(), job.workspaceId(), "", "", RunStatus.RUNNING, 1, 0,
-                                0, 0, 0, 0, 0, 0, null, null, null, null, null, null)
-                        : run);
+                abandonLostLease(job, step);
                 return;
             }
 

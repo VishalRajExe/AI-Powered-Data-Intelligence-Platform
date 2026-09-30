@@ -91,6 +91,14 @@ finalagent:
     # abandoned HTTP call still finishes under its own timeout, because Firecrawl exposes no
     # run-level abort.
     step-timeout-ms: ${WORKFLOW_STEP_TIMEOUT_MS:240000}
+  export:
+    # Server-side directory for finished export files. A request never names a path: the export id
+    # is the only handle a caller gets, and the file is resolved from it.
+    dir: ${FINALAGENT_EXPORT_DIR:./var/exports}
+    # Rows per write before the job reports progress again. Progress is derived from rows actually
+    # handed to the writer, so this is also how coarsely an export's percentage moves.
+    chunk-rows: ${FINALAGENT_EXPORT_CHUNK_ROWS:500}
+    max-rows: ${FINALAGENT_EXPORT_MAX_ROWS:200000}
 
 app:
   version: 0.1.0

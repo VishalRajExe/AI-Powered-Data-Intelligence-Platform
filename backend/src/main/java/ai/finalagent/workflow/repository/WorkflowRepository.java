@@ -4,11 +4,17 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import javax.sql.DataSource;
 
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
@@ -105,6 +111,87 @@ public class WorkflowRepository {
                 "SELECT COALESCE(MAX(version), 0) + 1 FROM workflow_plans WHERE workflow_id = ?",
                 Integer.class, workflowId);
         return version == null ? 1 : version;
+    }
+
+    /**
+     * Workflow history, newest first.
+     *
+     * <p>{@code runCounts} is filled per row rather than joined: a history page is twenty workflows,
+     * and a join that picks the latest plan per workflow would have to aggregate the whole plan table.
+     * Twenty lookups on its unique key is the cheaper and more obviously correct shape.
+     */
+    public List<Workflow> list(String workspaceId, String status, int limit, int offset) {
+        StringBuilder sql = new StringBuilder("SELECT * FROM workflows WHERE workspace_id = ?");
+        List<Object> args = new ArrayList<>();
+        args.add(workspaceId);
+        if (status != null && !status.isBlank()) {
+            sql.append(" AND status = ?");
+            args.add(status);
+        }
+        sql.append(" ORDER BY created_at DESC, id LIMIT ? OFFSET ?");
+        args.add(limit);
+        args.add(offset);
+        return jdbc.query(sql.toString(), WORKFLOW_ROW, args.toArray());
+    }
+
+    public int countAll(String workspaceId, String status) {
+        Integer total = status == null || status.isBlank()
+                ? jdbc.queryForObject("SELECT COUNT(*) FROM workflows WHERE workspace_id = ?",
+                        Integer.class, workspaceId)
+                : jdbc.queryForObject("SELECT COUNT(*) FROM workflows WHERE workspace_id = ?"
+                        + " AND status = ?", Integer.class, workspaceId, status);
+        return total == null ? 0 : total;
+    }
+
+    /**
+     * How many runs each of these workflows has, so a history list can state an attempt count without
+     * a query per row. Workflows with no runs are present with zero: a listing that omits them would
+     * make "never run" and "not in this workspace" read the same.
+     */
+    public Map<String, Integer> runCounts(String workspaceId, List<String> workflowIds) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        if (workflowIds.isEmpty()) {
+            return counts;
+        }
+        workflowIds.forEach(id -> counts.put(id, 0));
+        String placeholders = String.join(",", Collections.nCopies(workflowIds.size(), "?"));
+        jdbc.query("SELECT workflow_id, COUNT(*) AS run_count FROM workflow_runs"
+                        + " WHERE workspace_id = ? AND workflow_id IN (" + placeholders + ")"
+                        + " GROUP BY workflow_id",
+                (RowCallbackHandler) rs -> counts.put(rs.getString("workflow_id"),
+                        rs.getInt("run_count")),
+                concat(workspaceId, workflowIds));
+        return counts;
+    }
+
+    private static Object[] concat(String workspaceId, List<String> ids) {
+        Object[] args = new Object[ids.size() + 1];
+        args[0] = workspaceId;
+        for (int i = 0; i < ids.size(); i++) {
+            args[i + 1] = ids.get(i);
+        }
+        return args;
+    }
+
+    /**
+     * The newest plan version each of these workflows has, as {@code workflowId → "version N"}.
+     *
+     * <p>Worth a query of its own because a history list that says "planned" without a version is
+     * quoting the workflow row's {@code planning_status}, which is written by the planning call and
+     * goes stale if a later re-plan failed: the plan table is what actually holds the versions.
+     */
+    public Map<String, Integer> latestPlanVersions(List<String> workflowIds) {
+        Map<String, Integer> versions = new LinkedHashMap<>();
+        if (workflowIds.isEmpty()) {
+            return versions;
+        }
+        String placeholders = String.join(",", Collections.nCopies(workflowIds.size(), "?"));
+        jdbc.query("SELECT workflow_id, MAX(version) AS version FROM workflow_plans"
+                        + " WHERE workflow_id IN (" + placeholders + ") GROUP BY workflow_id",
+                (RowCallbackHandler) rs -> versions.put(rs.getString("workflow_id"),
+                        rs.getInt("version")),
+                workflowIds.toArray());
+        return versions;
     }
 
     private static String truncate(String value, int max) {

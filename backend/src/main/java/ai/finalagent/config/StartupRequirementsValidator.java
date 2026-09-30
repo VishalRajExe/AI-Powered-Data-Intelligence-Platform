@@ -69,6 +69,7 @@ public class StartupRequirementsValidator implements InitializingBean {
         }
 
         checkExecution(problems, p.execution());
+        checkExport(problems, p.export());
 
         if (!problems.isEmpty()) {
             throw new MissingRequiredConfigurationException(
@@ -189,6 +190,35 @@ public class StartupRequirementsValidator implements InitializingBean {
         if (execution.stepTimeoutMs() >= execution.leaseSeconds() * 1000L) {
             problems.add("WORKFLOW_STEP_TIMEOUT_MS must be shorter than WORKFLOW_LEASE_SECONDS, or a "
                     + "step would still be running when its lease expires and another worker claims it.");
+        }
+    }
+
+    /**
+     * Bounds the export writer. Checked whether or not the queue is enabled, because an export row
+     * can be requested against any deployment that has datasets, and a file written outside the
+     * configured directory is not a configuration nit.
+     */
+    static void checkExport(List<String> problems, FinalAgentProperties.Export export) {
+        if (export == null) {
+            problems.add("finalagent.export must be configured; the export directory and its bounds "
+                    + "are not something this build guesses.");
+            return;
+        }
+        if (export.dir() == null || export.dir().isBlank()) {
+            problems.add("FINALAGENT_EXPORT_DIR must name a server-side directory. It is never taken "
+                    + "from a request, so that a caller cannot choose where a file lands.");
+        }
+        if (export.chunkRows() < 1 || export.chunkRows() > 10_000) {
+            problems.add("FINALAGENT_EXPORT_CHUNK_ROWS must be between 1 and 10000; a smaller chunk "
+                    + "reports progress more often and a larger one holds more rows in memory.");
+        }
+        if (export.maxRows() < 1 || export.maxRows() > 5_000_000) {
+            problems.add("FINALAGENT_EXPORT_MAX_ROWS must be between 1 and 5000000. An export over "
+                    + "the ceiling fails with the count it stopped at rather than truncating.");
+        }
+        if (export.chunkRows() > export.maxRows()) {
+            problems.add("FINALAGENT_EXPORT_CHUNK_ROWS must not exceed FINALAGENT_EXPORT_MAX_ROWS, "
+                    + "or every export takes one chunk past the ceiling before it is refused.");
         }
     }
 }

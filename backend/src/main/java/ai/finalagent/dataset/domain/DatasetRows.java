@@ -91,4 +91,27 @@ public final class DatasetRows {
                            String rejectedValueJson, String keptSourcesJson,
                            String rejectedSourcesJson, String resolvedBy, Instant createdAt) {
     }
+
+    /**
+     * An export, and how far it has actually got.
+     *
+     * @param totalRows       the row count taken before the first byte was written
+     * @param writtenRows     rows handed to a writer so far; a file that stopped early is visible as
+     *                        {@code writtenRows < totalRows}, which is why the count is kept at all
+     * @param progressPercent derived from those two, never from the job's status
+     * @param checksum        SHA-256 of the finished file, so a download can be checked against what
+     *                        was written rather than against what the writer claimed
+     */
+    public record Export(String id, String workspaceId, String datasetId, String jobId, String runId,
+                         String requestedById, String format, String scopeJson, String status,
+                         int totalRows, int writtenRows, int progressPercent, String fileName,
+                         String filePath, Long fileBytes, String checksum, String errorCode,
+                         String errorMessage, Instant createdAt, Instant startedAt,
+                         Instant finishedAt) {
+
+        public boolean settled() {
+            return "COMPLETED".equals(status) || "FAILED".equals(status)
+                    || "CANCELLED".equals(status);
+        }
+    }
 }

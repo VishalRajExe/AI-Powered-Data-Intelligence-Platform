@@ -120,8 +120,8 @@ public class DatasetController {
     // ------------------------------------------------------------------ parameters
 
     /**
-     * {@code key:operator:value}, split on the first two colons only — a URL as a filter value keeps
-     * its own colons, which is the common case for this dataset.
+     * The repeated {@code filter=key:operator:value} parameter, parsed by the grammar's own owner so a
+     * listing and an export of that listing cannot mean different things.
      */
     private static List<Filter> filters(List<String> raw) {
         if (raw == null || raw.isEmpty()) {
@@ -129,22 +129,9 @@ public class DatasetController {
         }
         List<Filter> filters = new ArrayList<>();
         for (String clause : raw) {
-            if (clause == null || clause.isBlank()) {
-                continue;
+            if (clause != null && !clause.isBlank()) {
+                filters.add(Filter.parse(clause));
             }
-            String[] parts = clause.split(":", 3);
-            String key = parts[0].trim();
-            String operator = parts.length > 1 ? parts[1].trim().toLowerCase() : "eq";
-            String value = parts.length > 2 ? parts[2] : null;
-            if (key.isEmpty()) {
-                throw new IllegalArgumentException("a filter needs a column key: filter=key:op:value");
-            }
-            if (("eq".equals(operator) || "contains".equals(operator) || "gte".equals(operator)
-                    || "lte".equals(operator)) && (value == null || value.isEmpty())) {
-                throw new IllegalArgumentException("filter '" + clause + "' has no value; use"
-                        + " 'missing' or 'present' to ask about absence");
-            }
-            filters.add(new Filter(key, operator, value));
         }
         return filters;
     }

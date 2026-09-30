@@ -55,6 +55,13 @@
       <artifactId>mysql-connector-j</artifactId>
       <scope>runtime</scope>
     </dependency>
+    <!-- XLSX only. Writing the OOXML package by hand is a bug farm, and POI's streaming writer (SXSSF)
+         is the one that keeps memory flat when the dataset is large. CSV and JSON need nothing. -->
+    <dependency>
+      <groupId>org.apache.poi</groupId>
+      <artifactId>poi-ooxml</artifactId>
+      <version>5.4.1</version>
+    </dependency>
 
     <dependency>
       <groupId>org.springframework.boot</groupId>

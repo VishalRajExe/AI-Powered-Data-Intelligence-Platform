@@ -4,13 +4,16 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import javax.sql.DataSource;
 
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
@@ -101,8 +104,33 @@ public class JobRepository {
         }
     }
 
-    public Optional<Candidate> findClaimable() {
-        List<Candidate> rows = jdbc.query("""
+    /**
+     * An export, queued on the same table and the same claim as a workflow step.
+     *
+     * <p>The row is deliberately a {@code workflow_jobs} row with {@code job_type = 'EXPORT'} rather
+     * than a private queue of its own: one lease, one sweeper, one retry policy and one set of unique
+     * keys for all the asynchronous work the service does. It carries no {@code step_id} — an export
+     * is not a step of a run — but it does carry the run that produced the dataset, because that is
+     * what makes the job traceable to the work behind the file.
+     *
+     * @return false when the job already exists, i.e. this request is a replay
+     */
+    public boolean insertExportJob(String id, String workspaceId, String runId, String payloadJson,
+                                   int maxAttempts) {
+        try {
+            jdbc.update("""
+                    INSERT INTO workflow_jobs
+                      (id, workspace_id, run_id, job_type, step_id, payload, status, priority,
+                       max_attempts, scheduled_for)
+                    VALUES (?, ?, ?, 'EXPORT', NULL, ?, 'PENDING', 200, ?, NOW(6))
+                    """, id, workspaceId, runId, payloadJson, maxAttempts);
+            return true;
+        } catch (DuplicateKeyException e) {
+            return false;
+        }
+    }
+
+    public Optional<Candidate> findClaimable() {        List<Candidate> rows = jdbc.query("""
                 SELECT candidate.id, candidate.version
                   FROM (
                     SELECT id, version
@@ -216,14 +244,35 @@ public class JobRepository {
                 rs.getInt("attempt_count"), rs.getInt("max_attempts")), limit);
     }
 
-    /** Every unstarted job of a run, moved straight to CANCELLED so the sweeper cannot revive it. */
+    /**
+     * Every unstarted job of a run, moved straight to CANCELLED so the sweeper cannot revive it.
+     *
+     * <p>Scoped to {@code WORKFLOW_STEP} deliberately. An export that happens to point at this run is
+     * not the run's work — it is a reader of a dataset the run produced, requested afterwards — and
+     * cancelling a run must not silently delete someone's queued file.
+     */
     public int cancelPendingForRun(String runId, String reason) {
         return jdbc.update("""
                 UPDATE workflow_jobs
                    SET status = 'CANCELLED', last_error_code = ?, last_error_message = ?,
                        finished_at = NOW(6), version = version + 1
-                 WHERE run_id = ? AND status = 'PENDING'
+                 WHERE run_id = ? AND status = 'PENDING' AND job_type = 'WORKFLOW_STEP'
                 """, "RUN_CANCELLED", truncate(reason), runId);
+    }
+
+    /**
+     * Cancels one unclaimed job. A claimed job is deliberately untouched: its holder has a live lease
+     * and a write in progress, and it notices the cancellation through the record it is working from.
+     *
+     * @return true when this call cancelled the job, false when someone had already claimed or settled it
+     */
+    public boolean cancelIfPending(String id, String reason) {
+        return jdbc.update("""
+                UPDATE workflow_jobs
+                   SET status = 'CANCELLED', last_error_code = ?, last_error_message = ?,
+                       finished_at = NOW(6), lease_expires_at = NULL, version = version + 1
+                 WHERE id = ? AND status = 'PENDING'
+                """, "CANCELLED_BY_REQUESTER", truncate(reason), id) == 1;
     }
 
     /** J.13: release our leases on shutdown so the next boot claims immediately, not after expiry. */
@@ -281,6 +330,24 @@ public class JobRepository {
         Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM workflow_jobs WHERE status = 'RUNNING'",
                 Integer.class);
         return count == null ? 0 : count;
+    }
+
+    /**
+     * Queue depth by job type and status, in one pass.
+     *
+     * <p>Deliberately queue-wide rather than scoped to a workspace: this is a statement about the
+     * worker pool, which is one shared pool for every workspace in this process. A number labelled as
+     * a workspace's own would imply a per-tenant pool that does not exist.
+     */
+    public Map<String, Integer> depthByTypeAndStatus() {
+        Map<String, Integer> depth = new LinkedHashMap<>();
+        jdbc.query("""
+                SELECT job_type, status, COUNT(*) AS n FROM workflow_jobs
+                 WHERE status IN ('PENDING','RUNNING')
+                 GROUP BY job_type, status
+                """, (RowCallbackHandler) rs -> depth.put(
+                rs.getString("job_type") + "." + rs.getString("status"), rs.getInt("n")));
+        return depth;
     }
 
     /** {@code last_error_message} is VARCHAR(2000); a provider payload must not abort the write. */

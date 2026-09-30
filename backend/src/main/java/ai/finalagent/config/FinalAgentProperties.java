@@ -22,7 +22,8 @@ public record FinalAgentProperties(
         @NotNull Cors cors,
         @NotNull Database database,
         @NotNull AiService aiService,
-        @NotNull Execution execution
+        @NotNull Execution execution,
+        @NotNull Export export
 ) {
 
     public record Cors(List<String> allowedOrigins) {
@@ -64,6 +65,24 @@ public record FinalAgentProperties(
             double backoffBaseSeconds,
             double backoffMaxSeconds,
             int stepTimeoutMs
+    ) {
+    }
+
+    /**
+     * Export files, written by the queue rather than by the request that asked for them.
+     *
+     * @param dir a server-side directory. The path is never taken from a request: a client choosing
+     *            where a file lands is a path-traversal bug with a nicer name
+     * @param chunkRows how many rows a writer takes before it reports progress again. Small enough
+     *                  that a long export advances visibly, large enough that the update is not the
+     *                  most common statement in the job
+     * @param maxRows the ceiling a single export may write. Over it the job fails with the count it
+     *                stopped at rather than truncating into a file that looks complete
+     */
+    public record Export(
+            String dir,
+            int chunkRows,
+            int maxRows
     ) {
     }
 }

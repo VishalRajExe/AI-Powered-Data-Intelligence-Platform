@@ -41,6 +41,35 @@ public class DatasetQueryRepository {
 
     /** Bound so a request cannot make the repository read a column the dataset does not have. */
     public record Filter(String key, String operator, String value) {
+
+        private static final List<String> VALUELESS = List.of("missing", "present");
+
+        /**
+         * Parses {@code key:operator:value}, split on the first two colons only — a URL as a filter
+         * value keeps its own colons, which is the common case for this data.
+         *
+         * <p>The grammar lives here rather than in whichever controller needed it first, because an
+         * export is requested with the same scope as the listing it came from. Two parsers of one
+         * grammar drift into two behaviours, and the export's stored scope would stop meaning what the
+         * rows endpoint means.
+         */
+        public static Filter parse(String clause) {
+            if (clause == null || clause.isBlank()) {
+                throw new IllegalArgumentException("a filter is key:operator:value, not blank");
+            }
+            String[] parts = clause.split(":", 3);
+            String key = parts[0].trim();
+            String operator = parts.length > 1 ? parts[1].trim().toLowerCase() : "eq";
+            String value = parts.length > 2 ? parts[2] : null;
+            if (key.isEmpty()) {
+                throw new IllegalArgumentException("a filter needs a column key: filter=key:op:value");
+            }
+            if (!VALUELESS.contains(operator) && (value == null || value.isEmpty())) {
+                throw new IllegalArgumentException("filter '" + clause + "' has no value; use"
+                        + " 'missing' or 'present' to ask about absence");
+            }
+            return new Filter(key, operator, value);
+        }
     }
 
     public record RowQuery(String search, List<Filter> filters, String sortKey, boolean sortAscending,
@@ -48,6 +77,33 @@ public class DatasetQueryRepository {
 
         public static RowQuery of(int offset, int limit) {
             return new RowQuery(null, List.of(), null, true, null, true, offset, limit);
+        }
+
+        /**
+         * The same query over a different window. The export runner walks a dataset this way, and a
+         * copy that lost the filters would write a file that is not the one that was asked for.
+         */
+        public RowQuery withWindow(int offset, int limit) {
+            return new RowQuery(search, filters, sortKey, sortAscending, onlyValid,
+                    includeDuplicates, offset, limit);
+        }
+
+        /** The requester's scope, without the window: this is what gets stored with the export. */
+        public Map<String, Object> asScope() {
+            Map<String, Object> scope = new LinkedHashMap<>();
+            scope.put("search", search);
+            scope.put("filters", filters.stream().map(filter -> {
+                Map<String, Object> view = new LinkedHashMap<>();
+                view.put("key", filter.key());
+                view.put("operator", filter.operator());
+                view.put("value", filter.value());
+                return view;
+            }).toList());
+            scope.put("sort", sortKey);
+            scope.put("asc", sortAscending);
+            scope.put("validOnly", onlyValid);
+            scope.put("includeDuplicates", includeDuplicates);
+            return scope;
         }
     }
 
