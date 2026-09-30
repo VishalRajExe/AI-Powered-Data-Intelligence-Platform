@@ -9,6 +9,13 @@ Every row records the six fields the brief requires:
   deliberately separate from "useful feature": several components do not do what their docs claim.
 - *Destination* — path in `FINALAIAGENT`. `—` means nothing is carried forward.
 
+**This is a plan of record, not an inventory.** Phase 15 (2026-09-30) re-read every row against the tree
+and found that most destinations landed under a different path — the phases moved logic between layers,
+e.g. the whole `governance/` package became `ai-service/app/curation/` — and seven planned paths never
+existed. What is actually in the build, feature by feature with `file:line` evidence, is
+`docs/control/Memory.md` §2 Phase 15.1–15.2; what was planned and is **not** in the build is numbered
+P54–P71 in its §5. Read the two together: `C` says what was decided, `Memory.md` says what is true.
+
 Integration methods:
 
 | Method | Meaning |

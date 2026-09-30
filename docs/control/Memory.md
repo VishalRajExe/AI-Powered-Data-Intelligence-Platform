@@ -12,8 +12,16 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 12 — Spring Security: identity, sessions and workspace authorization,
-  **complete**, built on the Phase 11 operations surface. A request is now scoped to the workspace its
+- **Current Phase:** 15 — final repository extraction, **complete**. An audit phase: no code was
+  written, nothing was deleted, and the tree is byte-identical to Phase 12's commit. What it proved, in
+  §2 (Phase 15): the six reference repositories are **removable** — no build, install or runtime path
+  in this project reads them — and every feature the reuse map credits to them now carries a verdict of
+  present, relocated or absent, with the eighteen findings recorded as **P54–P71 in §5 rather than
+  quietly closed**. The one finding that changes behaviour, not paperwork, is P54: the robots fetch in
+  `ai-service/app/curation/robots.py` is an outbound request from this service to an origin that a
+  scraped page can influence, and no host-resolution guard exists in any of the three trees.
+  **Phase 12** — Spring Security: identity, sessions and workspace authorization, **complete**, built
+  on the Phase 11 operations surface. A request is now scoped to the workspace its
   session was issued against: `workspaces`, `users`, `workspace_members` and `auth_sessions` exist
   (`V5__baseline_identity.sql`), registration creates a person plus a personal workspace plus the OWNER
   membership that makes it reachable, and `FINALAGENT_WORKSPACE_ID` is **gone** — from the properties
@@ -45,8 +53,9 @@ existed, and that the system was production-ready — each contradicted by its o
     has no login screen and its eight dashboard routes still render their placeholder content, so the
     Phase 13 wiring is what makes this authentication reachable from a browser.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
-  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated checks — now five
-  `*MySqlTest` classes. **Run the MySQL suites with no second backend alive**: another process
+  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated checks — though its MySQL
+  line names four of the five `*MySqlTest` classes, so the identity suite is not in the gate yet (P64).
+  **Run the MySQL suites with no second backend alive**: another process
   pointed at the same schema polls the same queue and will finish an export a test is mid-cancelling,
   which looks exactly like a product defect and is not one (P53).
 - **Built:** the workflow planner and job engine, their schema and persistence, fetch-time source
@@ -57,7 +66,8 @@ existed, and that the system was production-ready — each contradicted by its o
 - **Still not built:** the frontend's connection to any of it (Phase 13), SSE streaming (events are
   persisted, cursor-paged and served as a feed, not pushed), export-file and session-row retention
   (nothing sweeps `var/exports` or old `auth_sessions` rows), host-resolution SSRF and per-domain
-  rate, membership administration (roles are read and enforced; nothing changes them yet), and
+  rate — Phase 15 found the first of those reachable rather than merely absent (P54) — membership
+  administration (roles are read and enforced; nothing changes them yet), and
   multi-workspace selection — a person with several workspaces is signed into their primary, and
   switching is not built.
 - **Repository:** `FINALAIAGENT` is its own git repo, pushed to branch `implementjava` of
@@ -891,6 +901,85 @@ existed, and that the system was production-ready — each contradicted by its o
   | Spring Security | `BCryptPasswordEncoder`, `SecurityFilterChain`, `OncePerRequestFilter` | password hashing, the filter chain, a state-change guard | `config/SecurityConfig`, `identity/security/*` | **DEPENDENCY TAKEN, SUBSET USED.** Only the chain, the encoder and one filter are used; no form login, no http basic, no OAuth client — each would add an endpoint this API does not have |
   | anakin, web-agent-main, web-research-agent-master, data-enrichment-js, ai-data-enrichment-agent, TheAgenticBrowser-main | — | nothing | — | **NO TAKE.** None of the six has a tenancy model; `data-enrichment-js` and `ai-data-enrichment-agent` both ship a single shared credential for all users, which is the state this phase removes rather than adopts |
 
+### Phase 15 — Final repository extraction (2026-09-30)
+
+**Instruction:** inspect all six reference repositories one final time; for every useful feature
+identify source file → logic → FINALAIAGENT destination → verify implementation; leave no required
+runtime functionality dependent on the reference folders; search this project for old repository paths,
+external local imports, accidental hardcoded paths, demo dependencies and dead dependencies; **do not
+delete them yet**.
+
+No code was written and nothing was deleted. Two things had to be proven separately, because they are
+often conflated: that the reference folders are **removable**, and that this project **contains** what
+it claims. The first is true, and mechanical to check. The second is true for everything this build
+claims to do and false for eighteen things its own documents describe — those are P54–P71 in §5, and
+they are gaps in this project, not dependencies on somebody else's.
+
+**15.1 — the independence sweep.** Every search ran over `FINALAIAGENT` with build output and `.venv`
+excluded.
+
+| Searched for | Result |
+|---|---|
+| The six sibling repository names, in any source, config, script or manifest | ~20 hits, **all provenance comments** in Python module docstrings (`app/config.py:97,123`, `curation/{aggregation,canonical,policy,queries,relevance,retry,robots}.py`, `extraction/schema_validate.py`, `firecrawl/client.py`, `research/{graph,prompts,skills,tools,state}.py`) plus `README.md:281-282` and `docs/`. **Zero imports, zero paths, zero build inputs** |
+| Absolute local paths — `D:\`, `D:/`, `/Users/`, `/home/`, `C:\Users` | **Zero** in tracked files. The only hits anywhere were inside `.venv`, i.e. third-party packages |
+| Relative escapes out of the project (`../<repo>`, `../../`) | The only `../` in a dependency-bearing file is `deploy/docker-compose.yml:36,84,130` and `database/docker-compose.yml:7`, pointing at **this project's own** children (`../ai-service`, `../backend`, `../frontend`) as build contexts, and `ai-service/app/config.py:53` `env_file=(".env", "../.env")`, which is the repo root's own `.env`. `ai-service/tests/test_skills.py:211` contains `"../outside.md"` and `"sites/../../outside.md"` — a fixture asserting the traversal guard **refuses** them |
+| Editable / path installs: pip `-e`, `file:`, `path=`; Maven `systemPath`; npm `link:`/`file:` | **Zero** in `ai-service/pyproject.toml`, `backend/pom.xml`, `frontend/package.json` |
+| Symlinks (`find FINALAIAGENT -type l`) | **Zero** |
+| Docker reads outside the build context | None. Each Dockerfile COPYs within its own directory; `deploy/docker-compose.yml:24-25` mounts a **named volume**, not a host path |
+| Scripts and CI | No `.github/`. `scripts/*.sh` resolve `$ROOT_DIR` as their own parent only (`verify.sh:13-14`); no script opens a sibling directory |
+| `.internal/agent-core-py` (the vendored Python core the audit rejected) | Referenced only in `docs/audit/*` and this file's decision log, as the thing that was **not** taken. No loader, no path, no copy |
+| Demo mode | `DEMO_MODE` appears in **no file**. The only "demo" strings in production code are refusals: `diagnostics/ConfigurationFailureAnalyzer.java:20` and `ai-service/app/config.py:3`. The old project's `demo/` tree, seeded credential and simulator were never brought across |
+| Dead dependencies | `@radix-ui/react-label` (P70) is the only one that cannot become live. Every Maven and Python dependency is imported by real code — including `httpx`, which no module imports directly but which `fastapi.testclient` requires, and `python-dotenv`, which `config.py:53` needs for `env_file`. The eight unreferenced `components/ui/*` wrappers are Phase 13's primitives, not waste |
+
+**Verdict:** the six reference repositories can be deleted and `FINALAIAGENT` still builds, tests, boots
+and runs. That was the instruction's threshold and it is met. `docs/control/THIRD-PARTY.md` asserted it
+per row; it is now asserted per tree, by search rather than by claim.
+
+**15.2 — what the feature-by-feature pass found.** `docs/audit/C-repository-reuse-map.md` names a
+planned destination for every ported feature. Most landed under a different path because the phases
+moved logic between layers; a handful never landed. Confirmed present, with the live call path checked
+rather than the file's existence:
+
+| Feature (source) | Where it actually is | Proof it is reachable |
+|---|---|---|
+| Atomic MySQL claim, lease, heartbeat, sweeper, DB-clock backoff, cancellation, lease-lost guard (the durability layer anakin *lacks*, designed in `J`) | `JobRepository.java:153-168` (conditional UPDATE on `status`+`version`+`scheduled_for<=NOW(6)`), `:178-184` heartbeat, `WorkflowWorker.java:151-171` sweeper, `Backoff.java:28-36`, `LeaseGuard.java:41-63` | 75 tests against real MySQL 9.6, including 8 threads claiming one row for exactly one winner |
+| Terminal writes survive their own context (anakin `processor.go:24-33`) | `WorkflowJobExecutor.java:107-109` — `TransactionTemplate`, `REQUIRES_NEW`, 5 s timeout | the timeout test's row still reads `FAILED` after its step transaction is gone |
+| Per-step timeout that interrupts, not post-hoc | `WorkflowJobExecutor.java:258-268` (`future.get(stepTimeoutMs)` then `cancel(true)`); `StartupRequirementsValidator.java:181-189` refuses `stepTimeoutMs ≥ leaseSeconds` | startup rejects the misconfiguration, so a step budget cannot outrun its lease |
+| Requirement contract: Python produces, Java re-validates (old `requirement.schema.ts`) | `requirements/schema.py:26-174` + `contracts.py:89-136`; `RequirementValidator.java:44-114` | on every pipeline request (`PipelineController.java:71,102`, `WorkflowService.java:133`) |
+| Safety floor as server constants, not model output (old `workflow-plan.schema.ts:61-64`) | `WorkflowPlanner.java:157-160`; behaviour in `curation/policy.py:125-131` | enforced at fetch time (`tools.py:198-201,317-321` → `state.refuse` → `DatasetAssembler.java:98`); `ResearchRequest` carries no field a model could relax |
+| Bounded correction loop, then fail closed (old `planner.service.ts:45-80`) | `requirements/service.py:87-103`, bound = `max_schema_repairs` (`config.py:88`) | the requirement path re-injects its own issue list; the plan path needs none because Java writes the plan |
+| Anti-fabrication gates: no submit without tool data, schema-gated output, bounded repair (`agent-core/src/agent.ts:37-130`) | `graph.py:188-196` (gate 1, `state.has_tool_data()` at `state.py:286-289`), `graph.py:200-217` (gate 2, repair ≤ 3) | `extraction/gate.py` never existed; the gates are in the graph, which is the only executor |
+| One validator, three uses (`schema-validate.ts`) | `extraction/schema_validate.py`, called at `graph.py:126,200,261,286,295,381-383` and `llm/client.py:64` | prompting, runtime gate and post-run assessment all read the same function |
+| Tool-observed-URL rule (`AgentResultNormalizer.ts:41-49,169`) | sources enter only through `state.observe` (`state.py:247-263`, called from `tools.py:169,222,344`); Java `RowContractEnforcer.java:335-347` + `DatasetAssembler.java:176-189` | **Nuance worth keeping:** `verified_by_tool` defaults to `True` (`state.py:74`) and is never assigned `False` outside tests. The rule holds by *exclusion* — a model-named URL never enters the list — not by the tri-state flag the old code carried. Enforcement is stronger; the DTO is less expressive |
+| Interact hard timeout, null-stripping, no `interact` in fan-out (`toolkit.ts:51-102`, `worker/index.ts:61`) | `firecrawl/client.py:380-386,467-470`, `strip_interact_nulls()`, the `tools.execute_many` refusal | ported at Phase 4; still the only seam to the SDK |
+| SKILL.md loader, domain index, traversal guard (`skills/{parser,discovery,tools}`) | `research/skills.py` | 24 tests; ships zero playbooks (gate **S1**) |
+| Curation: canonicalization, lexical relevance with a floor, per-domain candidate cap, robots fail-closed, capped jittered retry, deterministic aggregation (`get_relevant_urls.py`, `web_scraper.py`, `result_aggregator_tool.py`) | `curation/{canonical,relevance,ranking,robots,retry,aggregation,queries,policy}.py` | weights `relevance.py:26-29` with the floor at `:114` enforced by `ranking.py:112-116`; robots cap `:35,162` and fail-closed `:122-141`; jitter `retry.py:115-118` |
+| Six-stage quality pipeline (old `data-intelligence/*.ts`) | `quality/{normalize,validate,dedupe,entity_resolution,merge,score,pipeline}.py` behind `POST /ai/v1/quality/process`, executed as `TRANSFORM` | real order at `pipeline.py:53-77`; Java consumes at `TransformStepHandler.java:78-127` and re-enforces at `ValidateStepHandler.java:69-93` |
+| Silent row loss fixed — skipped rows counted (old `workflow-execution.repository.ts:271-272`) | `SaveStepHandler.java:112-121` → `datasets.records_without_evidence` (`DatasetRepository.java:130`) | `DatasetDraft.java:109,113,143-147` carries the count into the row |
+| Streaming exports with path containment (old `export.service.ts`, `export.repository.ts:122-128`) | `ExportWriter.java` (RFC4180 + formula guard `:58-65`, SXSSF `:216`), `ExportService.java:132-133` (`startsWith` after `normalize()`), name derived from ids only (`ExportRunner.java:227-231`) | 11 MySQL export tests, including a multi-checkpoint progress run and the row ceiling |
+| Session-based tenancy; no client-named tenant (old `auth.middleware.ts`, defined and unmounted) | `SessionCookieFilter.java:105-115`, `Workspace.java:34-38` (throws, never defaults), `SecurityConfig.java:121-122` | proven over real HTTP with `curl` — which is how P51 was found |
+| Fail-fast on a missing credential (old `env.ts`, which did not treat absence as fatal) | `StartupRequirementsValidator.java:36-80`, placeholder markers refused at `:88-100` | `ConfigurationFailureAnalyzer.java:20` prints the reason instead of starting a degraded process |
+
+Confirmed **not** in this tree, each recorded rather than papered over: SSRF and DNS resolution (P54),
+per-domain rate enforcement (P55), inbound rate limiting (P56), the Python `WorkflowPlan` contract is
+unwired (P57), `parent_job_id` and `retry_count` are dead columns (P58, P59), snippet-containment
+verification (P60), the pre-LLM content gate and per-domain policy store (P61), the VERIFY step and any
+Java-side replan cap (P62), SSE (P63), and the seven smaller findings (P64–P71).
+
+**15.3 — reuse record for this phase.** Nothing was taken, so the honest row is a negative one:
+
+| Repository | Source file | Feature | Destination | Method |
+|---|---|---|---|---|
+| all six | — | nothing | — | **NO TAKE.** This phase read their trees and this project's and moved no logic in either direction |
+| `web-agent-main`, `data-enrichment-js-main`, `ai-data-enrichment-agent-main`, `web-research-agent-master`, `TheAgenticBrowser-main`, `anakin-master`, the old project | their own source files, re-opened | verification of the claims in `C` and `O` | `docs/control/Memory.md` §5, P54–P71 | **AUDIT.** Seven of the reuse map's planned paths never existed (`governance/*`, `provenance/*`, `monitoring/ActivityAction.java`, `api/RunEventController.java`, `engine/*`, `extraction/{gate,schema}.py`, `app/llm/prompts/*`); the logic either lives under a phase-chosen name or was never built. `C` is a plan of record, not an inventory — §5 is now the inventory |
+
+**15.4 — what this phase does not prove.** It proves absence of *references*, not absence of *need*: an
+anakin-shaped capability could still be missing without anything here noticing. The functional proof is
+Phase 16's entire job. It also did not re-run the suites: the tree is unchanged since the Phase 12
+commit, so that phase's green gates still describe it. And P54's severity is reasoned, not demonstrated —
+with no `FIRECRAWL_API_KEY` here, no attacker-influenced robots fetch has actually been made against a
+metadata endpoint. It is reachable by inspection; it has not been observed.
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -1350,6 +1439,45 @@ boundary a user stands at. What this phase does **not** establish:
   assertions. Nothing detects that today — the profile's 30-second lease and the note in §7 are the
   mitigation, and a dedicated schema per run would be the fix.
 
+### Findings from Phase 15 (repository extraction) — recorded, deliberately **not** fixed
+
+Phase 15 was an inspection phase with an instruction not to delete the reference folders, and the
+standing rule is that an audit is reported rather than auto-fixed. Every row below was verified against
+the current tree by grep or by running the code, not by reading a plan; each names the evidence and the
+exact gap. **P54 is the only one that is a live vulnerability rather than an unbuilt feature**, and it
+is the one worth authorizing first.
+
+| # | Finding | Evidence | What it means |
+|---|---|---|---|
+| P54 | **No host-resolution SSRF guard exists in any runtime, and this service makes the unguarded outbound call itself.** `curation/robots.py::_fetch` builds `{scheme}://{netloc}/robots.txt` and `urlopen`s it (`:145`, `:159-162`) for any origin appearing in the pipeline; `firecrawl/client.py::validated_http_url` checks scheme and a non-empty netloc only (`:143-161`), and its own comment says host resolution "belongs to Spring" — where there is none. | `grep -rn "169\.254\|100\.64\|isLoopback\|isSiteLocal\|is_private\|InetAddress"` over `ai-service/app`, `backend/src/main`, `frontend/{app,lib,components,hooks}` → **zero hits** | A page that plants a link to `http://169.254.169.254/…`, `http://127.0.0.1:…` or an RFC1918 host earns a real TCP connection from the ai-service, and a 200 answer is parsed as robots text — no `Disallow` lines, therefore *allowed*. Firecrawl's own scrape goes to Firecrawl's network, so the exposure that is ours is this fetch and any future direct call. §8 has carried "host-resolution SSRF — not built" since Phase 5; it is not merely absent, it is reachable |
+| P55 | **The per-domain request rate is produced, validated and consumed by nothing.** `contracts.py:198` declares `max_requests_per_domain_per_minute` (`:207-211` bounds it 1–60), `curation/queries.py:60` sets it to 20, and no code reads the value before issuing a request. The only ceilings that bite are `ranking.py:120-128` (candidates per domain) and the process-wide semaphore at `firecrawl/client.py:350`. | grep for the field name across both runtimes returns declaration, validation and the producer only | A plan can state a politeness limit the system then ignores. No Bucket4j, no crawl-delay floor, no MySQL-backed window. `00-FORENSIC-AUDIT.md` §5 named a dead configured rate as an old-project defect; this is the same shape in new code |
+| P56 | **No inbound HTTP rate limiting.** No limiter on any route, including `/api/v1/auth/login`; `Retry-After` appears only as a CORS *exposed* header (`WebConfig.java:41`). | grep `RateLimiter\|Bucket4j\|slowapi\|429` over `backend/src/main`, `ai-service/app` | The Phase 12 lockout is per account and per database clock, so a credential list spread across many accounts is unthrottled at the edge. Already recorded honestly in the Phase 12 limits above; numbered here so it is one list with the rest |
+| P57 | **`WorkflowPlan` in Python is dead code.** `contracts.py:215-253` defines the plan contract — 2–30 steps, `timeoutMs` 1 s–300 s, `maxAttempts` ≤ 5, dependencies referencing earlier steps, ≥ 1 EXTRACT and ≥ 1 SAVE, `additionalProperties: false` — and the only references to the symbol are its own class line and its own `@model_validator`. | `grep -rn "WorkflowPlan" --include=*.py --include=*.java` over both trees → `contracts.py:215`, `contracts.py:236`, and a stale `ai-service/build/lib/` copy | **Not a hole, but a misleading artefact.** Java authors a fixed four-step plan itself (`WorkflowPlanner.java:113-117`), so there is no model-produced plan to validate and every bound in the class is unexecuted. The safety floor *is* real and is stronger than a validator: the four literals are Java constants (`WorkflowPlanner.java:157-160`) that no model supplies. Either wire `WorkflowPlan` into the `/api/v1/research` request or delete the class; a contract that reads like enforcement while nothing imports it is how the old project's `Memory.md` drifted from its code |
+| P58 | **`workflow_jobs.parent_job_id` is read and never written.** `JobRepository.java:61` maps it into the record; neither insert (`:96-100`, `:122-126`) includes the column, so it is always NULL, and no fan-out code exists in either runtime. | the two INSERT statements against the column list in `V2__execution.sql:85,117,120` | The §C.5.1 prediction ("exists in the schema and is read by no code path") is confirmed and slightly worse: it *is* read, into a field that can never be non-null. Harmless today because the planner emits four sequential steps; it becomes misleading the first time someone builds per-source fan-out and finds the column already squandered |
+| P59 | **`workflow_steps.retry_count` is never incremented, and the UI is told about it.** `StepRepository.java:47` reads the column, `Records.java:41` carries it, and `OperationsService.java:156` publishes `retryCount` on the step-history view. Nothing writes it. | grep `retry_count` over `backend/src/main` → three reads, zero writes | The real counter is `workflow_jobs.attempt_count` (`JobRepository.java:299`), so the honest number exists one table away. A history screen that shows `0` retries for a step that ran four times is the fabricated-zero class the audit's §5 item 10 condemns. Either write it from the reclaim path or stop returning it |
+| P60 | **Snippet-containment verification was never ported.** The old rule — a snippet corroborates a field only if the value, or all its ≥ 3-character tokens, literally appear in it, else `isVerified:false` — has no implementation. The nearest thing is `research/prompts.py:241`, which puts matched names into a *critique prompt* and sets no flag. | grep `casefold() in` / `is_verified` over `ai-service/app`; no `provenance` package in `backend/src/main/java` | `validate.py:102` still defers to it by comment, and `DatasetAssembler.java:177-186` attributes a field only when the value *is itself* a tool-verified URL — which is a narrower test than the one the map claims. Field-level provenance is therefore "this row came from these sources", not "this value appears in this text" |
+| P61 | **Two planned governance components do not exist: the pre-LLM content-quality gate and the per-domain policy store.** No `min_content_length` / `failure_patterns` / `required_patterns` check anywhere (`quality/validate.py` is per-field *after* extraction); no `source_domain_policy` or equivalent table in `V1`–`V5`, therefore no 60 s cache and no exact-host-then-parent-domain match. | grep both languages for the identifiers → hits only in `docs/audit/*` | Every page goes to Gemini regardless of whether it is a 40-char error shell, and policy cannot vary per domain at all. `workflow_plans.source_policy` is a JSON column read only for display (`WorkflowController.java:134`) |
+| P62 | **There is no VERIFY step, and the verdict the graph already produces is discarded.** `contracts.py:285` carries the advance / retry-step / replan / terminate decision; Java never reads it. The executor handles four step types; the other eight ENUM members (`V2__execution.sql:54-55`) fail with `STEP_TYPE_UNIMPLEMENTED` (`WorkflowJobExecutor.java:160-165`), as does the `REPLAN` job type (`:129-134`). | handler registry in `WorkflowJobExecutor` against the schema ENUM | The critique loop is genuinely inside the Python graph (`graph.py:219-236`, `_critique` at `:290-316`) — so verification *happens*, it just cannot escalate back to the orchestrator. There is consequently no Java-side iteration or replan cap either (P62's second half): `maxLoops` is bounded only in Python (`state.py:148,160-167`) |
+| P63 | **SSE is promised by three documents and implemented by none.** No `SseEmitter`, no `text/event-stream`, no `EventSource`, no `Last-Event-ID` handling — the string occurs once, in a CORS allow-list (`WebConfig.java:40`). | grep across `backend/src` and all frontend source dirs | `G-api-map.md:102,190-196,237`, `A-final-architecture.md:171` and `J-no-redis-job-architecture.md:269` all describe the endpoint. The durable log it would stream from is real and correctly ordered (P: `ActivityRepository.java:35-60` writes before any read, and `forRun(afterId)` exists), so this is a thin reader over existing code — but until it lands, the docs must not read as a spec of current behaviour |
+| P64 | **`scripts/verify.sh:53` names four `*MySqlTest` classes; five exist.** `AuthenticationMySqlTest` was added in Phase 12 and never added to the gate, while the Phase 12 record and §1 both stated the MySQL check ran "five classes". | the `-Dtest=` list against the five files: `WorkflowQueue` 14 + `WorkflowRunLifecycle` 16 + `DatasetPlatform` 17 + `ExportProgress` 11 = **58** executed by the gate as written, against **75** MySQL-gated tests in the tree (`AuthenticationMySqlTest` is 17, and all five carry `@EnabledIfEnvironmentVariable(named = "FINALAGENT_TEST_MYSQL")`, so a plain `mvn test` skips rather than omits them) | So the 330 figure in the Phase 12 record is right *only* because a developer running that class by hand got it counted; the gate itself never runs it. A Phase 13 change to `SessionCookieFilter` or `SecurityConfig` can therefore be green on `verify.sh`. The count in the Phase 12 record described the intent, not the script, and this row is the correction |
+| P65 | **Country and currency canonicalization were not ported.** No static ISO-3166 table and no currency-field name heuristic (`funding\|salary\|price\|revenue\|amount\|cost\|budget\|valuation`). `normalize.py` takes a field's type from the declared contract (`:89`); country validation compares a value against the run's own declared places (`:217`, `:283-294`, `validate.py:388-398`). | grep `iso.?3166\|alpha_2\|country_names` and the heuristic pattern over both runtimes → zero | "India" and "IN" in two sources stay two different values, and a funding figure is only typed currency if the schema says so. Correct per-run, non-canonical across runs |
+| P66 | **`FUZZY_REVIEW` has no code path at all** — so the dedupe rule that "fuzzy is excluded from auto-merge" is satisfied by absence rather than by a guard. | grep `FUZZY` over `ai-service/app`, `backend/src`, migrations → zero hits | `dedupe.py:29-30` limits auto-merge to EXACT/NORMALIZED, which is the safe half of the old behaviour. Recorded because the reuse map's wording implies a filter line that does not exist |
+| P67 | **`logout` discards the revocation result.** `AuthenticationService.java:207-210` calls `revoke(...)` and ignores its return, so a request to sign out that matched no row succeeds silently. | the statement against `SessionRepository.revoke`, which returns a count | `revokeFamily`'s count *is* logged, so the asymmetry is local. It is nonetheless the one place §C.1.6's "no silent swallow of revocation failures" is not honoured |
+| P68 | **Canonical dedupe in ranking keeps the first-seen candidate, not the highest-scoring one.** `ranking.py:98-107` skips a URL whose canonical form was already seen; upstream kept the **max** similarity. | the loop body | With the floor at 0.55 (`relevance.py:114`) the loss is small, but result order now depends on the order the provider returned — the nondeterminism class `aggregation.py` was written to remove |
+| P69 | **A URL's userinfo can be persisted.** Python's canonical *key* is built from `parts.hostname` so credentials drop out of the key (`canonical.py:47-53`), but the raw URL is stored, and Java's normalizer takes the host as everything up to the first `/` (`DatasetAssembler.java:303`), which keeps `user:pass@`. `dataset_sources.url` (`V3:155`) holds the URL as fetched. | both canonicalizers read end to end | Credential stripping is currently a log concern only (`SecretMaskingConverter.java:27-28`, `logging_setup.py:18`). A `https://name:token@host/` seen in the wild would land in the dataset and in any export of it |
+| P70 | **One npm dependency is genuinely dead: `@radix-ui/react-label`.** `components/ui/label.tsx` is a hand-rolled `<label>` that imports no Radix primitive, and nothing imports the wrapper. | grep `@radix-ui/react-label` over `frontend/{app,components,lib,hooks}` → zero | The other eight unreferenced `components/ui/*` wrappers (`avatar`, `checkbox`, `dialog`, `dropdown-menu`, `progress`, `sheet`, `tabs`, and the radix `separator` use is a single screen) are **not** dead: they are the primitives Phase 13 wires. Only the label entry has no path to becoming used |
+| P71 | **Search is `LIKE`-only, and dataset-level search does not exist.** No `FULLTEXT` in any of `V1`–`V5`; row search is `LOWER(r.search_text) LIKE ?` (`DatasetQueryRepository.java:181`) and `filter[field]` is `JSON_EXTRACT … LIKE` (`:221`). `DatasetRepository.list()` filters on status and workflow id only (`:327-336`) — no name/description/requirement search. | grep `FULLTEXT` (zero) and the two LIKE sites; `DatasetAssembler.java:207` documents the choice rather than fixing it | The audit's §5 item 10 was "unindexable LIKE over JSON"; the denormalized `search_text` column moved the scan off the JSON but kept it a scan. Fine at fixture size, unmeasured at a real one |
+
+**And the one thing this phase disproved about itself.** An intermediate pass claimed the prompt
+templates were excluded from the installed distribution, because
+`[tool.setuptools.packages.find] include = ["app*"]` would not discover the `prompts/` directories that
+have no `__init__.py`. That is wrong: `packages.find` searches namespace packages by default. Built and
+listed the wheel — `app/requirements/prompts/requirement.md`, `app/research/prompts/{critique,research,submit}.md`
+are all inside `finalagent_ai_service-0.1.0-py3-none-any.whl`. The lesson goes in the other direction
+from the usual one: the stale `ai-service/finalagent_ai_service.egg-info/SOURCES.txt` lists no `.md` at
+all and is not evidence of anything, because it predates every module in `app/research/`. A build
+artefact in the working tree argued about packaging; the artefact was simply old.
+
 ### Defects found and fixed during Phase 1 (all by running, not reading)
 
 | # | Defect | How it surfaced |
@@ -1524,7 +1652,17 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phase 12 is complete; awaiting authorization for Phase 13 (the PirateAgentUI wiring).** Phases have been directed out of
+**Phase 15 is complete; awaiting authorization for Phase 13 (the PirateAgentUI wiring) and for P54,
+which should be authorized *before* it.** Phase 15 wrote no code: it proved the six reference
+repositories are removable and turned the reuse map's promises into an inventory of what this tree
+actually contains (§2 Phase 15, §5 P54–P71). Two of those findings bear on the ordering of everything
+below. P54 is a reachable SSRF in the one path that leaves this service under a name a scraped page
+chose — wiring the frontend does not change that, and a live demonstration with a real Firecrawl key
+would exercise it. P64 means the gate `verify.sh` runs today does not include `AuthenticationMySqlTest`,
+so a Phase 13 edit to the session filter or the filter chain can pass green while the identity suite that
+would catch it sits unrunned. Both are small; neither is optional once a browser is in the picture.
+
+Phases have been directed out of
 `M-phase-plan.md` order, and that drift is now worth stating precisely rather than in a footnote:
 
 | Planned | Delivered | Where it went |
@@ -1553,7 +1691,10 @@ Most valuable next candidates, in dependency order:
 2. **SSE monitoring over the durable event log.** `activity_events` is already written before any
    broadcast, is cursor-addressable (`id > ?`), now carries `workflow.dataset.saved` and
    `export.completed` / `export.failed` events, and is served by `/api/v1/activity` as a polled cursor.
-   The streaming endpoint is a reader over that same method rather than new plumbing.
+   The streaming endpoint is a reader over that same method rather than new plumbing. P63: three
+   documents (`G-api-map.md:102,190-196`, `A-final-architecture.md:171`,
+   `J-no-redis-job-architecture.md:269`) describe it as though it shipped, and one line of
+   `WebConfig.java:40` allows a `Last-Event-ID` header nothing reads.
 3. **Export-file and session-row retention.** Nothing sweeps `var/exports` and nothing prunes expired
    `auth_sessions`, so both grow without bound; `ON DELETE CASCADE` drops the records when a dataset
    goes and says so in V4, but the disk and the table are operator concerns until a job prunes them.
@@ -1561,10 +1702,14 @@ Most valuable next candidates, in dependency order:
 4. **Membership administration.** `OWNER`/`EDITOR`/`VIEWER` are enforced on every request and set only
    by registration or a direct insert, so the demotion path the per-request membership re-read exists
    to support has no endpoint yet.
-5. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
-   fetch (private/link-local/loopback refusal) and enforce
-   `SearchStrategy.max_requests_per_domain_per_minute`, which is produced and reported but still
-   consumed by nothing.
+5. **Finish source governance where Python cannot reach: P54 first.** Resolve a cleared URL's *host*
+   before fetch — private, loopback, CGNAT and link-local (including `169.254.169.254`) refused — and
+   enforce `SearchStrategy.max_requests_per_domain_per_minute`, which is produced and reported but still
+   consumed by nothing (P55). Phase 15's finding is sharper than the old phrasing: the guard is absent
+   *and* `curation/robots.py::_fetch` already makes the unguarded outbound call, so this is not a feature
+   to add later but a call already on the request path to gate. The same block would take the pre-LLM
+   content-quality check and a per-domain policy store with it (P61), and inbound throttling with a real
+   429 and `Retry-After` (P56).
 6. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
    the queue retries (`Backoff`), but the Gemini client still surfaces a rate limit as an error —
    normal on a free tier capped at 20 requests/day, not an edge case.
@@ -1575,6 +1720,17 @@ Most valuable next candidates, in dependency order:
    visible, Phase 11 added two more unmeasured numbers (a filtered dataset read is a JSON scan nobody
    has timed, and an export's chunk size is the only thing between a large file and a held worker), and
    Phase 12 added a per-request session lookup whose cost has not been measured against a loaded suite.
+8. **The small honest fixes Phase 15 left numbered but unedited.** None is large and each is a one-line
+   decision — wire it or delete it, never leave it reading as enforcement: add `AuthenticationMySqlTest`
+   to `scripts/verify.sh:53` so the gate runs the 75 MySQL tests it claims (P64); stop publishing
+   `retryCount` from a column nothing writes, or increment it on reclaim (P59); drop `parent_job_id`
+   until fan-out exists instead of carrying an always-NULL column (P58); check the count `logout`'s
+   revoke returns, since the rule this project wrote for itself is no silent revocation failure (P67);
+   either wire `WorkflowPlan` into the research request or delete the class (P57); strip userinfo before
+   a URL is persisted, which the log masking already does and the storage path does not (P69); and take
+   `@radix-ui/react-label` out of `package.json` (P70). P63's three doc lines and P60's comment in
+   `validate.py:102` belong in the same pass, because a promise in prose is how the next phase inherits a
+   gap it believes is closed.
 
 
 Still open: **G1** (demonstration strategy), **G2** (narrowed again by Phase 6 — the API shape and
