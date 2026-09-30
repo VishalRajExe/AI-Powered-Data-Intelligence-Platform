@@ -68,18 +68,20 @@ class WorkflowPlannerTest {
 
     @Test
     void thePlanHoldsOnlyStepsThisBuildExecutes() {
-        // SAVE and EXPORT do not exist yet. Emitting them as skipped placeholders is how the
-        // previous project's plans looked complete while doing nothing.
+        // EXPORT still does not exist, and emitting it as a skipped placeholder is how the previous
+        // project's plans looked complete while doing nothing. SAVE is here because there is now a
+        // dataset to write and a handler that writes it.
         assertThat(WorkflowPlanner.stepKeys(WorkflowPlanner.plan(analysis(20, Map.of())).steps()))
                 .containsExactly(WorkflowPlanner.COLLECT_STEP, WorkflowPlanner.TRANSFORM_STEP,
-                        WorkflowPlanner.VALIDATE_STEP);
+                        WorkflowPlanner.VALIDATE_STEP, WorkflowPlanner.SAVE_STEP);
         assertThat(WorkflowPlanner.plan(analysis(20, Map.of())).steps())
                 .extracting(WorkflowPlanner.PlanStep::type)
-                .containsExactly("EXTRACT", "TRANSFORM", "VALIDATE");
+                .containsExactly("EXTRACT", "TRANSFORM", "VALIDATE", "SAVE");
         assertThat(WorkflowPlanner.plan(analysis(20, Map.of())).steps())
                 .extracting(WorkflowPlanner.PlanStep::dependsOn)
                 .containsExactly(List.of(), List.of(WorkflowPlanner.COLLECT_STEP),
-                        List.of(WorkflowPlanner.TRANSFORM_STEP));
+                        List.of(WorkflowPlanner.TRANSFORM_STEP),
+                        List.of(WorkflowPlanner.TRANSFORM_STEP, WorkflowPlanner.VALIDATE_STEP));
     }
 
     @Test
@@ -200,9 +202,24 @@ class WorkflowPlannerTest {
     void theStoredStepsJsonParsesBackIntoTheSameNodesThePlannerBuilt() {
         WorkflowPlanner.Planned planned = WorkflowPlanner.plan(analysis(20, Map.of()));
         assertThat(PlanSteps.parse(planned.stepsJson()).order())
-                .containsExactly("collect", "transform", "validate");
-        assertThat(PlanSteps.parse(planned.stepsJson()).payloadFor("transform", "TRANSFORM")
+                .containsExactly("collect", "transform", "validate", "save");
+        assertThat(PlanSteps.parse(planned.stepsJson()).payloadFor("save", "SAVE")
                 .get("config")).isInstanceOf(Map.class);
+    }
+
+    @Test
+    void theSaveStepIsToldWhichTwoStepsItReadsAndNeverGuesses() {
+        WorkflowPlanner.Planned planned = WorkflowPlanner.plan(analysis(20, Map.of()));
+        WorkflowPlanner.PlanStep save = planned.steps().get(3);
+
+        // Two declared edges, because the dataset needs the pipeline's records and Java's verdict on
+        // them, and reading one from the other would be a guess about which answer owns validity.
+        assertThat(save.dependsOn()).containsExactly(WorkflowPlanner.TRANSFORM_STEP,
+                WorkflowPlanner.VALIDATE_STEP);
+        assertThat(save.config()).containsKeys("extractionSchema", "fields", "requiredFields",
+                "entityType", "objective");
+        assertThat(save.config().get("objective"))
+                .isEqualTo("list popular YouTube channels that teach programming");
     }
 
     private static Map<String, Object> limitsOf(WorkflowPlanner.Planned planned) {

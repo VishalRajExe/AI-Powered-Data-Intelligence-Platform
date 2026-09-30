@@ -96,6 +96,8 @@ class WorkflowRunLifecycleMySqlTest {
     @Autowired
     private ActivityRepository activity;
     @Autowired
+    private ai.finalagent.dataset.repository.DatasetRepository datasets;
+    @Autowired
     private JdbcTemplate jdbc;
     @Autowired
     private MockMvc mockMvc;
@@ -310,7 +312,7 @@ class WorkflowRunLifecycleMySqlTest {
     // --------------------------------------------------------------------- the flow
 
     @Test
-    void aPromptBecomesAPlanARunThreeStepsAndCollectedRecordsThroughTheQueueOnly() {
+    void aPromptBecomesAPlanARunFourStepsAndCollectedRecordsThroughTheQueueOnly() {
         String workflowId = plannedWorkflow(2);
         collecting(2);
 
@@ -320,6 +322,7 @@ class WorkflowRunLifecycleMySqlTest {
         assertThat(jobs.findByRun(started.id())).hasSize(1);
         assertThat(step(started.id(), "transform").status()).isEqualTo(JobStatus.PENDING);
         assertThat(step(started.id(), "validate").status()).isEqualTo(JobStatus.PENDING);
+        assertThat(step(started.id(), "save").status()).isEqualTo(JobStatus.PENDING);
 
         Run finished = driveToTerminal(started.id(), Duration.ofSeconds(60));
 
@@ -331,8 +334,18 @@ class WorkflowRunLifecycleMySqlTest {
         assertThat(step(started.id(), "collect").status()).isEqualTo(JobStatus.COMPLETED);
         assertThat(step(started.id(), "transform").status()).isEqualTo(JobStatus.COMPLETED);
         assertThat(step(started.id(), "validate").status()).isEqualTo(JobStatus.COMPLETED);
+        assertThat(step(started.id(), "save").status()).isEqualTo(JobStatus.COMPLETED);
         assertThat(jobs.findByRun(started.id()))
                 .allSatisfy(job -> assertThat(job.status()).isEqualTo(JobStatus.COMPLETED));
+
+        // The point of the fourth step: the run's answer is rows in tables now, not a JSON column,
+        // and the dataset names the workflow, plan and step that produced it.
+        var dataset = datasets.findByRun(WORKSPACE, started.id()).orElseThrow();
+        assertThat(dataset.workflowId()).isEqualTo(workflowId);
+        assertThat(dataset.planId()).isEqualTo(started.planId());
+        assertThat(dataset.rowCount()).isEqualTo(2);
+        assertThat(dataset.validRowCount()).isEqualTo(2);
+        assertThat(dataset.status()).isEqualTo("READY");
     }
 
     @Test
@@ -414,12 +427,14 @@ class WorkflowRunLifecycleMySqlTest {
 
         Run midWay = runs.findById(run.id()).orElseThrow();
         assertThat(midWay.status()).isEqualTo(RunStatus.RUNNING);
-        // One third of the plan finished, one third of the progress. The number a caller sees is the
+        // One step of four finished, a quarter of the progress. The number a caller sees is the
         // fraction of steps that reached a terminal state, which is the only progress this layer
-        // reports — and a plan with a pipeline step in the middle does not get to look done at 50.
-        assertThat(midWay.progress()).isEqualTo(33);
+        // reports — and a plan with a pipeline step and a save step in it does not get to look half
+        // done when it is a quarter done.
+        assertThat(midWay.progress()).isEqualTo(25);
         assertThat(midWay.finishedAt()).isNull();
         assertThat(step(run.id(), "validate").status()).isEqualTo(JobStatus.PENDING);
+        assertThat(step(run.id(), "save").status()).isEqualTo(JobStatus.PENDING);
     }
 
     @Test
@@ -549,11 +564,12 @@ class WorkflowRunLifecycleMySqlTest {
         assertThat(cancelled.status()).isEqualTo(RunStatus.CANCELLED);
         assertThat(step(run.id(), "collect").status()).isEqualTo(JobStatus.COMPLETED);
         // Both steps behind the one that finished are abandoned: the pipeline would have nothing to
-        // hand on, and a PENDING row beside a CANCELLED run reads as work still to come. The
-        // validating step never even had a job — it is queued only when the step it depends on is
-        // done, which is the property that makes the cancellation safe.
+        // hand on, the save would have nothing to write, and a PENDING row beside a CANCELLED run
+        // reads as work still to come. The validating and saving steps never even had a job — a job
+        // is queued only once its dependencies are done, which is what makes cancelling safe.
         assertThat(step(run.id(), "transform").status()).isEqualTo(JobStatus.CANCELLED);
         assertThat(step(run.id(), "validate").status()).isEqualTo(JobStatus.CANCELLED);
+        assertThat(step(run.id(), "save").status()).isEqualTo(JobStatus.CANCELLED);
         assertThat(jobForStep(run.id(), "transform").status()).isEqualTo(JobStatus.CANCELLED);
         assertThat(jobs.findByRun(run.id())).hasSize(2);
         assertThat(jobs.findClaimable()).isEmpty();
@@ -590,7 +606,7 @@ class WorkflowRunLifecycleMySqlTest {
                 .andExpect(jsonPath("$.run.status").value(RunStatus.COMPLETED.name()))
                 .andExpect(jsonPath("$.run.progress").value(100))
                 .andExpect(jsonPath("$.run.recordsValid").value(2))
-                .andExpect(jsonPath("$.steps", org.hamcrest.Matchers.hasSize(3)))
+                .andExpect(jsonPath("$.steps", org.hamcrest.Matchers.hasSize(4)))
                 .andExpect(jsonPath("$.jobs[0].payload").doesNotExist());
 
         mockMvc.perform(get("/api/v1/workflows/runs"))
@@ -626,7 +642,7 @@ class WorkflowRunLifecycleMySqlTest {
 
         assertThat(second.attempt()).isEqualTo(first.attempt() + 1);
         assertThat(second.id()).isNotEqualTo(first.id());
-        assertThat(steps.findByRun(second.id())).hasSize(3);
+        assertThat(steps.findByRun(second.id())).hasSize(4);
         assertThat(jobs.findByRun(first.id()))
                 .allSatisfy(job -> assertThat(job.runId()).isEqualTo(first.id()));
 

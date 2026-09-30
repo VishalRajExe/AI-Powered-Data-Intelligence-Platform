@@ -20,17 +20,18 @@ import ai.finalagent.workflow.support.Json;
  * {@code planHash}. An LLM planner is a later, additive option — it is not what makes this layer
  * work, and pretending otherwise would put a model between the contract and the queue.
  *
- * <p><b>The step list contains only steps this build can execute.</b> {@code SAVE} and
- * {@code EXPORT} are absent, not skipped: the previous project emitted
- * {@code EXPORT_NOT_IN_PHASE} placeholders for a step its runner never implemented
- * ({@code workflow-runner.ts:167-169}), which is how a plan came to look complete while doing
- * nothing. They appear when dataset persistence and export exist.
+ * <p><b>The step list contains only steps this build can execute.</b> {@code EXPORT} is still absent,
+ * not skipped: the previous project emitted {@code EXPORT_NOT_IN_PHASE} placeholders for a step its
+ * runner never implemented ({@code workflow-runner.ts:167-169}), which is how a plan came to look
+ * complete while doing nothing. {@code SAVE} joined the plan at Phase 9 because there is now a dataset
+ * for it to write and a handler that writes it.
  *
- * <p>The chain is {@code collect → transform → validate}, and the two ends are not interchangeable.
- * {@code transform} is the pipeline's single pass over the raw records — one call, because running
- * the same chain twice is exactly the bug the legacy runner had — and {@code validate} is Java's
- * independent verdict on the dataset that came out of it. Both steps carry the plan's own field list,
- * so neither has to ask the AI service what the contract was.
+ * <p>The chain is {@code collect → transform → validate → save}. The middle two are not
+ * interchangeable: {@code transform} is the pipeline's single pass over the raw records — one call,
+ * because running the same chain twice is exactly the bug the legacy runner had — and {@code validate}
+ * is Java's independent verdict on the dataset that came out of it. Both carry the plan's own field
+ * list, so neither has to ask the AI service what the contract was, and {@code save} reads both
+ * because it persists the rows <em>and</em> the verdict on each one.
  */
 public final class WorkflowPlanner {
 
@@ -46,6 +47,7 @@ public final class WorkflowPlanner {
     public static final String COLLECT_STEP = "collect";
     public static final String TRANSFORM_STEP = "transform";
     public static final String VALIDATE_STEP = "validate";
+    public static final String SAVE_STEP = "save";
 
     private WorkflowPlanner() {
     }
@@ -98,10 +100,21 @@ public final class WorkflowPlanner {
         validateConfig.put("requiredFields", requirement.requiredFields());
         validateConfig.put("deduplicationKeys", requirement.deduplicationKeys());
 
+        // The save step reads both of the steps before it, and says so in its edges: it persists the
+        // pipeline's records *and* Java's verdict on each row, and deriving one from the other would
+        // be a guess about which answer owns a row's validity.
+        Map<String, Object> saveConfig = new LinkedHashMap<>();
+        saveConfig.put("extractionSchema", schema);
+        saveConfig.put("fields", fieldSpecs);
+        saveConfig.put("requiredFields", requirement.requiredFields());
+        saveConfig.put("entityType", requirement.entityType());
+        saveConfig.put("objective", requirement.objective());
+
         List<PlanStep> steps = List.of(
                 new PlanStep(COLLECT_STEP, "EXTRACT", List.of(), collectConfig),
                 new PlanStep(TRANSFORM_STEP, "TRANSFORM", List.of(COLLECT_STEP), transformConfig),
-                new PlanStep(VALIDATE_STEP, "VALIDATE", List.of(TRANSFORM_STEP), validateConfig));
+                new PlanStep(VALIDATE_STEP, "VALIDATE", List.of(TRANSFORM_STEP), validateConfig),
+                new PlanStep(SAVE_STEP, "SAVE", List.of(TRANSFORM_STEP, VALIDATE_STEP), saveConfig));
 
         Map<String, Object> completion = Map.of(
                 "requireSourceEvidence", true,

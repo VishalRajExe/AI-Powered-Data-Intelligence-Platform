@@ -87,6 +87,10 @@ public class ValidateStepHandler implements StepHandler {
         summary.put("advisoryQualityScore", qualityView.get("qualityScore"));
         summary.put("advisoryDisagreementList", verdict.advisoryOnly().stream()
                 .limit(MAX_REPORTED_FINDINGS).map(RowContractEnforcer.Finding::asMap).toList());
+        // Every record, not the truncated view above: the save step persists a verdict per row, and a
+        // row that fell past a reporting limit must not be saved as though nobody had judged it.
+        summary.put("rowVerdicts", verdict.rowVerdicts().stream()
+                .map(RowContractEnforcer.Verdict.RowVerdict::asMap).toList());
         if ("pipeline-columns".equals(contract.basis())) {
             summary.put("contractWarning", "the plan declared no typed fields, so Java checked this "
                     + "dataset against the columns the pipeline emitted for it — a weaker check, and "

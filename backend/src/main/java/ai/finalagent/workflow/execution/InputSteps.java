@@ -54,4 +54,31 @@ final class InputSteps {
         }
         return Optional.ofNullable(source.outputSummaryJson()).map(Json::object);
     }
+
+    /**
+     * The output of whichever of this step's dependencies carries the given key.
+     *
+     * <p>Still an edge, not a name: the key has to appear in {@code depends_on} for this to return
+     * anything, so a step cannot reach sideways into a run's other rows just by knowing what one was
+     * called. The save step needs this because it genuinely has two inputs — the pipeline's records and
+     * Java's verdict on them — and inferring one from the other would be a guess about which is which.
+     */
+    static Optional<Map<String, Object>> completedDependencyOutput(StepContext context,
+                                                                  StepRepository steps, String stepKey,
+                                                                  String missingSummary) {
+        if (!Json.stringList(context.step().dependsOnJson()).contains(stepKey)) {
+            return Optional.empty();
+        }
+        Step source = steps.findByKey(context.run().id(), stepKey).orElse(null);
+        if (source == null) {
+            return Optional.empty();
+        }
+        if (source.status() != JobStatus.COMPLETED) {
+            throw new JobExecutionException("DEPENDENCY_NOT_COMPLETED",
+                    "the step '" + stepKey + "' this one depends on ended " + source.status() + " ("
+                            + (source.errorCode() == null ? "no code" : source.errorCode())
+                            + "), so " + missingSummary, false);
+        }
+        return Optional.ofNullable(source.outputSummaryJson()).map(Json::object);
+    }
 }

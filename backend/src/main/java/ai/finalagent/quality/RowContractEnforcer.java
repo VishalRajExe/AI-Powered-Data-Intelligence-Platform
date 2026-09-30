@@ -73,7 +73,32 @@ public final class RowContractEnforcer {
      */
     public record Verdict(int rowsChecked, int valid, int invalid, int linkedDuplicates,
                           List<Finding> findings, List<Finding> advisoryOnly,
-                          List<String> structuralFailures, String contractBasis) {
+                          List<String> structuralFailures, String contractBasis,
+                          List<RowVerdict> rowVerdicts) {
+
+        /**
+         * Java's verdict on one record, by index — the form the save step needs.
+         *
+         * <p>The truncated human-facing {@code findings} list is deliberately not what persistence
+         * reads: a run whose 60th bad row fell past a reporting limit would otherwise be saved as
+         * though it had been judged. Every record the pipeline returned gets an entry here.
+         */
+        public record RowVerdict(int index, boolean javaValid, boolean advisoryValid, int errors,
+                                 int warnings, Integer duplicateOf) {
+
+            public Map<String, Object> asMap() {
+                Map<String, Object> view = new LinkedHashMap<>();
+                view.put("index", index);
+                view.put("javaValid", javaValid);
+                view.put("advisoryValid", advisoryValid);
+                view.put("errors", errors);
+                view.put("warnings", warnings);
+                if (duplicateOf != null) {
+                    view.put("duplicateOf", duplicateOf);
+                }
+                return view;
+            }
+        }
 
         public boolean clean() {
             return structuralFailures.isEmpty() && advisoryOnly.isEmpty();
@@ -112,6 +137,7 @@ public final class RowContractEnforcer {
         List<Finding> findings = new ArrayList<>();
         List<Finding> advisoryOnly = new ArrayList<>();
         List<String> structural = new ArrayList<>();
+        List<Verdict.RowVerdict> rowVerdicts = new ArrayList<>();
         checkColumns(result, contract, structural);
         int valid = 0;
         int invalid = 0;
@@ -120,7 +146,18 @@ public final class RowContractEnforcer {
         for (Record record : records) {
             if (record.duplicateOf() != null) {
                 linked++;
+                int before = findings.size();
                 checkLink(record, byIndex, rowIndexes, findings);
+                List<Finding> linkFindings = findings.subList(before, findings.size());
+                // A duplicate is judged on its link, not on its values: its own fields were folded
+                // into the canonical row, so re-checking them here would report the same fault twice
+                // under two rows. A broken link is an error against this row, and marks it as such.
+                rowVerdicts.add(new Verdict.RowVerdict(record.index(),
+                        linkFindings.stream().noneMatch(finding -> ERROR.equals(finding.severity())),
+                        record.isValid(),
+                        (int) linkFindings.stream().filter(f -> ERROR.equals(f.severity())).count(),
+                        (int) linkFindings.stream().filter(f -> WARNING.equals(f.severity())).count(),
+                        record.duplicateOf()));
                 continue;
             }
             if (!rowIndexes.contains(record.index())) {
@@ -147,10 +184,14 @@ public final class RowContractEnforcer {
                         "the pipeline reported isValid=" + record.isValid() + " and Java reports "
                                 + javaSaysValid));
             }
+            rowVerdicts.add(new Verdict.RowVerdict(record.index(), javaSaysValid, record.isValid(),
+                    (int) rowFindings.stream().filter(f -> ERROR.equals(f.severity())).count(),
+                    (int) rowFindings.stream().filter(f -> WARNING.equals(f.severity())).count(), null));
         }
 
         return new Verdict(valid + invalid, valid, invalid, linked, List.copyOf(findings),
-                List.copyOf(advisoryOnly), List.copyOf(structural), contract.basis());
+                List.copyOf(advisoryOnly), List.copyOf(structural), contract.basis(),
+                List.copyOf(rowVerdicts));
     }
 
     /**

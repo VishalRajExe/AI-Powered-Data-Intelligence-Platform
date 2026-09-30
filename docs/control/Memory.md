@@ -12,22 +12,22 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 6 — browser planner / critique, **complete**. The graph's act step now verifies
-  its own effect instead of believing the session's reply, and the reviewer is shown what was
-  actually read instead of a list of URLs. No second agent was created, Firecrawl remains the web
-  engine, and **no Java or schema change was needed** — the gate on browser interaction stays
-  `ALLOWED_WEB_TOOLS` ∩ the request's `allowedTools`, plus the per-run interaction budget.
-  362 ai-service tests pass, 247 backend tests pass unchanged (30 of them against MySQL 9.6), and
-  the web layer remains **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real browser
-  session, search, scrape or robots fetch has ever run from this project. Phase 8's pipeline
-  (`collect → transform → validate`, Java's independent verdict on the pipeline's dataset) is
-  complete and pushed as of today; nothing stored as a dataset yet — records travel through
-  `workflow_steps.output_summary`.
+- **Current Phase:** 10 — source and evidence system, **complete**, built on the Phase 9 dataset
+  platform immediately before it. A run's answer is now rows in MySQL — `datasets`,
+  `dataset_columns`, `dataset_rows`, `dataset_sources`, `dataset_row_sources`,
+  `dataset_field_evidence`, `dataset_conflicts` (V3, applied by Flyway against real MySQL 9.6) — read
+  through nine `/api/v1/datasets*` endpoints with search, filter, sort and pagination. Every saved row
+  carries Java's verdict beside the pipeline's, its pages with their retrieval time and
+  `verifiedByTool`, and field-level attribution **only** where the attribution is real.
+  288 backend tests pass, 47 of them against MySQL 9.6; 362 ai-service tests pass unchanged, because
+  no Python change was needed. The web layer remains **mocked-only**: `FIRECRAWL_API_KEY` is still
+  blank, so no real browser session, search, scrape or robots fetch has ever run from this project.
 - **Last updated:** 2026-09-30
 - **Application code written:** three independent processes.
-  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 58 main source files, 24 test classes;
-    `workflow/` (domain, repository, plan, execution, service, web) plus `quality/`
-    (`DeclaredContract`, `RowContractEnforcer`) and the `TRANSFORM` step handler.
+  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 66 main source files, 27 test classes:
+    `workflow/` (domain, repository, plan, execution, service, web), `quality/`
+    (`DeclaredContract`, `RowContractEnforcer`) and `dataset/` (domain, repository, service, web) —
+    including the `SAVE` step that writes it all.
   - `ai-service/` — FastAPI on Python 3.14 (3.12 pinned for deployment), 46 modules: config,
     contracts, security, logging, `api/v1/{health,research,requirements,quality}`, `llm/`,
     `firecrawl/`, `extraction/`, `requirements/`, `research/` (graph, tools, state, prompts, skills,
@@ -35,20 +35,22 @@ existed, and that the system was production-ready — each contradicted by its o
     aggregation) and `quality/` (contracts, normalize, validate, dedupe, entity_resolution, merge,
     score, pipeline).
   - `frontend/` — Next.js 14.2.35. PirateAgentUI design foundation copied byte-identically
-    (`diff -r` verified), 10 routes, `lib/api/` typed client. **Untouched by Phase 8** — the pipeline
-    is reached through the workflow API the frontend already calls.
+    (`diff -r` verified), 10 routes, `lib/api/` typed client. **Untouched by Phases 9 and 10** — the
+    dataset API is new read surface and no screen consumes it yet.
   - Plus `database/`, `deploy/`, `scripts/`, `ai-service/skills/` (playbook loader docs), and the
     root `.env.example`.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
-  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated queue checks.
+  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated checks.
 - **Built:** the workflow planner and job engine, their schema and persistence, fetch-time source
   governance (robots + domain policy + ranking + dedupe), the six-stage data-intelligence pipeline,
-  and Java-side contract re-enforcement of the pipeline's own answer.
-- **Still not built:** dataset persistence (the pipeline's records live in a step's JSON summary,
-  not in typed tables), exports, SSE streaming (events are persisted and pollable, not pushed),
+  Java-side contract re-enforcement of the pipeline's answer, verified browser actions, and the
+  dataset platform with row- and field-level source traceability.
+- **Still not built:** exports (`EXPORT` is still in the step ENUM and still absent from every plan,
+  because nothing writes a file), SSE streaming (events are persisted and pollable, not pushed),
   host-resolution SSRF and per-domain rate, and authentication — which is what makes
-  `FINALAGENT_WORKSPACE_ID` a single-tenant stopgap rather than a design. The browser
-  planner/critique loop (Phase 6 of the plan) is authorized and not started.
+  `FINALAGENT_WORKSPACE_ID` a single-tenant stopgap rather than a design. `datasets.workspace_id` and
+  every `dataset_*.workspace_id` carry **no foreign key to a `workspaces` table**, because that table
+  does not exist yet; it arrives with identity, now V4.
 - **Repository:** `FINALAIAGENT` is its own git repo, pushed to branch `implementjava` of
   `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git` after every phase, per the
   standing rule. Its history is independent of `main` (old project), which has never been touched
@@ -471,8 +473,9 @@ existed, and that the system was production-ready — each contradicted by its o
   | this project | `ai-service/app/curation/canonical.py` | the URL canonicalizer the curation stage already uses | `ai-service/app/quality/normalize.py`, `dedupe.py` | **REUSED, not reimplemented.** One canonicalization for the whole service — the legacy project had three that disagreed |
   | `data-enrichment-js`, `data-enrichment-py`, `web-research-agent-master`, `web-agent-main`, `anakin`, `TheAgenticBrowser` | — | nothing was taken for this phase | — | **NO TAKE.** None of them has a normalization/entity-resolution/quality-scoring pipeline; `data-enrichment-js` persists whatever the model claims, which is the defect class this phase exists to close |
 
-  Deliberate non-additions: no dataset tables (persistence is still unbuilt, so the pipeline's output
-  travels through `workflow_steps.output_summary` and the handoff is tested as a JSON round trip), no
+  Deliberate non-additions: no dataset tables at the time (persistence was still unbuilt, so the
+  pipeline's output travelled through `workflow_steps.output_summary` and the handoff was tested as a
+  JSON round trip — Phase 9 has since stored the dataset in tables, and kept that handoff), no
   `SAVE`/`EXPORT` steps, no embeddings or vector store for entity resolution, no second web engine,
   no `rapidfuzz`, and no LLM in the pipeline — it is pure CPU-bound Python behind a synchronous
   FastAPI handler so it runs on the threadpool rather than blocking the event loop.
@@ -607,6 +610,94 @@ existed, and that the system was production-ready — each contradicted by its o
   fields) rather than the whole page, and that change should be made against observed sessions, not
   ahead of them.
 
+- [x] **Phase 9 (2026-09-30) — dataset platform.** The MySQL-backed store a run's answer can live in,
+      and the read surface over it. The plan's chain grew a fourth step —
+      `collect → transform → validate → save` — and `SAVE` is in the plan only because there is now
+      code that writes a dataset and a schema to write it into; `EXPORT` remains absent rather than
+      present-and-skipped.
+
+  | Verification | Measured |
+  |---|---|
+  | Backend tests | `FINALAGENT_TEST_MYSQL=true mvn test` → **288 tests, 0 failures, 0 errors, 0 skipped** (was 247; +41), of which **47 run against real MySQL 9.6** (`WorkflowQueueMySqlTest` 14, `WorkflowRunLifecycleMySqlTest` 16, `DatasetPlatformMySqlTest` 17) |
+  | Migration | `V3__dataset_platform.sql` applied by Flyway to `finalagent_dev` on MySQL **9.6.0**; `flyway_schema_history` now holds 1, 2, 3 all `success=1`, and the schema has **14 tables** |
+  | Dynamic schema | A job-posting run and a podcast-episode run saved through the same code produce different `dataset_columns` rows, and the episode dataset provably contains no `role_title` or `salary_amount` (`twoDifferentRunsProduceTwoDifferentSchemasFromTheSameCode`). **No field name for any entity appears anywhere in `dataset/`** |
+  | Counts are the rows | Every header figure is re-read as a `COUNT(*)` of the table it describes — rows, valid, invalid, duplicates, sources, verified sources, conflicts, records-without-evidence — in one test (`everyCountOnTheHeaderEqualsTheCountOfTheRowsItDescribes`) |
+  | Search / filter / sort / pagination | substring search over a stored `search_text`; filters `eq`, `contains`, `gte`, `lte`, `missing`, `present`; numeric vs text sort chosen from the column's declared type; `record_index` as tie-break so page 2 cannot disagree with page 1; `matchedRows` from a `COUNT(*)` of the same predicate |
+  | Facets | min/max + operator list for `NUMBER`/`CURRENCY`, distinct values with counts while they stay under the bound, and `distinctListed: false` with the list withheld when a column is not a choice |
+  | API | 9 endpoints: list, details, `schema`, `rows`, `search`, `filters`, `sources`, `sources/{id}/rows`, `evidence` (+ per-row `rows/{id}/evidence`) |
+  | Replay | saving the same run twice replaces its dataset under the same id — rows 2 → 1, columns 4, row-source links 1, no orphans (`savingTheSameRunTwiceReplacesItsDatasetInsteadOfAddingASecondOne`) |
+  | AI service | **unchanged this phase**: 362 passed, 8 skipped. The pipeline already returned typed records, columns and per-record sources; nothing in Python needed to move |
+  | Frontend | typecheck, lint, build pass and are untouched — the dataset API is new read surface with no screen on it yet |
+
+  **Schema, and the one thing about it that will bite.** Values are JSON, and filter and sort reach them
+  through `JSON_EXTRACT(values_json, ?)` with the path **bound as a parameter** and the key resolved
+  against `dataset_columns` first — so an injection-shaped sort key is a 400 that names the real
+  columns, asserted against a live MySQL. The cost is honest and recorded: **a filtered or sorted read
+  of a large dataset is a scan of that dataset's rows**, because no functional index can exist on a
+  column nobody declared until the run finished. The upgrade path is per-dataset generated columns,
+  which would mean DDL on behalf of a prompt; that trade was taken deliberately, not overlooked.
+  `workflow_steps.output_summary` still holds the pipeline's intermediate answer (the save step reads
+  the run through it), so Phase 9 replaced the *destination*, not the handoff.
+
+  Defects **in my own Phase 9 code**, all found by running:
+
+  | # | Defect | How it surfaced |
+  |---|---|---|
+  | P31 | **A foreign key can only reference an existing key in the exact column order.** `fk_dataset_workflow` said `REFERENCES workflows (id, workspace_id)`; `workflows` has `uq_workflow_scope (workspace_id, id)`, so MySQL refused the whole migration with error 6125. The fix also settled a convention: `datasets` carries `uq_dataset_scope (id, workspace_id)` so every child can say `REFERENCES datasets (id, workspace_id)`, the way `workflow_runs` already does | Flyway failing the boot of the MySQL test context. The half-applied `success=0` history row was then cleaned by hand — dropped seven empty tables the migration had not created and deleted the failed row, so Flyway owns V3 |
+  | P32 | **`rows()` never bound the dataset id, and its ORDER BY dropped a parameter.** A sort on a JSON path puts a `?` in the `ORDER BY` clause, which sits between the WHERE parameters and the page window; the args list went WHERE → limit → offset. MySQL reported `No value specified for parameter 3` as "bad SQL grammar" | `a_linked_duplicate_is_stored_and_reachable…`. `predicate()` now owns the dataset scope as its leading parameter and `order()` returns its SQL *with* its args, so forgetting one is a type error rather than a runtime surprise |
+  | P33 | **Two facet queries passed their parameters in reading order instead of statement order.** `SELECT MIN(CAST(… ? …)), MAX(… ? …) WHERE dataset_id = ?` was called as `(datasetId, path, path)`; the same mistake sat in the distinct-values query. `min`/`max` came back null and the value list was grouped against the wrong placeholder | `facetsDescribeWhatCanBeFilteredAndStopListingWhenAColumnIsNotAChoice` expected `60000.000000` and got `null` |
+  | P34 | **The save step double-counted the run.** It contributed `validRowCount` to `records_valid` while the validating step had already added it, so a two-row run reported four valid records and a shortfall message read "collected 2 valid records against a required 5" where one had passed. `SAVE` now contributes **no** run-level counter: it is the step that writes tables, not the step that decides totals | `WorkflowRunLifecycleMySqlTest.aPromptBecomesAPlanARunFourSteps…` (expected 2, got 4) and `collectedButUnverifiedRecords…`. This is the same rule as P17/P23, found the same way — by running a longer plan |
+  | P35 | **Dead and wrong in the first draft of `DatasetRepository`:** an overload that queried a column and then threw unconditionally, a call to a `JdbcTemplate` method that does not exist, and children inserted with the run id where the dataset id belonged | `mvn test-compile`, before any test ran |
+
+- [x] **Phase 10 (2026-09-30) — source and evidence system.** Traceability made complete, on the same
+      tables. Every row names its run and the step that wrote it; every page it cites is stored with
+      its URL, domain, title, snippet, how it was reached (`search`, `scrape`, `interact`, or the
+      combination in the order they happened), when it was retrieved and whether a tool returned it.
+      Where a row and a page disagree, both values survive with their own source lists and the rule
+      that chose.
+
+  The five cases the brief names, each one a test:
+
+  | Case | Test | What it proves |
+  |---|---|---|
+  | one row, one source | `oneRowWithOneSourceTracesToThatPageAndToNothingElse` | one source row, cited by that row; the URL-typed field gets real field-level attribution and `salary_amount` gets none |
+  | one row, several sources | `oneRowWithSeveralSourcesKeepsAllOfThemAndCountsWhatEachOneSupports` | all three pages kept, `citedByRows` from the join, and the trace works from either end |
+  | conflicting sources | `conflictingSourcesKeepBothValuesAndTheRuleThatChoseBetweenThem` | kept value, rejected value, both source lists and `resolvedBy` all survive the write and the read |
+  | missing source | `aRowWithNoSourceIsSavedCountedAndNamedRatherThanLeftOut` | the row is saved, counted in `recordsWithoutEvidence`, listed by `/evidence` — kept and flagged, never dropped |
+  | blocked source | `aBlockedSourceIsRecordedWithThePolicyThatBlockedItAndStaysUnverified` | a page refused before fetching is stored with `provenance=REFUSED_BEFORE_FETCH`, its policy code and reason, `verifiedByTool=false`, cited by no row |
+
+  **No fabricated verification, and the one defect that tested for it.** Three rules hold at once: a
+  page no tool returned keeps `verified_by_tool = 0` no matter how many rows cite it; field-level
+  attribution exists only when the field's own value *is* that page's URL **and** a tool retrieved
+  the page; and `coverage` reports a column's populated rows and its attributed rows as two numbers,
+  because a field can be full of values and still trace to nothing.
+
+  | # | Defect | How it surfaced |
+  |---|---|---|
+  | P36 | **The save step attributed a field to a page that no tool ever returned.** `rowOf()` checked only whether the value's hash was among the row's citations, so a model's invented `posting_url` earned a `DECLARED_SOURCE` edge — a fabricated verification, written by the layer whose job is to refuse them | `aCitedPageThatNoToolReturnedNeverArrivesAsVerifiedEvidence`, the only failure in the first full run of the dataset suite. A citation is not a trace, and the query now requires the source's own `verifiedByTool` before it writes one |
+  | P37 | **`canonicalHash("")` returned the SHA-256 of nothing**, so every URL-less citation would have collapsed into one shared source row keyed on the empty string | `aSourceWithNoUrlIsNotHashedIntoSomebodyElsesPage` expected blank and got `e3b0c44…`. Blank now stays blank, the builder refuses to key a source on it, and the count is reported as `sourcesWithoutUrl` rather than the citation vanishing |
+  | P38 | **Tenant scoping turned out to be structural, not polite.** Moving a dataset's `workspace_id` was refused by MySQL, because its children reference `(dataset_id, workspace_id)` — so a header cannot be re-homed away from the rows that inherit its scope. Found as a broken test, and kept as an assertion | `unknownIdsAnswerAsNotFoundAndAForeignWorkspaceCannotBeProbed`: what began as a shortcut in the test (update the workspace, then probe) is now the thing being asserted, and the foreign dataset is created under the other workspace properly |
+
+  Reuse records for these two phases:
+
+  | Repository | Source file | Feature | Destination | Method |
+  |---|---|---|---|---|
+  | old project | `workflow-execution.repository.ts:255-300` (`persistDataset`) | writing collected records into typed dataset tables | `dataset/repository/DatasetRepository`, `workflow/execution/SaveStepHandler` | **PORT + REVERSAL.** Upstream `continue`d past rows whose sources did not hash-match a persisted `Source` (`:271-272`), so a dataset landed short with no explanation anywhere. Here an invalid row is stored with its issues, an unevidenced row is stored and *counted*, and a duplicate is linked rather than deleted |
+  | old project | `data-intelligence/AgentResultNormalizer.ts:41-49` | a URL counts as evidence only if a tool returned it this run | `dataset/service/DatasetAssembler.rowOf`, `dataset_sources.verified_by_tool` | **PORT + STRENGTHENED.** Upstream used the flag to decide which rows to keep (and dropped them silently). Here it decides what may be *claimed*: the row survives either way, and P36 is the case where the strengthened rule caught the weaker reading |
+  | old project | `dataset-field.service.ts`, `DatasetColumn` in the Prisma schema | columns as rows, so a dataset's shape is data | `dataset_columns` (`field_key`, `type`, `required`, `position`, `origin`) | **PORT + FIX.** The old schema declared column *types* but the write path filled them from a startup-shaped template. `origin` is new: it separates a field the plan declared from one a page happened to contain, which is what makes "dynamic schema" checkable rather than asserted |
+  | this project | `ai-service/app/quality/merge.py`, `contracts.py` | conflicts with both values and both source lists, duplicate links, per-record provenance | `dataset_conflicts`, `dataset_rows.duplicate_of_row_id`, `dataset_row_sources` | **PERSISTED, NOT REIMPLEMENTED.** The pipeline already produced all of it; Phase 9 gave it somewhere to live and Phase 10 made it queryable from both ends |
+  | this project | `ai-service/app/curation/canonical.canonical_key` | URL identity for dedupe | `DatasetAssembler.canonicalize` (Java) | **DELIBERATE SECOND IMPLEMENTATION, for a different question.** Python's canonicalizer decides whether two records are one entity; Java's decides which stored source a row's value names. Both are documented as such, because the failure this project is built to avoid is *three* canonicalizers that silently disagree about one question — here each owns one |
+  | anakin, web-agent-main, web-research-agent-master, data-enrichment-js, ai-data-enrichment-agent, TheAgenticBrowser-main | — | nothing | — | **NO TAKE.** None of the six has a dynamic dataset store or a field-level evidence model; `data-enrichment-js` persists whatever the model claims, which is the defect this phase exists to close |
+
+  **Not verified, stated plainly for both phases:** every dataset row tested here was assembled from
+  fixtures this project wrote, so what is proven is the *plumbing* — schema derivation, counts,
+  pagination, FK scoping, and the refusal to upgrade a citation into a trace. Not proven: how wide
+  the filter surface needs to be once real prompts produce real column counts (a `TEXT` column of
+  4,000 distinct descriptions is a facet that returns nothing useful, and `distinctListed: false` is
+  the honest answer rather than a tuned one), what `search_text LIKE '%…%'` costs at 10,000 rows per
+  dataset (unmeasured — no run has collected at that scale), and whether `position` ordering survives
+  a schema where the model legitimately puts a field nobody asked for first.
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -699,6 +790,13 @@ existed, and that the system was production-ready — each contradicted by its o
 | 2026-09-30 | **The reviewer receives bounded excerpts of what was read, plus which contract field names appear in them; the submission transcript keeps every page whole.** | `critique.md` demanded "adequately evidenced" while the prompt gave the judge a list of URLs — an instruction with nothing to check against, so a fabricated value was invisible. Porting upstream's DOM pruning *wholesale* would have made it worse: `orchestrator.py:99-132` blanks the content the critique is supposed to judge. Bounding for review, never blanking, and never pruning the extractor's own input |
 | 2026-09-30 | **Credential entry, CSP bypass and automation-flag evasion are refused outright, and the refusal is asserted in a test.** | TheAgenticBrowser documents filling `#username`/`#password` (`browser_agent.py:36,140-144`) and launches with `bypass_csp=True` + `--disable-blink-features=AutomationControlled` (`browser_manager.py:219-221`). Our safety literals are constants in `WorkflowPlanner.safetyPolicy`, the brief forbids bypassing access controls, and the corrective advice a failed action produces is now tested to offer another *source* and to contain no login/password/captcha/bypass/paywall wording |
 | 2026-09-30 | **No Java, schema or DTO change for Phase 6.** New signals travel as `metadata.turnsByNode`, `metadata.interactions`, `metadata.interactionsUnverified` and one more `validation.warnings` entry. | `ResearchResult.metadata` is a free-form map that `ExtractStepHandler` already copies into the step summary, so adding to it needed no seam change. A phase that cannot be expressed without touching the authoritative layer would be a sign the change belonged there — this one is a statement about how much a Python-side run can believe about itself |
+| 2026-09-30 | **`SAVE` joined the plan because there is now something it writes; `EXPORT` still has not, and still will not be emitted as a placeholder.** | The old runner shipped `EXPORT_NOT_IN_PHASE` steps for work it never did (`workflow-runner.ts:167-169`), which is how a plan looked complete while doing nothing. Four steps now exist because a dataset, a repository and a transaction exist behind the fourth |
+| 2026-09-30 | **The dataset's columns are rows, and their `origin` is recorded.** | A schema that only the pipeline saw is the defect this rebuild was started for. `PLAN` / `EXTRACTION_SCHEMA` / `PIPELINE` / `DATA` on each column separates "someone asked for this field" from "a page happened to contain it", which is what lets a reviewer question a column instead of inheriting it |
+| 2026-09-30 | **Values stay JSON and filters reach them through a bound path, with the dataset's own column list as the gate — no per-dataset DDL.** | A functional index cannot exist on a column nobody declared until the run finished, and creating generated columns per dataset would mean schema DDL on behalf of a prompt. So filter and sort are `JSON_EXTRACT(values_json, ?)` with the key resolved against `dataset_columns` first: safe, dynamic, and a scan. The scan is the recorded cost, not an oversight |
+| 2026-09-30 | **A dataset's counts are derived from the rows written in the same transaction, and citation counts are recomputed by MySQL from the join.** | Two derivations, deliberately not copied from the run's own report: header totals come from the lists being inserted, and `cited_by_rows`/`citation_count` come back from the database. A dataset whose header disagreed with its own rows would be a second, quieter source of truth — which is what §1 of the forensic audit is about |
+| 2026-09-30 | **Field-level evidence is written only when the field's own value is the URL of a page a tool returned.** | A row citing three pages does not make three sources the provenance of every field in it. Phase 10's first full test run found this layer writing exactly that attribution for an invented URL (P36) — which is why the rule is stated in the schema comment, the service javadoc and a test rather than left to the reader's goodwill |
+| 2026-09-30 | **Rows Java never judged are saved invalid, and an unjudged row is never defaulted to valid.** | `DatasetAssembler.assemble` receives `record index → Java verdict`; absent means the authoritative gate did not speak, and treating silence as a pass would make this layer the one that fails open |
+| 2026-09-30 | **V3 is the dataset platform; identity is pushed to V4.** | The audit reserved `V3__baseline_identity` for authentication, which is still unbuilt. Rather than create empty tables to fill a slot — the reason V1 is workflows and not identity — the reservation gives way to code that exists. No applied migration was renumbered or edited: Flyway verifies checksums of what it has run |
 
 ## 4. Database / Schema Changes
 
@@ -718,19 +816,46 @@ arrives as `V3__baseline_identity.sql`, and the `workspace_id` / `created_by_id`
 `NOT NULL` today with **no foreign key** get theirs then. That is a real gap, recorded here and in
 `E`, not a design choice.
 
-**Phase 8 added no schema.** That is worth saying out loud rather than leaving a reader to check: the
-step-type ENUM in `V2__execution.sql` already declared `TRANSFORM`, `VALIDATE`, `DEDUPLICATE`,
-`MERGE`, `VERIFY` and `SAVE` before any of them had code, so the pipeline's `TRANSFORM` step landed in
-a column that was waiting for it and no migration was needed or written. The plan now materialises
-three `workflow_steps` rows instead of two, and the pipeline's records travel through
-`workflow_steps.output_summary_json` — which is the same JSON column Phase 7 put the collected records
-in, and the reason dataset persistence is still the sharpest gap (§8). What the *run* counters changed:
-`TRANSFORM` now owns `duplicates` and contributes nothing to `records_found` / `records_raw`, which
-`EXTRACT` already added (P23).
+**Phase 8 added no schema.** The step-type ENUM in `V2__execution.sql` already declared `TRANSFORM`,
+`VALIDATE`, `DEDUPLICATE`, `MERGE`, `VERIFY` and `SAVE` before any of them had code, so the pipeline's
+`TRANSFORM` step landed in a column that was waiting for it. What changed was the run's counters:
+`TRANSFORM` owns `duplicates` and contributes nothing to `records_found` / `records_raw`, which
+`EXTRACT` already added (P23). Two ai-service settings arrived instead of columns, both range-checked
+at boot so a bad value stops the process rather than changing what a dataset means:
+`ENTITY_MATCH_THRESHOLD` (default 0.94, bounded 0.5-1.0) and `QUALITY_MAX_BLOCK_SIZE` (default 400,
+bounded 2-100000).
 
-Two new ai-service settings arrived instead of columns, both range-validated at boot so a bad value
-stops the process rather than changing what a dataset means: `ENTITY_MATCH_THRESHOLD` (default 0.94,
-bounded 0.5-1.0) and `QUALITY_MAX_BLOCK_SIZE` (default 400, bounded 2-100000).
+**Phase 9 added the schema, and it is V3.** Seven tables, applied by Flyway against MySQL 9.6.0 and
+verified by 17 tests that run against that server, not against doubles:
+
+| Table | What it holds | What its keys guarantee |
+|---|---|---|
+| `datasets` | one saved dataset per run: objective, verbatim requirement text, entity type, the extraction schema it was produced under, status, counts, quality score + basis | `UNIQUE (run_id)` — a retried save replaces its own dataset instead of minting a second one; `uq_dataset_scope (id, workspace_id)` so children can reference the pair |
+| `dataset_columns` | the dynamic schema: folded key, label, declared type, required, position, `origin`, measured populated count | `UNIQUE (dataset_id, field_key)` — one declaration per field, whatever the run said |
+| `dataset_rows` | one row per record: `values_json`, `raw_values_json`, `search_text`, Java's `valid` **beside** the pipeline's `advisory_valid`, verification status, nullable confidence, `duplicate_of_row_id`, `match_type`, issues, notes, per-row source and evidence counts | `UNIQUE (dataset_id, record_index)`; `duplicate_of_row_id` is a self-link with `ON DELETE SET NULL`, and a row that is a link is still a row — `idx_rows_dataset_list` serves the canonical-only listing |
+| `dataset_sources` | every page touched: URL, `url_hash`, domain, title, snippet, how it was reached, when it was retrieved, `verified_by_tool`, `provenance`, refusal code and reason, citation counts | `UNIQUE (dataset_id, url_hash)` — a URL cannot be a key at 1000 characters, and a `?utm_` variant must not become a second source for one page |
+| `dataset_row_sources` | the row ↔ page join, in both directions | `UNIQUE (row_id, source_id)` |
+| `dataset_field_evidence` | field-level attribution, `FIELD_URL` or `DECLARED_SOURCE`, and nothing else | `UNIQUE (row_id, column_key, source_id, kind)` |
+| `dataset_conflicts` | both values, both source lists, and the rule that chose between them | keyed by row and column; nothing is dropped from a disagreement |
+
+Phase 10 added no further tables: it wrote the traceability *through* these — `run_id` and `step_id` on
+every row and source, so a value names the run, the step and the page that produced it.
+
+Tenant scoping turned out to be structural rather than polite. Every child carries `workspace_id` and
+foreign-keys to `(dataset_id, workspace_id)`, so MySQL **refuses** to move a dataset header out from
+under its own rows; P38 found that by trying, and the assertion stayed.
+
+**The numbering decision the audit will want checked.** `E-database-model.md` reserved `V3` for
+`baseline_identity`, and identity is still unbuilt. Rather than create empty tables to fill a slot —
+the same reasoning that made V1 workflows rather than identity — the slot gave way to code that
+exists, and authentication arrives as `V4`. No applied migration was renumbered or edited, because
+Flyway verifies checksums of what it has run; `flyway_schema_history` now holds 1, 2, 3, all
+`success = 1`, and the schema has 14 tables.
+
+`workflow_steps.output_summary_json` is still written and still read: the save step reads the
+pipeline's records out of the transform step's summary and Java's verdicts out of the validating
+step's. Phase 9 replaced the **destination**, not the handoff — the dataset tables are where an answer
+lives now, and the step summaries are how the next step re-reads the one before it.
 
 Changes made to the DDL *because MySQL disagreed with it* (both P12/P13 in §2):
 
@@ -739,22 +864,24 @@ Changes made to the DDL *because MySQL disagreed with it* (both P12/P13 in §2):
   run's reference to its plan blocked the plan's removal.
 - `workflow_jobs.last_error_message` stays `VARCHAR(2000)` and the repository truncates to fit, so
   a long provider payload cannot abort the write that records why a job failed.
+- `fk_dataset_workflow` had to name its columns in the order the referenced key does
+  (`workflows (workspace_id, id)`), while `fk_dataset_run` names `workflow_runs (id, workspace_id)`
+  — the two parents are keyed in opposite orders, and MySQL error 6125 said so. P31.
 
 `V2` was edited once (the cascade) *before* the phase shipped, which was only permissible because
 the schema had never been applied anywhere but this local dev database; the tables were dropped and
 both migrations re-applied, and `flyway_schema_history` now holds exactly 2 rows. Against a shared
 or deployed database the same fix would have had to be a new `V3`.
 
-Still deliberately absent: `datasets`, `dataset_records`, `sources`, `source_domain_policy`,
-`users`, `workspaces`, `refresh_tokens`, `export_jobs`. The records a run collects live in
-`workflow_steps.output_summary` as JSON for now — a staging area, not the dataset model, and the
-persistence phase replaces it.
+Still deliberately absent: `source_domain_policy`, `users`, `workspaces`, `refresh_tokens`,
+`export_jobs`. What is no longer absent is the dataset model itself, which this section listed as a
+gap until Phase 9.
 
 What the schema is *not*: it is not JPA-generated. `pom.xml` carries `flyway-core` + `flyway-mysql`
 and no JPA provider for these tables; the queue needs conditional `UPDATE … WHERE status = ? AND
 version = ?` and `NOW(6)`-based lease arithmetic that an ORM would only obscure, so the SQL is
 written where it is used and the records in `workflow/domain/Records.java` are an anaemic read
-model over JDBC row mappers.
+model over JDBC row mappers. `dataset/domain/DatasetRows.java` follows the same rule.
 
 ## 5. Known Bugs / Issues / Verification Limits
 
@@ -873,6 +1000,28 @@ project wrote. Four things remain genuinely unproven:
 Also unchanged: the pipeline is reachable through `POST /ai/v1/quality/process` behind the shared
 `X-API-Key`, and the workflow endpoints that call it are still unauthenticated, so a caller who can
 start a run can now also make Spring spend Python CPU on it.
+
+### Verification limits introduced by Phases 9 and 10
+
+The dataset tables are proven against a real database and against fixtures this project wrote. Four
+things they do not show:
+
+- **Scale.** Every test saves 1-3 rows. A dataset with 10,000 rows read through
+  `JSON_EXTRACT(values_json, ?)` with `LIKE`-ed search is a scan, and the point at which that stops
+  being acceptable has not been measured — there is no functional index, and no per-dataset generated
+  columns either. The upgrade is named in the DDL comment, not benchmarked.
+- **Nothing has ever been collected.** `FIRECRAWL_API_KEY` is still blank, so every saved row's values
+  and every `dataset_sources` row were authored by a test. The `verified_by_tool` flag is proven to be
+  respected, and proven never to be granted on the strength of a citation (P36) — but it has never
+  been set by a real page being fetched.
+- **Retrieval time is only as good as the pipeline's stamp.** `asTimestamp` returns null for anything
+  it cannot parse, which is right, and means an unparseable stamp silently loses its ordering value
+  in a facet or a "most recently retrieved" sort. No live run has produced one yet.
+- **`search_text` is a concatenation, so a hit is not a match meaning.** A substring crossing a
+  field boundary can match ("…engineer bengaluru…" matching `engineer ben`), and the API reports which
+  fields contained the term by re-checking each value, which is the part a caller should read. The
+  fulltext index that would make this word-precise was deliberately not created, because fragment
+  queries are what people type.
 
 ### Verification limits introduced by Phase 6
 
@@ -1061,55 +1210,57 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phase 6 is complete; awaiting authorization for the next one.** Phases have been directed out of
+**Phases 9 and 10 are complete; awaiting authorization for the next one.** Phases have been directed out of
 `M-phase-plan.md` order, and that drift is now worth stating precisely rather than in a footnote:
 
 | Planned | Delivered | Where it went |
 |---|---|---|
-| Phase 3 — authentication | **not built** | the reason `FINALAGENT_WORKSPACE_ID` is a single-tenant stopgap and `created_by_id` has no FK |
+| Phase 3 — authentication | **not built** | the reason `FINALAGENT_WORKSPACE_ID` is a single-tenant stopgap, `created_by_id` has no FK, and `dataset_*.workspace_id` has none either |
 | Phase 4 — requirement understanding | Phase 3 | `requirements/` in Python, `RequirementValidator` in Java |
 | Phase 5 — schema generation | part, Phase 3 | `derive_extraction_schema` + `ExtractionSchemaValidator` |
 | Phase 6 — job engine | **Phase 7** | `workflow/` — plan, run, step, job, worker, MySQL queue, retries, leases, cancellation |
 | Phase 7 — source governance | mostly, Phase 5 (at fetch time) | `curation/` — robots, policy, ranking, dedupe, retry, aggregation. **Not** built: host-resolution SSRF and per-domain rate |
 | **Phase 6 — browser planner / critique** | **Phase 6** (2026-09-30) | taken as two patterns inside the one existing research graph: `run_interact` verifies its own effect (`CHANGED` / `UNCHANGED` / `UNKNOWN`) and `critique_prompt` receives what was actually read. Upstream's three-agent topology, local Playwright, screenshot judging and CSP/automation evasion were **refused** |
 | Phase 8 — data intelligence pipeline | **Phase 8** (2026-09-30) | `ai-service/app/quality/` behind `POST /ai/v1/quality/process`, executed as the `TRANSFORM` step and disposed of by `RowContractEnforcer` in Java |
-| Phase 8's dataset persistence | **not built** | the pipeline's records, and now the graph's interaction verdicts, live in `workflow_steps.output_summary` JSON |
+| Phase 8's dataset persistence | **Phases 9 and 10** (2026-09-30) | `V3__dataset_platform.sql` — seven tables, the `SAVE` step that writes them, and nine read endpoints; Phase 10 completed the traceability through the same schema |
+| Exports | **not built** | `EXPORT` is still in the step ENUM and still absent from every plan, because nothing writes a file |
 
 Most valuable next candidates, in dependency order:
 
-1. **Dataset persistence.** Sharper than it was before Phase 8: the pipeline now produces a typed
-   dataset — columns with types, canonical rows, linked duplicates, per-record sources with
-   `verifiedByTool`, conflicts with both sides kept, Java's own verdict per row — and the graph
-   additionally records which pages were *acted on* and whether each action's effect could be
-   verified. All of it is serialized into a JSON column on a step row. `datasets` /
-   `dataset_records` / `record_sources` / `record_conflicts` tables would make the pipeline's output
-   queryable and would let a later run resolve against records it stored rather than re-collecting.
-   The `SAVE` and `EXPORT` step types already exist in the ENUM and are still deliberately absent
-   from every plan until there is code behind them.
-2. **Authentication and tenancy (the plan's Phase 3).** `/api/v1/workflows/*` is unauthenticated and
-   now *starts billed work*, which is worse than the read-only endpoints that came before it: a
-   caller who can POST /runs can spend Firecrawl credits and Gemini quota, can since Phase 8 make
-   Spring run a CPU-bound pipeline over records on Python's threadpool, and — where an operator has
-   enabled it — can since Phase 6's verification make a run drive live browser sessions more
-   deliberately. The queue itself is safe to leave as is — the workspace is server-configured and a
-   foreign id answers as not-found — but `FINALAGENT_WORKSPACE_ID` and `Principals.UNAUTHENTICATED`
-   are placeholders that must not survive into a shared deployment, and `workspace_id` /
-   `created_by_id` need their foreign keys (V3).
+1. **Authentication and tenancy (the plan's Phase 3), now V4.** It moves to the top because
+   `/api/v1/datasets*` is the first read surface over *stored* user data, which is a different
+   exposure from the read-only endpoints before it: a caller who can list datasets can read another
+   tenant's collected records if the scope is ever widened. Today the workspace is
+   server-configured, a foreign id answers as not-found, and the compound foreign keys mean a dataset
+   cannot even be re-homed away from its rows (P38) — but `FINALAGENT_WORKSPACE_ID` and
+   `Principals.UNAUTHENTICATED` are single-tenant placeholders, `workspace_id` / `created_by_id` still
+   have no foreign keys, and no `workspaces` / `users` table exists. `/api/v1/workflows/*` remains
+   unauthenticated too, and can start billed work: Firecrawl credits, Gemini quota, a CPU-bound
+   pipeline pass, and — where an operator enables it — live browser sessions.
+2. **Exports.** The `EXPORT` step type exists in the ENUM and in `workflow_plans.output_configuration`
+   and is still in no plan — deliberately, because the old runner shipped `EXPORT_NOT_IN_PHASE`
+   placeholders for work it never did. A CSV/JSON writer over `dataset_rows` with a listing's filter
+   and sort applied to it is the whole feature, and it is what a user who can see a dataset asks for
+   next.
 3. **SSE monitoring over the durable event log.** `activity_events` is already written before any
-   broadcast and is cursor-addressable (`id > ?`), so the streaming endpoint is a reader over a table
-   that exists rather than new plumbing.
-4. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
+   broadcast, is cursor-addressable (`id > ?`), and now carries a `workflow.dataset.saved` event, so
+   the streaming endpoint is a reader over a table that exists rather than new plumbing.
+4. **Frontend for the dataset API.** Ten routes exist and none reads `/api/v1/datasets`: a listing, a
+   schema-aware table over the dynamic columns, and a row's evidence trail. The design foundation is
+   byte-identical from `PirateAgentUI` and `lib/api/` is a typed client, so this is new pages rather
+   than a redesign.
+5. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
    fetch (private/link-local/loopback refusal) and enforce
    `SearchStrategy.max_requests_per_domain_per_minute`, which is produced and reported but still
    consumed by nothing.
-5. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
+6. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
    the queue retries (`Backoff`), but the Gemini client still surfaces a rate limit as an error —
    normal on a free tier capped at 20 requests/day, not an edge case.
-6. **Right-size the budgets against one real run.** `WORKFLOW_STEP_TIMEOUT_MS=240000` inside
-   `WORKFLOW_LEASE_SECONDS=300` was reasoned about, never measured: no step has ever collected from
-   the live web here, Phase 8 added a second long call (`/ai/v1/quality/process`) under the same
-   budget, and Phase 6 makes an unverified session *visible*, which is the first thing that will tell
-   us whether real browser sessions complete at all inside the interaction deadline.
+7. **Right-size the budgets against one real run, and a dataset read against one real size.**
+   `WORKFLOW_STEP_TIMEOUT_MS=240000` inside `WORKFLOW_LEASE_SECONDS=300` was reasoned about, never
+   measured: no step has ever collected from the live web here, Phase 8 added a second long call
+   (`/ai/v1/quality/process`) under the same budget, Phase 6 made an unverifiable browser session
+   visible, and a filtered read of a large dataset is a JSON scan nobody has timed (§5).
 
 Still open: **G1** (demonstration strategy), **G2** (narrowed again by Phase 6 — the API shape and
 lifecycle are settled, and sessions are now verifiable in principle, but no live session has run here,
@@ -1122,9 +1273,11 @@ migrated, and the queue runs on it.
 
 ### Carried forward from Phase 2, still true
 
-- The research graph is a **stateless in-process run**. It persists nothing, so the dataset phase
-  must define how `ResearchResult` maps onto rows, columns, sources and evidence. The DTO already
-  carries per-record sources with `verifiedByTool`, which is what field-level provenance needs.
+- The research graph is a **stateless in-process run**. It persists nothing, and since Phase 9 the
+  save step does: `ResearchResult`'s records map onto `dataset_rows` with their
+  `dataset_row_sources` join and `dataset_field_evidence` attributions. The per-record
+  `verifiedByTool` flag the DTO already carried is what decides both, and it is never inferred
+  (P36).
 - Graph bounds are configuration (`MAX_LOOPS`, `MAX_SEARCHES_PER_RUN`, `MAX_SCRAPES_PER_RUN`),
   supplied per request by Spring, range-validated at boot — so a planner can lower them per step.
 - `POST /api/v1/research` is currently **unauthenticated** and guarded only by its schema check.

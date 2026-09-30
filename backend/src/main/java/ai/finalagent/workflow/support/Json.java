@@ -53,6 +53,24 @@ public final class Json {
         throw new IllegalStateException("expected a JSON object, found " + value.getClass().getSimpleName());
     }
 
+    /**
+     * Any stored JSON value as its Java shape — object, array, string, number, boolean or null.
+     *
+     * <p>Needed where a column holds a scalar or a list rather than an object: a conflict's kept value
+     * can be a number, a currency object or a bare string, and forcing every one of them through
+     * {@link #object} would either fail or wrap it in a fiction.
+     */
+    public static Object parse(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return MAPPER.readValue(json, Object.class);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("stored JSON column cannot be read: " + e.getOriginalMessage(), e);
+        }
+    }
+
     /** Strings from either a decoded array or a stored JSON column; absent means empty. */
     public static List<String> strings(Object value) {
         if (value == null) {

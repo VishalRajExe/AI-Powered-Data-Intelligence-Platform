@@ -133,6 +133,11 @@ public class TransformStepHandler implements StepHandler {
         if (result.warnings() != null && !result.warnings().isEmpty()) {
             summary.put("pipelineWarnings", result.warnings());
         }
+        // Passed through from the collection step, because the dataset that gets saved downstream is
+        // built from this step's output and a refused page has to travel with it. "This field is empty
+        // because the site refused us" is only answerable if the refusal survives to the dataset.
+        summary.put("sourcesRefused", collected.map(output -> output.get("refusedSources"))
+                .orElse(List.of()));
         if (!stageFailures.isEmpty()) {
             // A stage that died mid-run means the dataset is thinner than it looks, not wrong.
             // That distinction belongs in the summary, where a reviewer will find it.
