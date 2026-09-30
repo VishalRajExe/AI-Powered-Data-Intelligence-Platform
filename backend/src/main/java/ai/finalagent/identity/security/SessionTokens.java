@@ -43,10 +43,4 @@ public final class SessionTokens {
             throw new IllegalStateException("SHA-256 is required to store a session token", e);
         }
     }
-
-    /** A human-facing token can never be a password, so there is nothing here to mask. */
-    public static boolean looksLikeSession(String value) {
-        return value != null && value.length() >= 40 && value.length() <= 128
-                && value.matches("[A-Za-z0-9_\\-]+");
-    }
 }

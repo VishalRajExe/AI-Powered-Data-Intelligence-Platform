@@ -136,21 +136,6 @@ class Requirement(CamelModel):
         return "needs_clarification"
 
 
-class StepType(str, Enum):
-    PLAN = "PLAN"
-    SEARCH = "SEARCH"
-    SCRAPE = "SCRAPE"
-    INTERACT = "INTERACT"
-    EXTRACT = "EXTRACT"
-    TRANSFORM = "TRANSFORM"
-    VALIDATE = "VALIDATE"
-    DEDUPLICATE = "DEDUPLICATE"
-    MERGE = "MERGE"
-    VERIFY = "VERIFY"
-    SAVE = "SAVE"
-    EXPORT = "EXPORT"
-
-
 RETRYABLE_ERRORS = {"TIMEOUT", "RATE_LIMIT", "TRANSIENT_NETWORK", "SERVER_ERROR"}
 
 
@@ -175,22 +160,6 @@ class RetryPolicy(CamelModel):
         return v
 
 
-class PlanStep(CamelModel):
-    key: str
-    type: StepType
-    depends_on: list[str] = Field(default_factory=list)
-    config: dict[str, Any] | None = None
-    retry_policy: RetryPolicy = Field(default_factory=RetryPolicy)
-    timeout_ms: int = 60_000
-
-    @field_validator("timeout_ms")
-    @classmethod
-    def timeout_bound(cls, v: int) -> int:
-        if not 1_000 <= v <= 300_000:
-            raise ValueError("timeoutMs must be between 1000 and 300000")
-        return v
-
-
 class SearchStrategy(CamelModel):
     queries: list[str] = Field(default_factory=list)
     desired_source_count: int | None = None
@@ -212,53 +181,6 @@ class SearchStrategy(CamelModel):
         return v
 
 
-class WorkflowPlan(CamelModel):
-    objective: str
-    steps: list[PlanStep] = Field(min_length=2, max_length=30)
-    search_strategy: SearchStrategy = Field(default_factory=SearchStrategy)
-    extraction_schema: dict[str, Any]
-    transformations: list[dict[str, Any]] = Field(default_factory=list)
-    validation_rules: list[dict[str, Any]] = Field(default_factory=list)
-    deduplication_rules: list[dict[str, Any]] = Field(default_factory=list)
-    completion_criteria: dict[str, Any] = Field(
-        default_factory=lambda: {"requireSourceEvidence": True}
-    )
-    output_configuration: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("extraction_schema")
-    @classmethod
-    def schema_object(cls, v: dict[str, Any]) -> dict[str, Any]:
-        if not isinstance(v, dict) or v.get("type") != "object":
-            raise ValueError("extractionSchema must be a JSON Schema object type")
-        return v
-
-    @model_validator(mode="after")
-    def dag_valid(self) -> "WorkflowPlan":
-        keys = [s.key for s in self.steps]
-        if len(keys) != len(set(keys)):
-            raise ValueError("duplicate step keys")
-        types = {s.type for s in self.steps}
-        if StepType.EXTRACT not in types:
-            raise ValueError("plan must contain at least one EXTRACT step")
-        if StepType.SAVE not in types:
-            raise ValueError("plan must contain at least one SAVE step")
-        seen: set[str] = set()
-        for step in self.steps:
-            for dep in step.depends_on:
-                if dep not in seen:
-                    raise ValueError(
-                        f"step {step.key!r} depends on {dep!r} which is not an earlier step"
-                    )
-            seen.add(step.key)
-        return self
-
-
-class ExtractedRecord(CamelModel):
-    values: dict[str, Any]
-    raw_values: dict[str, Any] | None = None
-    source_urls: list[str] = Field(default_factory=list)
-
-
 class QualityIssue(CamelModel):
     rule_code: str
     severity: Literal["INFO", "WARNING", "ERROR"]
@@ -266,20 +188,18 @@ class QualityIssue(CamelModel):
     field_key: str | None = None
 
 
-class QualityRecord(CamelModel):
-    values: dict[str, Any]
-    raw_values: dict[str, Any] | None = None
-    is_valid: bool = True
-    validation_issues: list[QualityIssue] = Field(default_factory=list)
-    confidence: float | None = None
-    verification_status: str | None = None
-    duplicate_of_key: str | None = None
-    source_urls: list[str] = Field(default_factory=list)
-    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+class PromptRequest(CamelModel):
+    """A request whose input is the user's own words.
 
+    `min_length` alone would accept 8 spaces, so the two endpoints that take a prompt share this
+    rather than each carrying its own copy of the check.
+    """
 
-class CritiqueResult(CamelModel):
-    feedback: str
-    terminate: bool
-    final_response: str | None = None
-    decision: Literal["advance", "retry-step", "replan", "terminate"] = "advance"
+    prompt: str = Field(min_length=8, max_length=4000)
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_is_real_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("prompt must contain real text")
+        return value.strip()

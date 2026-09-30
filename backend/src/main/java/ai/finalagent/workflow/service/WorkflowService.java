@@ -8,7 +8,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import ai.finalagent.aiclient.AiServiceClient;
-import ai.finalagent.config.FinalAgentProperties;
 import ai.finalagent.config.Workspace;
 import ai.finalagent.requirement.RequirementAnalysisDto;
 import ai.finalagent.requirement.RequirementValidator;
@@ -28,7 +27,6 @@ import ai.finalagent.workflow.repository.RunRepository;
 import ai.finalagent.workflow.repository.StepRepository;
 import ai.finalagent.workflow.repository.WorkflowRepository;
 import ai.finalagent.workflow.support.Json;
-import ai.finalagent.workflow.support.Principals;
 
 /**
  * The workflow lifecycle: create, plan, start a run, cancel, read.

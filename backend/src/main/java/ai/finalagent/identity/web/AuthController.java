@@ -26,8 +26,6 @@ import ai.finalagent.identity.security.AuthCookies;
 import ai.finalagent.identity.security.AuthenticatedWorkspace;
 import ai.finalagent.identity.security.SessionCookieFilter;
 import ai.finalagent.identity.service.AuthenticationService;
-import jakarta.servlet.http.Cookie;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;

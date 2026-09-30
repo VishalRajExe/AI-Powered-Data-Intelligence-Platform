@@ -12,8 +12,19 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 15 — final repository extraction, **complete**. An audit phase: no code was
-  written, nothing was deleted, and the tree is byte-identical to Phase 12's commit. What it proved, in
+- **Current Phase:** 17 — final cleanup, **complete**. The first phase to delete things: a stale 454 KB
+  copy of `app/` under `ai-service/build/`, six dead models in `app/contracts.py` (including
+  `CritiqueResult`, a phantom contract neither runtime honoured), one unused `Protocol`, three
+  no-caller Java methods, **24 unused Java imports**, two unused Python imports, a `_not_blank`
+  validator duplicated across two API modules (now one shared `PromptRequest`), the
+  `@radix-ui/react-label` dependency, and the `verify.sh` class list that had been running 58 MySQL
+  tests instead of 75. **P57, P64 and P70 closed; P54 untouched and still the top item.** Independence
+  was proven by building, not by grep: the repo was cloned to a directory where no reference repository
+  is a sibling, and it compiled and passed its suite there (§2 Phase 17.3). All gates green after the
+  deletions: 330 backend tests (75 on real MySQL 9.6 across all five classes), 362 ai-service, frontend
+  typecheck / lint / build. Nothing in the six reference repositories was modified or removed.
+- **Previously:** 15 — final repository extraction, **complete**. An audit phase: no code was
+  written, nothing was deleted, and the tree was byte-identical to Phase 12's commit. What it proved, in
   §2 (Phase 15): the six reference repositories are **removable** — no build, install or runtime path
   in this project reads them — and every feature the reuse map credits to them now carries a verdict of
   present, relocated or absent, with the eighteen findings recorded as **P54–P71 in §5 rather than
@@ -53,8 +64,9 @@ existed, and that the system was production-ready — each contradicted by its o
     has no login screen and its eight dashboard routes still render their placeholder content, so the
     Phase 13 wiring is what makes this authentication reachable from a browser.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
-  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated checks — though its MySQL
-  line names four of the five `*MySqlTest` classes, so the identity suite is not in the gate yet (P64).
+  process; `scripts/verify.sh` runs every suite, and as of Phase 17 its MySQL line matches
+  `*MySqlTest` by name, so all five classes — all 75 — run in the gate rather than the four it used to
+  name (P64, closed).
   **Run the MySQL suites with no second backend alive**: another process
   pointed at the same schema polls the same queue and will finish an export a test is mid-cancelling,
   which looks exactly like a product defect and is not one (P53).
@@ -980,6 +992,78 @@ commit, so that phase's green gates still describe it. And P54's severity is rea
 with no `FIRECRAWL_API_KEY` here, no attacker-influenced robots fetch has actually been made against a
 metadata endpoint. It is reachable by inspection; it has not been observed.
 
+### Phase 17 — Final cleanup (2026-09-30)
+
+**Instruction:** remove temporary files, debug files, unused code, duplicate implementations, obsolete
+demo code, unnecessary dependencies and machine-specific paths; remove nothing production requires;
+verify the project builds independently and does not need the old project folder; verify the reference
+repositories' required logic is inside `FINALAIAGENT`; do not delete the reference repositories.
+
+This is the first phase since Phase 1 that **deletes**, so every removal is listed with the reason it
+was safe and the gate that proved it. Nothing went out on the strength of a single grep.
+
+**17.1 — what was removed.**
+
+| Removed | Where | Why it was safe |
+|---|---|---|
+| A stale 454 KB copy of `app/` (46 `.py` files) under `ai-service/build/`, plus `finalagent_ai_service.egg-info/`, `.pytest_cache/` and every `__pycache__/` | untracked, but on disk | `build/lib` was an old `bdist` leftover that **already cost this project a wrong finding**: Phase 15's "the prompt templates are not packaged" claim was partly fed by the stale `egg-info/SOURCES.txt`, which lists no `.md` and predates every module in `app/research/`. The editable install was checked first — `__editable___…_finder.py` references neither directory — then they were removed and `pytest` re-run: 362 passed |
+| `StepType`, `PlanStep`, `WorkflowPlan`, `ExtractedRecord`, `QualityRecord`, `CritiqueResult` | `ai-service/app/contracts.py` | **Closes P57.** Zero references outside the removal closure itself. `CritiqueResult`'s fields (`terminate`, `final_response`, `decision`) appear in no other Python file and in no Java DTO — `ResearchResult` carries `critiqueSatisfactory` / `critiqueReasons` built from graph state instead, so the class was a **phantom contract neither side honoured**. `RetryPolicy`, `RETRYABLE_ERRORS` and `SearchStrategy` were **not** removed: `config.py:260-262` and `curation/queries.py:60` use them |
+| `InteractiveWebTool` (a `Protocol` no signature used) | `ai-service/app/firecrawl/client.py` | `supports_interact()` duck-types the capability and is the only mechanism; the protocol merely decorated it. `WebTool`, `Interaction`, `Page`, `SearchHit` all stay in use |
+| `ExportRepository.findByJob`, `DatasetDraft.hasValidRows`, `SessionTokens.looksLikeSession` | `backend/…/dataset`, `identity/` | Zero call sites in main **or** test. `validRowCount()` — which `hasValidRows` wrapped — is used in eight places and was kept |
+| **24 unused import lines across 8 files** (14 in `ExportRow.java` alone) | `backend/src/main/java` | `ExportRow` still carried CSV/JSON/XLSX writer imports from before the Phase 11 split that moved the writers into `ExportWriter`. Proved by recompiling and running all 330 tests |
+| A duplicated validator: `_not_blank` existed **identically** in two request models | `ai-service/app/api/v1/{requirements,research}.py` | Replaced by one `PromptRequest` base in `app/contracts.py` that both inherit; the two files' then-unused `pydantic.Field`, `field_validator` and `CamelModel` imports went with it. This was the only *same-language* duplicate a body-hash scan of the whole service found |
+| `from typing import Any` in `quality/score.py`; `LlmOutputUnparsable` in `requirements/service.py` | `ai-service/app` | Each used at its own import line and nowhere else |
+| `@radix-ui/react-label` | `frontend/package.json`, lock, `node_modules` | **Closes P70.** `components/ui/label.tsx` is a hand-rolled `<label>` importing no Radix primitive, and nothing imports the wrapper. `typecheck`, `lint` and `build` all pass without it |
+| The gate's stale class list | `scripts/verify.sh:53` | **Closes P64.** It named four `*MySqlTest` classes while five existed, so `AuthenticationMySqlTest`'s 17 identity tests were never run by `verify.sh`. Now `-Dtest='*MySqlTest'` — matched by name, so the next integration class is in the gate the day it is written. Verified: **75 tests across 5 classes, BUILD SUCCESS** |
+
+**17.2 — what was found and deliberately left.** Each was a candidate; each failed the test for a
+different reason, and writing that reason down is what stops the next cleanup re-litigating it.
+
+- **The eight unreferenced `components/ui/*` primitives, `common/pagination` and
+  `common/status-badge`.** Unimported today — and Phase 13's instruction is to preserve PirateAgentUI's
+  cards, dialogs and badges exactly. They are the design system the wiring is about to use.
+- **`PhasePlaceholder` in eight dashboard routes.** It is the honest current content of those screens,
+  not demo content: it states that the endpoint is not wired yet. It leaves when Phase 13 replaces it.
+- **Three SHA-256 sites** — `Json.shortHash` (string), `SessionTokens.store` (string),
+  `ExportRunner.checksum` (**streaming**, 8 KB buffer). The first two overlap by six lines; each throws a
+  different platform-guarantee message ("required by the plan hash" vs "required to store a session
+  token"), and collapsing them would merge two guarantees to save eight lines in code where a mistake is
+  an auth bug. Left, with the difference now written down.
+- **`FieldDef` (requirement contract) vs `FieldSpec` (quality request).** Different boundaries with
+  deliberately different strictness — `FieldDef.type` is a `FieldType` enum, `FieldSpec.type` is a
+  permissive `str`. Merging them would change what `/ai/v1/quality/process` accepts from Java.
+- **Dead columns `workflow_jobs.parent_job_id` and `workflow_steps.retry_count` (P58, P59).** Removal is
+  a migration, and a column is schema, not code. The second is the more urgent of the two for a different
+  reason: it is *published* as `retryCount` and always 0 — a correctness decision (write it, or stop
+  returning it), not a cleanup.
+- **`httpx` and `python-dotenv`** in `pyproject.toml`: imported by no module, required by
+  `fastapi.testclient` and by `env_file=` respectively. Both stayed.
+
+**17.3 — independence, proven by building rather than by grep.** Phase 15 proved the absence of
+references textually; this phase repeated it as an experiment. `implementjava` was cloned into a temp
+directory **where none of the six reference repositories is a sibling**, the working-tree changes were
+applied there, and it was built in place: `mvn -o test-compile` → success; `pytest` (with `PYTHONPATH`
+pointed at the copy and `import app` confirmed to resolve there rather than to the original) → **362
+passed, 8 skipped**. A sweep of the copy found 26 mentions of the reference repositories, all in Python
+module docstrings at lines 3-5 — **zero** in Java, TypeScript, TSX, JSON, TOML, YAML or shell, and zero
+inside any `import`, `open`, `Path()` or subprocess call. **`FINALAIAGENT` does not require the old
+project folder to build, test or run.** The copy was then deleted; the six reference repositories were
+**not** touched and are not deleted.
+
+**17.4 — the state after cleanup.** Backend 330 tests, 0 failures / 0 errors / 0 skipped, with all five
+`*MySqlTest` classes against real MySQL 9.6 (75 of the 330). ai-service 362 passed, 8 skipped (live
+provider and live Firecrawl, still no key). Frontend `typecheck` clean, `lint` 0 errors with 5
+pre-existing `react-hooks/exhaustive-deps` warnings, `next build` emitting all ten routes. Zero
+machine-specific paths in tracked code or config (`C:\Users`, `D:\`, `/Users/`, `/home/`, any username:
+none); no debug leftovers (`System.out`, `print(`, `console.log`, `TODO`, `FIXME`, `XXX`, `HACK`: none in
+main source); no stray `.orig`/`.rej`/`.bak`/`.tmp`/`.part` files anywhere in the tree.
+
+**17.5 — what Phase 17 did not close.** The reference logic audit stays as Phase 15 recorded it: what
+this build needs is inside it, and **P54 (host-resolution SSRF, with `curation/robots.py` making the
+unguarded outbound call today) is untouched** — a cleanup phase must not be the phase that quietly
+decides a security control. Still open after this phase: P54, P55, P56, P58, P59, P60, P61, P62, P63,
+P65–P69, P71. Closed by it: P57, P64, P70.
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -1444,7 +1528,10 @@ boundary a user stands at. What this phase does **not** establish:
 Phase 15 was an inspection phase with an instruction not to delete the reference folders, and the
 standing rule is that an audit is reported rather than auto-fixed. Every row below was verified against
 the current tree by grep or by running the code, not by reading a plan; each names the evidence and the
-exact gap. **P54 is the only one that is a live vulnerability rather than an unbuilt feature**, and it
+exact gap. **Phase 17 closed three of them** — P57 (the dead plan contract and its sibling models are
+deleted), P64 (the gate now matches `*MySqlTest`, 75 tests) and P70 (`@radix-ui/react-label` is gone) —
+and left the other fifteen untouched; §2 Phase 17.1–17.2 records what went, what stayed and why.
+**P54 is the only one that is a live vulnerability rather than an unbuilt feature**, and it
 is the one worth authorizing first.
 
 | # | Finding | Evidence | What it means |
@@ -1652,15 +1739,15 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phase 15 is complete; awaiting authorization for Phase 13 (the PirateAgentUI wiring) and for P54,
-which should be authorized *before* it.** Phase 15 wrote no code: it proved the six reference
-repositories are removable and turned the reuse map's promises into an inventory of what this tree
-actually contains (§2 Phase 15, §5 P54–P71). Two of those findings bear on the ordering of everything
-below. P54 is a reachable SSRF in the one path that leaves this service under a name a scraped page
-chose — wiring the frontend does not change that, and a live demonstration with a real Firecrawl key
-would exercise it. P64 means the gate `verify.sh` runs today does not include `AuthenticationMySqlTest`,
-so a Phase 13 edit to the session filter or the filter chain can pass green while the identity suite that
-would catch it sits unrunned. Both are small; neither is optional once a browser is in the picture.
+**Phase 17 is complete; awaiting authorization for Phase 13 (the PirateAgentUI wiring) and for P54,
+which should be authorized *before* it.** Phase 17 cleaned the tree and proved, by building a clone in a
+directory with no reference repositories beside it, that **this project does not need the old project
+folder to exist** (§2 Phase 17.3). It removed dead models, dead methods, 24 unused imports, a duplicated
+validator, one unused dependency and a stale build directory — and corrected the `verify.sh` line that
+had been running 58 MySQL tests where 75 exist. What it deliberately did **not** touch is the security
+finding: P54 is a reachable SSRF in the one path that leaves this service under a name a scraped page
+chose, wiring the frontend does not change it, and a live demonstration with a real Firecrawl key would
+exercise it.
 
 Phases have been directed out of
 `M-phase-plan.md` order, and that drift is now worth stating precisely rather than in a footnote:
@@ -1720,17 +1807,16 @@ Most valuable next candidates, in dependency order:
    visible, Phase 11 added two more unmeasured numbers (a filtered dataset read is a JSON scan nobody
    has timed, and an export's chunk size is the only thing between a large file and a held worker), and
    Phase 12 added a per-request session lookup whose cost has not been measured against a loaded suite.
-8. **The small honest fixes Phase 15 left numbered but unedited.** None is large and each is a one-line
-   decision — wire it or delete it, never leave it reading as enforcement: add `AuthenticationMySqlTest`
-   to `scripts/verify.sh:53` so the gate runs the 75 MySQL tests it claims (P64); stop publishing
+8. **The small honest fixes Phase 15 left numbered, of which Phase 17 took three.** Done: the
+   `WorkflowPlan` family is deleted rather than wired (P57), `AuthenticationMySqlTest` is in the gate by
+   pattern (P64), and `@radix-ui/react-label` is out of `package.json` (P70). Still open, each a one-line
+   decision — wire it or stop publishing it, never leave it reading as enforcement: stop publishing
    `retryCount` from a column nothing writes, or increment it on reclaim (P59); drop `parent_job_id`
    until fan-out exists instead of carrying an always-NULL column (P58); check the count `logout`'s
    revoke returns, since the rule this project wrote for itself is no silent revocation failure (P67);
-   either wire `WorkflowPlan` into the research request or delete the class (P57); strip userinfo before
-   a URL is persisted, which the log masking already does and the storage path does not (P69); and take
-   `@radix-ui/react-label` out of `package.json` (P70). P63's three doc lines and P60's comment in
-   `validate.py:102` belong in the same pass, because a promise in prose is how the next phase inherits a
-   gap it believes is closed.
+   strip userinfo before a URL is persisted, which the log masking already does and the storage path
+   does not (P69); and correct P63's three doc lines and P60's comment in `validate.py:102`, because a
+   promise in prose is how the next phase inherits a gap it believes is closed.
 
 
 Still open: **G1** (demonstration strategy), **G2** (narrowed again by Phase 6 — the API shape and

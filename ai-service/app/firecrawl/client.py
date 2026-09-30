@@ -128,13 +128,6 @@ class WebTool(Protocol):
     async def scrape(self, url: str) -> Page: ...
 
 
-class InteractiveWebTool(WebTool, Protocol):
-    """`interact` is optional capability, not a baseline: a web engine that cannot run a
-    browser session must still satisfy every other part of the contract."""
-
-    async def interact(self, url: str, prompt: str) -> Interaction: ...
-
-
 def supports_interact(web: WebTool) -> bool:
     return callable(getattr(web, "interact", None))
 

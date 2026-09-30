@@ -147,10 +147,6 @@ public record DatasetDraft(Header header, List<DraftColumn> columns, List<DraftR
                 .count();
     }
 
-    public boolean hasValidRows() {
-        return validRowCount() > 0;
-    }
-
     // ------------------------------------------------------------------ builder
 
     public static final class Builder {

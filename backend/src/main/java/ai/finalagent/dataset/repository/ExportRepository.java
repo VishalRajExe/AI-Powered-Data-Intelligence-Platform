@@ -92,11 +92,6 @@ public class ExportRepository {
         return total == null ? 0 : total;
     }
 
-    public Optional<Export> findByJob(String jobId) {
-        return jdbc.query("SELECT * FROM export_jobs WHERE job_id = ?", ROW, jobId).stream()
-                .findFirst();
-    }
-
     /** The job claimed this export: running, with the row count it is working towards. */
     public void markRunning(String id, int totalRows) {
         jdbc.update("UPDATE export_jobs SET status = 'RUNNING', total_rows = ?, started_at = NOW(6),"

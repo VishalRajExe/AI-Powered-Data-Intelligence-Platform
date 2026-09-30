@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.contracts import Requirement
 from app.curation.policy import extract_hostnames
-from app.llm.client import LlmClient, LlmOutputUnparsable
+from app.llm.client import LlmClient
 from app.requirements.schema import (
     REQUIREMENT_JSON_SCHEMA,
     build_research_brief,

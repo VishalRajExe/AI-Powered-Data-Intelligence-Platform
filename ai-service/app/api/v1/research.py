@@ -10,10 +10,9 @@ provider transport failure becomes a 502.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import Field, field_validator
 
 from app.config import Settings
-from app.contracts import CamelModel
+from app.contracts import PromptRequest
 from app.llm.client import LlmError
 from app.research import prompts
 from app.research.contracts import ResearchLimitsRequest, ResearchRequest
@@ -63,19 +62,11 @@ async def research(payload: ResearchRequest, request: Request):
     return outcome.as_dict()
 
 
-class FromPromptRequest(CamelModel):
+class FromPromptRequest(PromptRequest):
     """The full flow in one call: prompt → requirement → data contract → extraction
     schema → research graph. Callers may still run the stages separately."""
 
-    prompt: str = Field(min_length=8, max_length=4000)
     limits: ResearchLimitsRequest | None = None
-
-    @field_validator("prompt")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("prompt must contain real text")
-        return value.strip()
 
 
 @router.post("/research/from-prompt")

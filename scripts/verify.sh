@@ -45,12 +45,14 @@ if [[ "$WHICH" == "all" || "$WHICH" == "backend" ]]; then
   run_check "backend: package" "backend"  "mvn -B -ntp -DskipTests package"
 
   # The queue's locking, lease and duplicate-key guarantees only exist in MySQL, and so do the
-  # dataset platform's JSON queries and the export's progress checkpoints. Four test classes cover
-  # them and are disabled unless the gate is on, so an environment without a database reports SKIPPED
-  # for them instead of pretending they were verified.
+  # dataset platform's JSON queries, the export's progress checkpoints and the session lifecycle.
+  # Every `*MySqlTest` class is disabled unless the gate is on, so an environment without a database
+  # reports SKIPPED for them instead of pretending they were verified. Matched by name rather than
+  # listed: the phase that added the fifth integration class left this line naming four, and the
+  # identity suite went unrunned by the gate for a phase because of it.
   if [[ "${FINALAGENT_TEST_MYSQL:-}" == "true" ]]; then
     run_check "backend: mysql queue" "backend" \
-      "FINALAGENT_TEST_MYSQL=true mvn -B -ntp test -Dtest='WorkflowQueueMySqlTest,WorkflowRunLifecycleMySqlTest,DatasetPlatformMySqlTest,ExportProgressMySqlTest'"
+      "FINALAGENT_TEST_MYSQL=true mvn -B -ntp test -Dtest='*MySqlTest'"
   else
     record "SKIP" "backend: mysql queue" "FINALAGENT_TEST_MYSQL is not true"
   fi

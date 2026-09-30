@@ -7,9 +7,8 @@ collection happens.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import Field, field_validator
 
-from app.contracts import CamelModel
+from app.contracts import PromptRequest
 from app.llm.client import LlmError
 from app.requirements.service import RequirementAnalysisError, RequirementAnalyzer
 from app.security import require_api_key
@@ -17,15 +16,8 @@ from app.security import require_api_key
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
-class AnalyzeRequest(CamelModel):
-    prompt: str = Field(min_length=8, max_length=4000)
-
-    @field_validator("prompt")
-    @classmethod
-    def _not_blank(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("prompt must contain real text")
-        return value.strip()
+class AnalyzeRequest(PromptRequest):
+    """The prompt the requirement is read from — all validation is inherited."""
 
 
 @router.post("/requirements/analyze")
