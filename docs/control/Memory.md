@@ -22,7 +22,9 @@ existed, and that the system was production-ready — each contradicted by its o
   was proven by building, not by grep: the repo was cloned to a directory where no reference repository
   is a sibling, and it compiled and passed its suite there (§2 Phase 17.3). All gates green after the
   deletions: 330 backend tests (75 on real MySQL 9.6 across all five classes), 362 ai-service, frontend
-  typecheck / lint / build. Nothing in the six reference repositories was modified or removed.
+  typecheck / lint / build. **The six reference repositories were then deleted (2026-09-30)** under the
+  removal audit in §2: they were spent, and the tree was re-proven green afterwards. The old project
+  folder is the one sibling left, kept by decision until Phase 13 and the P54/P60/P63 ports land.
 - **Previously:** 15 — final repository extraction, **complete**. An audit phase: no code was
   written, nothing was deleted, and the tree was byte-identical to Phase 12's commit. What it proved, in
   §2 (Phase 15): the six reference repositories are **removable** — no build, install or runtime path
@@ -1064,6 +1066,39 @@ unguarded outbound call today) is untouched** — a cleanup phase must not be th
 decides a security control. Still open after this phase: P54, P55, P56, P58, P59, P60, P61, P62, P63,
 P65–P69, P71. Closed by it: P57, P64, P70.
 
+### Reference repositories removed (2026-09-30, authorized after the removal audit)
+
+**Instruction:** audit whether `FINALAIAGENT` implements everything it needs from the sibling folders,
+then remove the folders that are not needed. The audit ran first; deletion followed its verdict and the
+user's chosen scope.
+
+**The audit, per folder** — "taken" means verified present in this tree at Phase 15 with `file:line`,
+not claimed:
+
+| Folder | Taken | Still owed from it | Verdict |
+|---|---|---|---|
+| `web-agent-main` (MIT) | `schema-validate` in three uses, both anti-fabrication gates, interact timeout + null-strip + allowlist, SKILL loader/traversal guard | nothing load-bearing | spent — **deleted** |
+| `web-research-agent-master` (MIT) | the whole curation shape: `curation/{relevance,ranking,robots,retry,aggregation}` | conflict-prompt ideas, deferred by decision | spent — **deleted** |
+| `TheAgenticBrowser-main` (Community Licence) | concepts only: critique loop inside the graph, termination thresholds as prompt policy | the Java VERIFY step (P62), a concept whose spec is written in `C` §C.4 | spent — **deleted**; copying was prohibited anyway |
+| `anakin-master` (AGPL) | concepts only: `REQUIRES_NEW` terminal writes, claim semaphore, status vocabulary, DB-clock backoff | content gate + domain cache concepts (P61), spec in `C` §C.5 | spent — **deleted**; copying was prohibited anyway |
+| `data-enrichment-js-main` (L1 unresolved) | **zero code**; its topology became a plain state machine (L2) | nothing | spent — **deleted**; if gate L1 ever rules "adapt", re-inspect from upstream |
+| `ai-data-enrichment-agent-main` (no licence) | **zero**; its Bright Data unlocker was refused on governance grounds | nothing | spent — **deleted**; same L1 caveat |
+| `AI-Powerd Data Intelligence` (yours) | schema, contracts, safety literals, quality pipeline, provenance rule, events, exports, auth, and the UI shell (`public/pirate/` byte-identical, configs identical) | **P54/P60/P55/P56/P63 are ports of code that exists only here**, plus the 14 screen components Phase 13 must preserve | **kept, by decision**, until Phase 13 and those ports land; then deletable — git `main` holds all 97 `PirateAgentUI` + 94 backend files, verified by `git ls-tree -r origin/main` |
+
+**Proof after deletion, not before:** with the six folders gone, `pytest` → 362 passed / 8 skipped,
+`mvn -o test-compile` → success, `tsc --noEmit` → clean. `D:/privateagent-java` now holds exactly two
+directories: `FINALAIAGENT` and `AI-Powerd Data Intelligence`. The audit also re-ran the independence
+sweep on the post-Phase-17 tree: sibling names survive only in Python docstrings and `docs/`, zero
+symlinks, zero absolute sibling paths in any code, config or script.
+
+**Two defects found by *running* the stack, which no test suite shows** (recorded here, not fixed —
+they were found outside an authorized phase):
+
+| # | Finding | Evidence |
+|---|---|---|
+| P72 | **An unreachable AI service reports as a backend crash.** `AiServiceClient` catches only `RestClientResponseException` — an HTTP *response*. Connection-refused is a different exception, so it skips `handleUpstream` (which would answer 502 `AI_SERVICE_UNAVAILABLE`) and lands on the catch-all: `POST /api/v1/requirements/parse` with the ai-service down returned **500 `INTERNAL_ERROR`**. The honest half: nothing was fabricated. The wrong half: the most likely local state — the AI service simply not running — is indistinguishable from a bug, so no client can show a useful message | live run, 2026-09-30; `AiServiceClient.java:57,74,91` vs `PipelineController.java:130-136` |
+| P73 | **Stale copy on a live screen.** The dashboard placeholder states "none of those endpoints exist yet" and names Phases 5/10/12 — but datasets, workflows, activity and monitoring all shipped and answered correctly in the same session | browser snapshot of `/dashboard`, 2026-09-30 |
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -1554,6 +1589,8 @@ is the one worth authorizing first.
 | P69 | **A URL's userinfo can be persisted.** Python's canonical *key* is built from `parts.hostname` so credentials drop out of the key (`canonical.py:47-53`), but the raw URL is stored, and Java's normalizer takes the host as everything up to the first `/` (`DatasetAssembler.java:303`), which keeps `user:pass@`. `dataset_sources.url` (`V3:155`) holds the URL as fetched. | both canonicalizers read end to end | Credential stripping is currently a log concern only (`SecretMaskingConverter.java:27-28`, `logging_setup.py:18`). A `https://name:token@host/` seen in the wild would land in the dataset and in any export of it |
 | P70 | **One npm dependency is genuinely dead: `@radix-ui/react-label`.** `components/ui/label.tsx` is a hand-rolled `<label>` that imports no Radix primitive, and nothing imports the wrapper. | grep `@radix-ui/react-label` over `frontend/{app,components,lib,hooks}` → zero | The other eight unreferenced `components/ui/*` wrappers (`avatar`, `checkbox`, `dialog`, `dropdown-menu`, `progress`, `sheet`, `tabs`, and the radix `separator` use is a single screen) are **not** dead: they are the primitives Phase 13 wires. Only the label entry has no path to becoming used |
 | P71 | **Search is `LIKE`-only, and dataset-level search does not exist.** No `FULLTEXT` in any of `V1`–`V5`; row search is `LOWER(r.search_text) LIKE ?` (`DatasetQueryRepository.java:181`) and `filter[field]` is `JSON_EXTRACT … LIKE` (`:221`). `DatasetRepository.list()` filters on status and workflow id only (`:327-336`) — no name/description/requirement search. | grep `FULLTEXT` (zero) and the two LIKE sites; `DatasetAssembler.java:207` documents the choice rather than fixing it | The audit's §5 item 10 was "unindexable LIKE over JSON"; the denormalized `search_text` column moved the scan off the JSON but kept it a scan. Fine at fixture size, unmeasured at a real one |
+| P72 | **An unreachable AI service reports as a backend crash.** `AiServiceClient` catches only `RestClientResponseException`, i.e. an HTTP *response*; connection-refused is a different exception, so it bypasses `PipelineController.handleUpstream` (502 `AI_SERVICE_UNAVAILABLE`) and reaches the catch-all. With the ai-service down, `POST /api/v1/requirements/parse` answered **500 `INTERNAL_ERROR`** with a reference id. Nothing was fabricated — but the most likely local state is indistinguishable from a bug, so no client can say "the AI service is not running". | live run 2026-09-30; `AiServiceClient.java:57,74,91` vs `PipelineController.java:130-136` | The fix is one catch clause widening to the connection-failure family and rethrowing as `AiServiceException(503, …)`; it is recorded, not applied, because it was found while running, not inside an authorized phase |
+| P73 | **Stale copy on a live screen.** The dashboard placeholder reads "none of those endpoints exist yet" and cites Phases 5/10/12, while datasets, workflows, activity and monitoring all shipped and answered correctly in the same session. | browser snapshot of `/dashboard`, 2026-09-30 | Phase 13 replaces the placeholder outright; until then the sentence is false on a page a user reads. Fix with Phase 13, not before |
 
 **And the one thing this phase disproved about itself.** An intermediate pass claimed the prompt
 templates were excluded from the installed distribution, because
@@ -1649,7 +1686,7 @@ Environment limits affecting verification:
 | **G1** | With `DEMO_MODE` removed, how will this be demonstrated to judges? (a) test fixtures + run replay *(recommended)*, (b) guarded `SYNTHETIC_MODE` that can never trigger on a missing key, (c) funded keys and demo live. See `docs/audit/L-risks.md` R8 | **Awaiting user decision** |
 | **G2** | Is the Firecrawl Python SDK's `interact` sufficient? Fallback is the Express sidecar implementing `agent-core/openapi.yaml` — a fourth runtime requiring its own recorded decision. See `docs/audit/I-firecrawl-integration.md` §I.6 | **Narrowed twice, still open on live behaviour.** Phase 4 confirmed the whole session lifecycle is expressible in Python and implemented it: `browser()` → `interact(job_id, prompt=…)` → `stop_interaction(job_id)`, all three verified present on `AsyncFirecrawlApp` in `firecrawl` 4.45.0 by introspection, with the `job_id`-first shape handled by opening the session inside the tool call. So the sidecar is not needed for *API shape* reasons. Whether a real prompt-mode session completes inside a sane deadline and returns usable text is **unmeasured** — no `FIRECRAWL_API_KEY` here. Resolve with `RUN_LIVE_FIRECRAWL_TESTS=true pytest -q tests/test_live_firecrawl.py -s` once a key exists |
 | **B1** | `finalagent_dev` needed a MySQL account the application can connect as, or `/ready` could never return 200 and no queue test could run against a real database. | **RESOLVED 2026-09-29 at Phase 7.** The user supplied the native server's root credential, and a scoped account was created through it: `finalagent`@`127.0.0.1` with `GRANT ALL PRIVILEGES ON finalagent_dev.*` and `USAGE ON *.*` — nothing global, no `GRANT OPTION`, no other schema. `SELECT CURRENT_USER()` confirms the app connects as `finalagent`, `/api/v1/ready` reports `mysql UP`, and 30 integration tests now run against that server. Recorded here because *how* the queue was verified depends on it |
-| **L1** | Both new repositories have unresolved licences: `data-enrichment-js-main` claims `"license": "MIT"` in `package.json:7` with **no licence text anywhere in the tree**, and `ai-data-enrichment-agent-main` has **no licence at all**. May we adapt logic from either? Options: (a) treat a `package.json` declaration as sufficient, as already done for `web-agent-main` under R2, (b) verify upstream terms before Phase 2, (c) re-implement gate 3 from the behavioural description in `O` §O.4 without translating their source. | **Awaiting user ruling** (R28, R29) |
+| **L1** | Both new repositories have unresolved licences: `data-enrichment-js-main` claims `"license": "MIT"` in `package.json:7` with **no licence text anywhere in the tree**, and `ai-data-enrichment-agent-main` has **no licence at all**. May we adapt logic from either? Options: (a) treat a `package.json` declaration as sufficient, as already done for `web-agent-main` under R2, (b) verify upstream terms before Phase 2, (c) re-implement gate 3 from the behavioural description in `O` §O.4 without translating their source. | **Awaiting user ruling** (R28, R29). Note as of 2026-09-30 the local copies are **deleted** under the removal audit — nothing was ever taken from either, so nothing is lost; a future "adapt" ruling would re-fetch from upstream or work from `O` §O.4/§O.7 |
 
 | **L2** | Phase 2 research graph: depend on the `langgraph` PyPI package, or express the same topology as a plain Python state machine? Evidence says nothing in `data-enrichment-js` needs the runtime (no checkpointer, no disk writes, no interrupts — `O` §O.12), so a state machine preserves the graph without a new heavy dependency. Either satisfies the master instruction | **RESOLVED at Phase 2 — plain Python state machine, no `langgraph` dependency.** Node and edge names
 are declared on `ResearchGraph.NODES` / `EDGES`, so the template's topology is preserved and a later
@@ -1747,7 +1784,10 @@ validator, one unused dependency and a stale build directory — and corrected t
 had been running 58 MySQL tests where 75 exist. What it deliberately did **not** touch is the security
 finding: P54 is a reachable SSRF in the one path that leaves this service under a name a scraped page
 chose, wiring the frontend does not change it, and a live demonstration with a real Firecrawl key would
-exercise it.
+exercise it. The six reference repositories are gone as of the removal audit; **the old project folder is
+the last deletable sibling, and it becomes deletable the moment Phase 13 has carried its 14 screen
+components across and P54, P60 and P63 have been ported from it** — until then it is source material,
+not clutter, and git `main` is the backup either way.
 
 Phases have been directed out of
 `M-phase-plan.md` order, and that drift is now worth stating precisely rather than in a footnote:
