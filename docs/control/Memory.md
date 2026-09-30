@@ -12,19 +12,34 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 17 — final cleanup, **complete**. The first phase to delete things: a stale 454 KB
+- **Current Phase:** 13 — the PirateAgentUI wiring, **complete**. Every dashboard screen and the login
+  and signup pair now read the real API; `PhasePlaceholder` is deleted, `frontend/` has 15 routes, and
+  the fabrication list this phase existed to remove is gone by name (`STAGE_TEMPLATE`, the default
+  `name`/`website` field list, `targetCount || 100`, the non-functional field and filter editors, the
+  handler-less Settings pickers, the dead `Forgot?` link, the browser-side cross-dataset sources
+  aggregation). Wiring it also exposed a transport bug that had been silent since Phase 1: the
+  frontend typed the error envelope as `{ error: string }` while the backend has always written
+  `{ error: { code, message, details } }`, so **every** API failure reached the UI as `HTTP_ERROR` with
+  the backend's sentence dropped. Fixed in `lib/api/client.ts` and `lib/api/health.ts`. Verified in a
+  real browser against real MySQL; the dataset screens needed data the app cannot produce without the
+  two blank keys, so they were checked against a temporary fixture that was then deleted and confirmed
+  gone (`§2 Phase 13.5`). **P73 closed; P54 still the top item and P74–P76 added.** Frontend gates
+  green: `tsc --noEmit`, `eslint` (5 pre-existing warnings, 0 errors), `next build` — 15 routes. No
+  backend or Python file changed in this phase, so those suites were not re-run.
+- **Previously:** 17 — final cleanup, **complete**. The first phase to delete things: a stale 454 KB
   copy of `app/` under `ai-service/build/`, six dead models in `app/contracts.py` (including
   `CritiqueResult`, a phantom contract neither runtime honoured), one unused `Protocol`, three
   no-caller Java methods, **24 unused Java imports**, two unused Python imports, a `_not_blank`
   validator duplicated across two API modules (now one shared `PromptRequest`), the
   `@radix-ui/react-label` dependency, and the `verify.sh` class list that had been running 58 MySQL
-  tests instead of 75. **P57, P64 and P70 closed; P54 untouched and still the top item.** Independence
+  tests instead of 75. **P57, P64 and P70 closed by it.** Independence
   was proven by building, not by grep: the repo was cloned to a directory where no reference repository
   is a sibling, and it compiled and passed its suite there (§2 Phase 17.3). All gates green after the
   deletions: 330 backend tests (75 on real MySQL 9.6 across all five classes), 362 ai-service, frontend
   typecheck / lint / build. **The six reference repositories were then deleted (2026-09-30)** under the
   removal audit in §2: they were spent, and the tree was re-proven green afterwards. The old project
-  folder is the one sibling left, kept by decision until Phase 13 and the P54/P60/P63 ports land.
+  folder is the one sibling left; Phase 13 has now carried its 14 screen components, so the ports still
+  owed from it are P54, P55, P56, P60 and P63.
 - **Previously:** 15 — final repository extraction, **complete**. An audit phase: no code was
   written, nothing was deleted, and the tree was byte-identical to Phase 12's commit. What it proved, in
   §2 (Phase 15): the six reference repositories are **removable** — no build, install or runtime path
@@ -48,7 +63,7 @@ existed, and that the system was production-ready — each contradicted by its o
   `Set-Cookie: …HttpOnly; SameSite=Strict`, `GET /api/v1/auth/me` → 200, and the session value appears
   in no body. The web layer remains **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real
   browser session, search, scrape or robots fetch has ever run from this project.
-- **Last updated:** 2026-09-30
+- **Last updated:** 2026-10-01
 - **Application code written:** three independent processes.
   - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 86 main source files, 32 test classes:
     `workflow/` (domain, repository, plan, execution, service, web), `quality/`
@@ -62,9 +77,12 @@ existed, and that the system was production-ready — each contradicted by its o
     aggregation) and `quality/` (contracts, normalize, validate, dedupe, entity_resolution, merge,
     score, pipeline).
   - `frontend/` — Next.js 14.2.35. PirateAgentUI design foundation copied byte-identically
-    (`diff -r` verified), 10 routes, `lib/api/` typed client. **Untouched by Phases 9-12**: it still
-    has no login screen and its eight dashboard routes still render their placeholder content, so the
-    Phase 13 wiring is what makes this authentication reachable from a browser.
+    (`diff -r` verified), **15 routes, all wired**: `app/(auth)/{login,signup}`, the gated dashboard,
+    New Research, Workflows + `[id]`, Datasets + `[id]`, Sources, History, Activity, Settings, Status.
+    `lib/api/` holds the typed client (`endpoints.ts`: one call site per endpoint), `lib/auth.tsx` the
+    session read from `/auth/me` alone, `lib/plan.ts` and `lib/origins.ts` the two places that decode
+    what the backend stores, and `hooks/use-live.ts` the single read state — which clears its data on a
+    failed read rather than showing yesterday's rows beside today's error.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
   process; `scripts/verify.sh` runs every suite, and as of Phase 17 its MySQL line matches
   `*MySqlTest` by name, so all five classes — all 75 — run in the gate rather than the four it used to
@@ -77,13 +95,14 @@ existed, and that the system was production-ready — each contradicted by its o
   Java-side contract re-enforcement of the pipeline's answer, verified browser actions, the dataset
   platform with row- and field-level source traceability, the operations surface with three export
   formats, and identity — accounts, sessions, tenancy and the role ladder.
-- **Still not built:** the frontend's connection to any of it (Phase 13), SSE streaming (events are
-  persisted, cursor-paged and served as a feed, not pushed), export-file and session-row retention
+- **Still not built:** SSE streaming (events are
+  persisted, cursor-paged and served as a feed, not pushed, so `/dashboard/workflows/[id]` and
+  `/dashboard/activity` poll the same durable rows), export-file and session-row retention
   (nothing sweeps `var/exports` or old `auth_sessions` rows), host-resolution SSRF and per-domain
   rate — Phase 15 found the first of those reachable rather than merely absent (P54) — membership
   administration (roles are read and enforced; nothing changes them yet), and
   multi-workspace selection — a person with several workspaces is signed into their primary, and
-  switching is not built.
+  switching is not built. Password reset has no endpoint, so the login screen offers no link to it.
 - **Repository:** `FINALAIAGENT` is its own git repo, pushed to branch `implementjava` of
   `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git` after every phase, per the
   standing rule. Its history is independent of `main` (old project), which has never been touched
@@ -1099,8 +1118,80 @@ they were found outside an authorized phase):
 | P72 | **An unreachable AI service reports as a backend crash.** `AiServiceClient` catches only `RestClientResponseException` — an HTTP *response*. Connection-refused is a different exception, so it skips `handleUpstream` (which would answer 502 `AI_SERVICE_UNAVAILABLE`) and lands on the catch-all: `POST /api/v1/requirements/parse` with the ai-service down returned **500 `INTERNAL_ERROR`**. The honest half: nothing was fabricated. The wrong half: the most likely local state — the AI service simply not running — is indistinguishable from a bug, so no client can show a useful message | live run, 2026-09-30; `AiServiceClient.java:57,74,91` vs `PipelineController.java:130-136` |
 | P73 | **Stale copy on a live screen.** The dashboard placeholder states "none of those endpoints exist yet" and names Phases 5/10/12 — but datasets, workflows, activity and monitoring all shipped and answered correctly in the same session | browser snapshot of `/dashboard`, 2026-09-30 |
 
-## 3. Key Architectural Decisions Log
+### Phase 13 (2026-10-01) — the PirateAgentUI wiring: every screen reads the real API
 
+**Instruction that opened it:** two screenshots of `/dashboard` and `/dashboard/research/new` reading
+"Not implemented", with the words *"not implemented fix it"*. The standing Phase 13 brief governed:
+preserve the UI exactly, connect every screen to real Spring Boot APIs, and remove demo data, fake
+progress, static statistics and template responses.
+
+**13.1 — what is now wired.** `frontend/` goes from 10 routes to **15**, and the placeholder
+component is deleted rather than left importable — `grep PhasePlaceholder` over `app/ components/ lib/`
+returns zero, so no screen can quietly fall back to a stand-in.
+
+| Screen | Reads | Verified in a real browser |
+|---|---|---|
+| `/signup`, `/login` | `POST /auth/register`, `POST /auth/login` | registration returned 201 + `HttpOnly` cookie and the app landed on `/dashboard` |
+| `/dashboard` | `GET /monitoring`, `GET /workflows?limit=4`, `GET /datasets?limit=4` | four stat cards showed the counts MySQL returned; with no data they showed `0`, and with a failed read they show "not reported" rather than `0` |
+| `/dashboard/research/new` | `POST /workflows` then `POST /workflows/{id}/plan` | with the AI service down it displayed `AI_SERVICE_UNAVAILABLE — the requirement could not be analysed: … Connection refused` and the failing path, and the workflow row it had already created stayed visible |
+| `/dashboard/workflows` | `GET /workflows?status=&limit=&page=` | the row above appeared as `FAILED`, `0 runs`, `no plan stored` |
+| `/dashboard/workflows/[id]` | `GET /workflows/{id}/runs`, `GET /workflows/runs/{id}`, `GET …/steps`, `POST …/cancel`, `POST /{id}/runs` | prompt text, run list, step checklist and event log render from those rows; polls every 5s only while the run is not terminal |
+| `/dashboard/datasets`, `/[id]` | `GET /datasets`, `/schema`, `/rows`, `/sources`, `/evidence`, `/rows/{rowId}/evidence`, `POST /{id}/exports`, `GET /exports`, `POST /exports/{id}/cancel` | rows table, column origins, source provenance counts, coverage table, per-field attribution and the queued export all rendered |
+| `/dashboard/sources` | `GET /datasets`, then `GET /datasets/{id}/sources` | dataset chooser, then verified-by-tool vs cited-only |
+| `/dashboard/history` | `GET /workflows/runs`, `GET /exports` | showed worker `local:development:11108:3f4d83dc`, `stopped`, zero runs |
+| `/dashboard/activity` | `GET /activity`, `GET /monitoring` | the `workflow.created` event that the New Research attempt wrote appeared with its cursor |
+| `/dashboard/settings` | `GET /auth/me`, `POST /auth/refresh`, `POST /auth/logout` | account, workspace, role, `canWrite` and both TTLs displayed; Renew now returned 200 and re-read `/auth/me` on the rotated credential |
+
+**13.2 — the fabrications removed, each by name.** `STAGE_TEMPLATE` (seven hardcoded workflow stages)
+is gone and the workflow-steps card lists the plan's own `steps` JSON; the old screen's
+`fields.length > 0 ? … : [{name:"name"},{name:"website"}]` default field list is gone — a plan with no
+transform step now says it declares no field list; `targetCount || 100` is gone; the add/remove field
+and filter chips are gone because nothing in this API edits a stored plan, so a chip you could delete
+would have reappeared on the next read; the Settings theme/notification pickers with no handler are
+gone; the login page's `Forgot?` link to `#` is gone, because no password-reset endpoint exists;
+and `/dashboard/sources` does not repeat the old screen's cross-dataset aggregation performed in the
+browser — there is no global sources endpoint, so the screen asks which dataset.
+Editing the prompt creates a **new** workflow rather than re-planning the selected one, because
+`plan()` reads `workflow.requirementText` — re-planning after an edit would have planned the old
+prompt while displaying the new one.
+
+**13.3 — what changed in the design, and what did not.** No CSS, token, font, colour, spacing or
+component style was edited: the screens reuse the existing `Card`/`Badge`/`Button`/`Skeleton`/`Progress`
+/`Tabs` primitives and the copied PirateAgentUI classes, and `public/pirate/` is untouched. Two
+structural changes follow from wiring rather than design: the sidebar footer gains the signed-in
+person, their workspace role and a sign-out control (the old Topbar that held these stayed removed —
+its search box and notification bell had no data behind them, and a session has to be endable
+somewhere), and `framer-motion` was **not** reintroduced. It is not a dependency of this tree; the
+animation classes already present (`animate-fade-in`, `animate-spin`, `animate-ping`) carry the same
+motion the old screens asked for.
+
+**13.4 — a defect found by reading the type against the controller.** `lib/api/types.ts` declared the
+error envelope as `{ error?: string; message?: string }`, but every backend failure writes
+`{ error: { code, message, details } }` (`ErrorResponse.java:9-21`). `client.ts` therefore extracted a
+code with `typeof envelope.error === "string"`, which is never true for a real error, so **every** API
+failure since Phase 1 arrived at the UI as `HTTP_ERROR` with the message swallowed — including the 401
+envelope Phase 12 proved. Fixed in `client.ts` and `health.ts`, and the UI now prints
+`AI_SERVICE_UNAVAILABLE — <backend sentence>`, which is what makes 13.1's third row possible at all.
+
+**13.5 — how it was verified, and the limit of that.** Both dev servers ran locally against real MySQL
+9.6 with the backend on `:8080` and Next on `:3000`; navigation, registration, planning, renewal and
+the empty states were driven in the in-app browser and read back from its accessibility tree and DOM
+text. Screenshots were **not** taken: the in-app browser surface reported `visible=false`, so pixel
+fidelity is argued from "no style file changed and the classes are the copied ones", not observed.
+Three reads needed data the application cannot produce without `FIRECRAWL_API_KEY` and
+`GEMINI_API_KEY` (both length 0), so a throwaway fixture — one plan, one run, two steps, two jobs, one
+dataset with four columns, three rows, three sources, one field-evidence pair and one conflict — was
+inserted into `finalagent_dev` under a purpose-built account, used to check the dataset screens, and
+**deleted afterwards**: the cleanup script's own `SELECT` returned `datasets 0, runs 0, workflows 0,
+exports 0, fixture_users 0`, and reloading `/dashboard` on the now-orphaned cookie landed on `/login`,
+which is the reuse-revocation path proving itself. The session that drove the browser was never
+scripted into a token store; the cookie was `HttpOnly` throughout, and `grep -rE "NEXT_PUBLIC_|localStorage"
+frontend/app frontend/components frontend/lib` still returns only explanatory comments.
+
+**13.6 — three API gaps this phase found but did not paper over.** Recorded as **P74, P75, P76** in §5.
+The worst is that a plan's stored reason for failure is real data the workflow screen cannot show.
+
+## 3. Key Architectural Decisions Log
 | Date | Decision | Reasoning |
 |---|---|---|
 | 2026-09-28 | **Three runtimes: Next.js + Spring Boot + FastAPI. No Node backend.** | The Firecrawl Python SDK (PyPI `firecrawl` 4.45.0) natively exposes `search`, `scrape`, `interact`, `browser`, `stop_interaction`, `map`, `crawl`, `parse`. The TS agent core does not implement web tools itself — it obtains them from `firecrawl-aisdk` (`agent-core/src/firecrawl-tools.ts:1,14`). So a Node runtime would exist only to reach an npm package whose Python equivalent already covers our needs. Details: `docs/audit/I-firecrawl-integration.md` |
@@ -1589,8 +1680,11 @@ is the one worth authorizing first.
 | P69 | **A URL's userinfo can be persisted.** Python's canonical *key* is built from `parts.hostname` so credentials drop out of the key (`canonical.py:47-53`), but the raw URL is stored, and Java's normalizer takes the host as everything up to the first `/` (`DatasetAssembler.java:303`), which keeps `user:pass@`. `dataset_sources.url` (`V3:155`) holds the URL as fetched. | both canonicalizers read end to end | Credential stripping is currently a log concern only (`SecretMaskingConverter.java:27-28`, `logging_setup.py:18`). A `https://name:token@host/` seen in the wild would land in the dataset and in any export of it |
 | P70 | **One npm dependency is genuinely dead: `@radix-ui/react-label`.** `components/ui/label.tsx` is a hand-rolled `<label>` that imports no Radix primitive, and nothing imports the wrapper. | grep `@radix-ui/react-label` over `frontend/{app,components,lib,hooks}` → zero | The other eight unreferenced `components/ui/*` wrappers (`avatar`, `checkbox`, `dialog`, `dropdown-menu`, `progress`, `sheet`, `tabs`, and the radix `separator` use is a single screen) are **not** dead: they are the primitives Phase 13 wires. Only the label entry has no path to becoming used |
 | P71 | **Search is `LIKE`-only, and dataset-level search does not exist.** No `FULLTEXT` in any of `V1`–`V5`; row search is `LOWER(r.search_text) LIKE ?` (`DatasetQueryRepository.java:181`) and `filter[field]` is `JSON_EXTRACT … LIKE` (`:221`). `DatasetRepository.list()` filters on status and workflow id only (`:327-336`) — no name/description/requirement search. | grep `FULLTEXT` (zero) and the two LIKE sites; `DatasetAssembler.java:207` documents the choice rather than fixing it | The audit's §5 item 10 was "unindexable LIKE over JSON"; the denormalized `search_text` column moved the scan off the JSON but kept it a scan. Fine at fixture size, unmeasured at a real one |
-| P72 | **An unreachable AI service reports as a backend crash.** `AiServiceClient` catches only `RestClientResponseException`, i.e. an HTTP *response*; connection-refused is a different exception, so it bypasses `PipelineController.handleUpstream` (502 `AI_SERVICE_UNAVAILABLE`) and reaches the catch-all. With the ai-service down, `POST /api/v1/requirements/parse` answered **500 `INTERNAL_ERROR`** with a reference id. Nothing was fabricated — but the most likely local state is indistinguishable from a bug, so no client can say "the AI service is not running". | live run 2026-09-30; `AiServiceClient.java:57,74,91` vs `PipelineController.java:130-136` | The fix is one catch clause widening to the connection-failure family and rethrowing as `AiServiceException(503, …)`; it is recorded, not applied, because it was found while running, not inside an authorized phase |
-| P73 | **Stale copy on a live screen.** The dashboard placeholder reads "none of those endpoints exist yet" and cites Phases 5/10/12, while datasets, workflows, activity and monitoring all shipped and answered correctly in the same session. | browser snapshot of `/dashboard`, 2026-09-30 | Phase 13 replaces the placeholder outright; until then the sentence is false on a page a user reads. Fix with Phase 13, not before |
+| P72 | **An unreachable AI service reports as a backend crash.** `AiServiceClient` catches only `RestClientResponseException`, i.e. an HTTP *response*; connection-refused is a different exception, so it bypasses `PipelineController.handleUpstream` (502 `AI_SERVICE_UNAVAILABLE`) and reaches the catch-all. With the ai-service down, `POST /api/v1/requirements/parse` answered **500 `INTERNAL_ERROR`** with a reference id. Nothing was fabricated — but the most likely local state is indistinguishable from a bug, so no client can say "the AI service is not running". | live run 2026-09-30; `AiServiceClient.java:57,74,91` vs `PipelineController.java:130-136` | The fix is one catch clause widening to the connection-failure family and rethrowing as `AiServiceException(503, …)`; it is recorded, not applied, because it was found while running, not inside an authorized phase. **Narrowed by Phase 13:** the scope is the controllers that call the client directly, not the whole API — `WorkflowService.plan` already catches `RestClientException` alongside `AiServiceException`, so `POST /workflows/{id}/plan` answered `AI_SERVICE_UNAVAILABLE` correctly with the same connection refused underneath, and the New Research screen displayed it verbatim |
+| P73 | **Stale copy on a live screen.** The dashboard placeholder reads "none of those endpoints exist yet" and cites Phases 5/10/12, while datasets, workflows, activity and monitoring all shipped and answered correctly in the same session. | browser snapshot of `/dashboard`, 2026-09-30 | **Closed by Phase 13** — the placeholder component is deleted, not reworded, and `grep PhasePlaceholder` over `frontend/` returns zero |
+| P74 | **There is no `GET /api/v1/workflows/{id}`.** Existence and tenancy can be proved (`/workflows/{workflowId}/runs` answers 404 `WORKFLOW_NOT_FOUND` for a foreign id), but the stored prompt, name and planning state of one workflow can only be read by paging the listing. | `WorkflowController` and `OperationsController` mappings, read in full 2026-10-01 | `/dashboard/workflows/[id]` therefore fetches `?limit=100` and searches it client-side, and says "not among the newest 100 rows" when the row is older than that. A workflow is unshowable by id once the workspace has 100 newer ones |
+| P75 | **A plan's stored JSON documents are shipped as strings.** `WorkflowController.view(Plan)` puts `plan.stepsJson()`, `sourcePolicyJson()` and `completionCriteriaJson()` straight into the response, so `steps` arrives as a JSON-encoded *string* inside JSON and every consumer must `JSON.parse` it. | `WorkflowController.java:126-137` against `Records.Plan` (`String stepsJson`), verified live: `plan.steps` parsed to four `PlanStep` objects in the browser | Defensible — those columns are the canonical document the executor re-reads byte-for-byte — but it is the only field in this API whose type is "some JSON, as text", and the frontend now carries `lib/plan.ts` to decode it. The backend does the same conversion elsewhere with `Json.object(...)` (`DatasetService.details`), so the two read models are inconsistent |
+| P76 | **A planning failure's reason is stored but never exposed.** `workflows.planning_error_code` and `planning_error_message` are written by `markPlanningFailed` and are on the `Workflow` record, but neither `OperationsService.workflowHistory` nor `WorkflowController.view(Workflow)` includes them. | `OperationsService.java:89-99` and `WorkflowController.java:115-124` vs `Records.Workflow:17-21` | `/dashboard/workflows/[id]` can show `FAILED` and nothing else: the user sees that planning failed and cannot see why without opening the database. The POST that failed does return the sentence, so the information exists at the moment it is produced and is dropped on the next read |
 
 **And the one thing this phase disproved about itself.** An intermediate pass claimed the prompt
 templates were excluded from the installed distribution, because
@@ -1776,25 +1870,27 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phase 17 is complete; awaiting authorization for Phase 13 (the PirateAgentUI wiring) and for P54,
-which should be authorized *before* it.** Phase 17 cleaned the tree and proved, by building a clone in a
-directory with no reference repositories beside it, that **this project does not need the old project
-folder to exist** (§2 Phase 17.3). It removed dead models, dead methods, 24 unused imports, a duplicated
-validator, one unused dependency and a stale build directory — and corrected the `verify.sh` line that
-had been running 58 MySQL tests where 75 exist. What it deliberately did **not** touch is the security
-finding: P54 is a reachable SSRF in the one path that leaves this service under a name a scraped page
-chose, wiring the frontend does not change it, and a live demonstration with a real Firecrawl key would
-exercise it. The six reference repositories are gone as of the removal audit; **the old project folder is
-the last deletable sibling, and it becomes deletable the moment Phase 13 has carried its 14 screen
-components across and P54, P60 and P63 have been ported from it** — until then it is source material,
-not clutter, and git `main` is the backup either way.
+**Phase 13 is complete; awaiting authorization for P54, and for Phase 14.** Phase 13 carried the
+PirateAgentUI screens across into `frontend/` and wired all fifteen routes to the real API, deleted
+`PhasePlaceholder`, and in doing so surfaced a transport bug that had been swallowing every backend
+error message since Phase 1 (§2 Phase 13.4). What it could **not** do is demonstrate collection:
+`FIRECRAWL_API_KEY` and `GEMINI_API_KEY` are both still length 0, so planning fails honestly at
+`AI_SERVICE_UNAVAILABLE` and the dataset screens were verified against a fixture that was inserted,
+used and deleted again. **Phase 14 (live end-to-end) stays blocked on those two keys.** The security
+finding is unchanged: P54 is a reachable SSRF in the one path that leaves this service under a name a
+scraped page chose, wiring the frontend does not change it, and a live demonstration with a real
+Firecrawl key would exercise it — so **P54 should be authorized before Phase 14, not after.** The six
+reference repositories are gone as of the removal audit; **the old project folder is the last deletable
+sibling. Its 14 screen components have now been carried across, so what still ties it here is P54,
+P55, P56, P60 and P63** — until those are ported it is source material, not clutter, and git `main` is
+the backup either way.
 
 Phases have been directed out of
 `M-phase-plan.md` order, and that drift is now worth stating precisely rather than in a footnote:
 
 | Planned | Delivered | Where it went |
 |---|---|---|
-| Phase 3 — authentication | **not built** | the reason `FINALAGENT_WORKSPACE_ID` is a single-tenant stopgap, `created_by_id` has no FK, and `dataset_*.workspace_id` has none either |
+| Phase 3 — authentication | **Phase 12** | `identity/` behind `config/SecurityConfig` — accounts, personal workspaces, membership roles, opaque revocable sessions in MySQL, and `FINALAGENT_WORKSPACE_ID` deleted. `V5`, because the slots the audit reserved for identity were taken by working code in Phases 9 and 11 |
 | Phase 4 — requirement understanding | Phase 3 | `requirements/` in Python, `RequirementValidator` in Java |
 | Phase 5 — schema generation | part, Phase 3 | `derive_extraction_schema` + `ExtractionSchemaValidator` |
 | Phase 6 — job engine | **Phase 7** | `workflow/` — plan, run, step, job, worker, MySQL queue, retries, leases, cancellation |
@@ -1808,13 +1904,15 @@ Phases have been directed out of
 
 Most valuable next candidates, in dependency order:
 
-1. **The PirateAgentUI wiring (Phase 13).** Nothing in the browser speaks to any of this: ten routes
-   exist, none reads `/api/v1/workflows`, `/api/v1/datasets`, `/api/v1/exports`, `/api/v1/activity` or
-   `/api/v1/monitoring`, and there is no login screen even though Phase 12 created the thing a login
-   screen needs. This is now the only layer standing between the build and a demonstrable end-to-end
-   run, and every claim in §5 about "verified at the API boundary, not the user's" closes with it. The
-   credential rules it must respect are already written down: cookies only, no token in a body, and a
-   mutating request must carry `X-Requested-With`.
+1. **Phase 14 — the live end-to-end run.** The browser now speaks to every endpoint, so the only thing
+   between this build and a demonstrable run is the two blank keys. With `GEMINI_API_KEY` and
+   `FIRECRAWL_API_KEY` present, the test the brief names — *"find best youtube channels for coding"* —
+   must produce YouTube-shaped requirements and a YouTube-shaped dataset, and must never produce the
+   old project's startup-schema answer. **P54 belongs in front of this**, because that run is the first
+   time `curation/robots.py` would fetch an origin a scraped page chose. Two smaller things became
+   visible only once the screens existed: P74 (a workflow cannot be read by id) and P76 (planning
+   failure reasons are stored but never sent), and the New Research screen currently tells a user their
+   plan failed without being able to tell them why after the page moves on.
 2. **SSE monitoring over the durable event log.** `activity_events` is already written before any
    broadcast, is cursor-addressable (`id > ?`), now carries `workflow.dataset.saved` and
    `export.completed` / `export.failed` events, and is served by `/api/v1/activity` as a polled cursor.

@@ -24,3 +24,8 @@ export function formatRelativeTime(iso: string) {
 export function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
+
+/** "1 row", "3 rows" — the counts on these screens are frequently one, and "1 rows" reads as a bug. */
+export function plural(count: number, word: string, pluralWord = `${word}s`) {
+  return `${formatNumber(count)} ${count === 1 ? word : pluralWord}`;
+}

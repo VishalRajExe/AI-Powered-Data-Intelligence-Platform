@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 import { Logo } from "@/components/common/logo";
 import {
   CompassIcon,
@@ -72,7 +73,8 @@ export function Sidebar() {
       </nav>
 
       {/* Settings Navigation */}
-      <div className="px-3 pb-3 pt-2 border-t border-border/60">
+      <div className="px-3 pb-3 pt-2 border-t border-border/60 space-y-1">
+        <Account />
         <Link
           href="/dashboard/settings"
           className={cn(
@@ -94,5 +96,35 @@ export function Sidebar() {
         </Link>
       </div>
     </aside>
+  );
+}
+
+/**
+ * Who the session belongs to, read from `/auth/me` — the same source every data endpoint uses.
+ *
+ * `role` and `canWrite` come from the workspace membership row, not from anything this client
+ * inferred, and the write buttons on each screen read `canWrite` from the same object.
+ */
+function Account() {
+  const { user, workspace, logout } = useAuth();
+  if (!user) return null;
+
+  return (
+    <div className="mb-1 rounded-md border border-border/60 bg-surface/60 px-3 py-2">
+      <p className="truncate text-[12.5px] font-semibold text-foreground">{user.displayName}</p>
+      <p className="truncate text-[11px] text-muted-foreground">{user.email}</p>
+      <div className="mt-1.5 flex items-center justify-between gap-2">
+        <span className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+          {workspace?.role ?? "—"}
+        </span>
+        <button
+          type="button"
+          onClick={() => logout()}
+          className="text-[11px] font-medium text-muted-foreground transition-colors hover:text-danger"
+        >
+          Sign out
+        </button>
+      </div>
+    </div>
   );
 }

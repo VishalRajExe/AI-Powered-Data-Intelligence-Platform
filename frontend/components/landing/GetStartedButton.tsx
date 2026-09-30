@@ -10,8 +10,8 @@ interface GetStartedButtonProps {
 export function GetStartedButton({ size = "default", className = "" }: GetStartedButtonProps) {
   return (
     <Link
-      // Old target was /login; auth arrives in Phase 3, so point at the app shell to avoid a dead link.
-      href="/dashboard"
+      // Registration is real now: a new account creates its own workspace and signs in on success.
+      href="/signup"
       id="get-started-cta"
       className={`pirate-button ${size === "nav" ? "pirate-button--nav" : ""} ${className}`}
       aria-label="Get Started with PirateAgent"

@@ -43,9 +43,9 @@ async function probe<T>(
         data: null,
         httpStatus: result.status,
         answered: result.jsonParsed,
-        error: new ApiError(envelope?.message ?? `HTTP ${result.status}`, {
+        error: new ApiError(envelope?.error?.message ?? `HTTP ${result.status}`, {
           status: result.status,
-          code: typeof envelope?.error === "string" ? envelope.error : "HTTP_ERROR",
+          code: envelope?.error?.code ?? "HTTP_ERROR",
           body: envelope ?? null,
           path,
         }),
