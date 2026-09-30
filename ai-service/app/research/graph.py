@@ -255,6 +255,7 @@ class ResearchGraph:
 
     async def _plan_action(self, state: ResearchState, checklist: list[str],
                            playbooks: list[tuple[str, str]] | None = None) -> dict[str, Any]:
+        state.note_turn("plan_action")
         action = await self._llm.generate_json(
             system="You are a research agent that emits one action at a time as JSON.",
             prompt=prompts.research_prompt(state, checklist, playbooks),
@@ -279,6 +280,7 @@ class ResearchGraph:
         return result
 
     async def _submit_extraction(self, state: ResearchState, checklist: list[str]) -> dict[str, Any]:
+        state.note_turn("submit_extraction")
         return await self._llm.generate_json(
             system="Emit only the JSON object described by the schema. No prose.",
             prompt=prompts.submission_prompt(state, checklist),
@@ -287,6 +289,7 @@ class ResearchGraph:
 
     async def _critique(self, state: ResearchState, checklist: list[str],
                         proposed: dict[str, Any]) -> _Critique:
+        state.note_turn("critique")
         verdict = await self._llm.generate_json(
             system="You are a strict reviewer of extracted data. Answer in JSON only.",
             prompt=prompts.critique_prompt(state, checklist, proposed),
@@ -349,6 +352,11 @@ class ResearchGraph:
             "searchesUsed": state.budget.searches_used,
             "scrapesUsed": state.budget.scrapes_used,
             "interactionsUsed": state.budget.interactions_used,
+            "interactions": [item.as_dict() for item in state.interactions],
+            "interactionsUnverified": len(state.unverified_interactions()),
+            # Where the model turns went. The loop bound says how far a run was allowed to go; this
+            # says what each turn was for, which is the question a slow or costly run actually asks.
+            "turnsByNode": dict(state.turns),
             "enabledTools": [tool for tool in prompts.DATA_ACTIONS if tool in set(state.limits.allowed_tools)],
             "playbooksUsed": list(state.playbooks_used),
             "toolErrors": len(state.tool_errors),
@@ -427,6 +435,16 @@ class ResearchGraph:
             warnings.append(
                 f"{len(state.refusals)} source(s) were refused before fetching "
                 f"({', '.join(sorted({refusal['code'] for refusal in state.refusals}))})"
+            )
+        unverified = state.unverified_interactions()
+        if unverified:
+            # A browser session that answered is not a page that changed. If the run acted and cannot
+            # show the effect, the records it built may rest on a filter that was never applied — so
+            # the answer is returned and the doubt travels with it, in both directions.
+            warnings.append(
+                f"{len(unverified)} browser session(s) did not visibly change the page "
+                f"({', '.join(f'{item.url}: {item.verdict}' for item in unverified[:3])}); values "
+                "reached only through those sessions are not verified"
             )
 
         status = STATUS_COMPLETED_WITH_WARNINGS if warnings else STATUS_COMPLETED

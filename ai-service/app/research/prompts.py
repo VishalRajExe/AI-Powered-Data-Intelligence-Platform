@@ -201,6 +201,65 @@ def submission_prompt(state: ResearchState, checklist: list[str]) -> str:
     )
 
 
+def _leaf(path: str) -> str:
+    """`roles[].salary` → `salary`. Checklist paths are schema paths; a reviewer matches on names."""
+    tail = path.replace("[]", ".").split(".")[-1]
+    return tail.strip()
+
+
+def _excerpt(text: str, limit: int = 500) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit] + " …"
+
+
+def evidence_text(state: ResearchState, checklist: list[str]) -> str:
+    """What the reviewer is shown about the evidence, source by source.
+
+    The reviewer used to receive a list of URLs and the proposed JSON, which made it a plausibility
+    check on the answer rather than a check of the answer against anything: nothing in that prompt
+    could tell it whether a submitted value appeared in a page the run had actually read. This is
+    the one place the full text is deliberately *not* pruned away — `TheAgenticBrowser-main`
+    (`core/orchestrator.py:99-132`) blanks stale DOM payloads before critique, which is exactly the
+    bug: the judge is left scoring a submission against content it was told to forget.
+
+    Bounded excerpts rather than whole pages, because a run may hold a dozen of them, and every
+    source keeps its interaction verdict, because "the filter was applied" is a claim about a page
+    state and the run recorded whether that page visibly moved.
+    """
+    leaves = [name for name in dict.fromkeys(_leaf(path) for path in checklist) if name]
+    acted = {item.url: item for item in state.interactions}
+    blocks: list[str] = []
+
+    for url, source in sorted(state.sources.items()):
+        held = state.page_for(url)
+        backing = ("a tool returned this page" if source.verified_by_tool
+                   else "mentioned by the model only, never retrieved")
+        lines = [f"- {url} (obtained by: {source.source_type}; {backing})"]
+        if held:
+            present = [name for name in leaves if name.casefold() in held.casefold()]
+            absent = [name for name in leaves if name not in present]
+            lines.append(f"  content read: {_excerpt(held)}")
+            lines.append(f"  field names appearing in that text: "
+                         f"{', '.join(present) if present else '(none)'}"
+                         + (f"; absent: {', '.join(absent)}" if absent else ""))
+        elif source.snippet:
+            lines.append(f"  search snippet only, the page itself was never read: "
+                         f"{_excerpt(source.snippet, 240)}")
+        else:
+            lines.append("  no content was read from this URL this run")
+        interaction = acted.get(url)
+        if interaction is not None:
+            lines.append(f"  browser session asked to “{interaction.prompt}” — verification: "
+                         f"{interaction.verdict} ({interaction.detail})")
+        blocks.append("\n".join(lines))
+
+    if not blocks:
+        return "(no sources were retrieved during this run — nothing in the result can be evidenced)"
+    return "\n\n".join(blocks)
+
+
 def critique_prompt(state: ResearchState, checklist: list[str], proposed: dict[str, Any]) -> str:
     import json
 
@@ -211,8 +270,7 @@ def critique_prompt(state: ResearchState, checklist: list[str], proposed: dict[s
             "schema": _schema_text(state.extraction_schema),
             "checklist": "\n".join(f"- {path}" for path in checklist),
             "expected_records": str(state.limits.expected_records or "not specified"),
-            "sources": "\n".join(f"- {source.url} ({source.source_type})" for source in state.sources.values())
-            or "- (no sources were retrieved)",
+            "sources": evidence_text(state, checklist),
             "result": json.dumps(proposed, indent=2, ensure_ascii=False),
         },
     )

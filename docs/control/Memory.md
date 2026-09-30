@@ -12,14 +12,17 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 8 — Data intelligence pipeline, **complete and live-verified against real
-  MySQL** end to end: `collect → transform → validate`, where `transform` is the Python pipeline's
-  single pass and `validate` is Java's independent verdict on what it proposed. Nothing is stored as
-  a dataset yet — the pipeline's records travel through `workflow_steps.output_summary` — but the
-  advisory/authoritative split the architecture promised is now executable, not described.
-  247 backend tests pass (30 of them against MySQL 9.6), 349 ai-service tests pass, and the web
-  layer (Phases 4-5) remains **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real search,
-  scrape, session or robots fetch has ever run from this project.
+- **Current Phase:** 6 — browser planner / critique, **complete**. The graph's act step now verifies
+  its own effect instead of believing the session's reply, and the reviewer is shown what was
+  actually read instead of a list of URLs. No second agent was created, Firecrawl remains the web
+  engine, and **no Java or schema change was needed** — the gate on browser interaction stays
+  `ALLOWED_WEB_TOOLS` ∩ the request's `allowedTools`, plus the per-run interaction budget.
+  362 ai-service tests pass, 247 backend tests pass unchanged (30 of them against MySQL 9.6), and
+  the web layer remains **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real browser
+  session, search, scrape or robots fetch has ever run from this project. Phase 8's pipeline
+  (`collect → transform → validate`, Java's independent verdict on the pipeline's dataset) is
+  complete and pushed as of today; nothing stored as a dataset yet — records travel through
+  `workflow_steps.output_summary`.
 - **Last updated:** 2026-09-30
 - **Application code written:** three independent processes.
   - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 58 main source files, 24 test classes;
@@ -485,6 +488,125 @@ existed, and that the system was production-ready — each contradicted by its o
   threshold and block bound are both overridable per request and validated at boot, so the first live
   run can narrow them without a code change.
 
+- [x] **Phase 6 (2026-09-30) — browser planner / critique.** `TheAgenticBrowser-main` inspected; two
+      of its patterns taken, its topology refused. **No second agent, no new runtime, no new
+      dependency, no Java or schema change.** The loop the brief describes —
+      `Planner → open source → interact → extract → critique result → retry/correct` — already existed
+      in this service's one research graph as `plan_action → run_tools → schema gate → critique →
+      feedback → loop`, bounded on every path since Phase 2. What it lacked was the two things
+      AgenticBrowser is actually good at, and both are about distrusting a successful-looking answer.
+
+  **Taken 1 — the action's effect is verified, not believed.** A browser session that answers is not
+  a page that changed. `run_interact` now compares the session output against the content this run
+  already held for that page (keyed by `canonical_key`, so a `?utm_` variant is the same page) and
+  records `CHANGED` / `UNCHANGED` / `UNKNOWN` on `state.interactions`, in the tool message the
+  planner reads next turn, and in the run metadata:
+
+  ```
+  [verification: the session returned the same content the page already had; the action may not have
+  taken effect. Do not report this action as done. Either try a different action on this page, read a
+  source that already states the value, or submit from what has actually been retrieved — do not
+  infer the value the action was meant to reveal.]
+  ```
+
+  Deliberately weak in the flattering direction: a differing answer is reported as *changed*, never
+  as *succeeded*, because text is all we have — upstream had a before/after screenshot pair and a
+  second model instructed that "the Browser Agent will say the action was successful, but you have
+  to visually confirm whether the text was actually entered"
+  (`TheAgenticBrowser-main/core/ss_analysis.py:69`), and we will not pretend to pixels. Whitespace
+  and case differences are normalised away first, so a re-render is not a state change
+  (`test_text_that_only_reflowed_is_not_claimed_as_a_page_that_moved`). A second session on the same
+  page is measured against where the first left it, which is the repeat the upstream loop could never
+  see (`orchestrator.py:606-615` re-ran a failed step against the same plan forever, with `i` never
+  incremented so every error logged as "step 0"). **And a run whose records rest on a session it
+  cannot verify is never reported clean**: any `UNCHANGED`/`UNKNOWN` session makes the status
+  `COMPLETED_WITH_WARNINGS` with the URLs named, because the critique is an LLM verdict and cannot be
+  the thing that closes the doubt.
+
+  **Taken 2 — the reviewer sees the evidence.** `critique_prompt` used to send a list of bare URLs
+  plus the proposed JSON, which made it a plausibility check on the answer rather than a check of the
+  answer against anything. It now sends, per source: how it was obtained, whether a tool returned it,
+  a bounded excerpt of what was read, which contract field names appear in that text and which are
+  absent, and any session's verification verdict. `critique.md`'s rules follow: a value must be
+  attributable to quoted content, a search-snippet-only source supports nothing beyond its snippet,
+  and a field name absent from every source is treated as evidence of invention. This is AgenticBrowser's
+  `filter_dom_messages` (`orchestrator.py:99-132`) **adapted against its own bug** — that function
+  blanks stale DOM payloads before critique, leaving the judge to score a submission against content
+  it was told to forget. Nothing is blanked here; excerpts are bounded.
+
+  Also taken, both small: per-node model-turn accounting (`metadata.turnsByNode`, from
+  `orchestrator.py:187-214`), and acted-on provenance — the session prompt and id travel with the
+  verification verdict, so a dataset row can say which page state produced it.
+
+  **Refused.** The three-persona split (planner / browser / critique agents) — that is the second
+  orchestrator `A` §A.1 was written to prevent. Playwright/CDP element control, indexed accessibility
+  trees and `[mmid='N']` targeting (`get_detailed_accessibility_tree.py:40-55`) — there is no local
+  browser here; Firecrawl's `interact` takes a natural-language action against a session we already
+  budget and stop in a `finally`. Screenshot diffing. Prompt-encoded loop limits
+  (`critique_agent.py:74-75`) — the graph's `StepBudget` already gates every path, and upstream has
+  **no code-level bound at all**: `MessageType.MAX_TURNS_REACHED` is declared (`message_type.py:14`)
+  and emitted nowhere, and give-up exits through the same `terminate=true` + `final_response` path as
+  real success (`orchestrator.py:585-596`) — exhaustion reported as a normal answer, which is defect
+  class this project's status rules exist to prevent. DOM pruning in the **submission** transcript —
+  that is how a value gets lost.
+
+  **Licence and safety position on this repository:** "TheAgentic Community License v1.0"
+  (`LICENSE:19-22` bars offering it as a competing SaaS/PaaS; `:27-39` requires notices on modified
+  copies; `:49-52` bars sublicensing). **No file was vendored or copied** — patterns only, so no
+  notices are owed; `docs/control/THIRD-PARTY.md` keeps the standing record and gate **L1**.
+  Three things in it were refused on safety grounds rather than architecture, and are recorded because
+  they are the reason a project cannot adopt this repo wholesale: it launches Chromium with
+  `bypass_csp=True` and `--disable-blink-features=AutomationControlled`
+  (`browser_manager.py:219-221,250-252`) — detection evasion; its README tells users to reuse their
+  real Chrome profile (`README.md:112`); and its browser agent is instructed that actions "may include
+  logging into websites" with `#username`/`#password` fill examples (`browser_agent.py:36,140-144`)
+  and carries **no refusal policy** — no CAPTCHA handling exists, but neither does a rule against it.
+  Our safety literals (`allowAuthentication=false`, `allowCaptchaBypass=false`) are asserted to stay
+  true in every plan; `test_the_correction_offers_another_source_and_never_a_way_round_a_wall` now
+  checks the failure path's advice offers *another source*, and contains no login/password/captcha/
+  bypass/paywall wording at all.
+
+  | Verification | Measured |
+  |---|---|
+  | AI service tests | `.venv/Scripts/python.exe -m pytest -q` → **362 passed, 8 skipped** (was 349/8; +13 new in `tests/test_research_verification.py`) |
+  | Backend tests | **247, 0 failures** with `FINALAGENT_TEST_MYSQL=true` — unchanged, because no Java file was touched; the new metadata keys ride the existing free-form `metadata` map and the warning rides `validation.warnings` |
+  | Full gate | `FINALAGENT_TEST_MYSQL=true scripts/verify.sh` → 7/7 PASS (backend tests, package, MySQL queue 30/30, ai tests, frontend typecheck/lint/build) |
+  | Regression | all 47 pre-existing research tests (`test_research_interact/graph/api`) pass unmodified — the graph's topology did not change |
+  | Diff size | 5 files, +217/−9: `state.py` (`InteractionRecord`, `page_text`, `turns`), `tools.py` (verify + guidance), `prompts.py` (`evidence_text`), `prompts/critique.md`, `graph.py` (status rule, metadata) |
+
+  Reuse records for this phase:
+
+  | Repository | Source file | Feature | Destination | Method |
+  |---|---|---|---|---|
+  | TheAgenticBrowser-main | `core/click_using_selector.py:45-58`, `core/dom_mutation_observer.py:20-65` | a mutation observer wrapped around one action, so "I clicked it" is checked against "the page changed" | `ai-service/app/research/tools.py:_verify_interaction` | **ADAPT + FIX** — no DOM and no local browser here, so the observer becomes a text comparison against the page content the run already holds; and the upstream's false claim ("this means the action is not yet executed", emitted *after* a click that did run) is replaced by three honest verdicts, one of which is `UNKNOWN` |
+  | TheAgenticBrowser-main | `core/ss_analysis.py:69,83`, `core/orchestrator.py:503-534` | a second model instructed not to believe the executor's success claim | `ai-service/app/research/prompts/critique.md` + `prompts.py:evidence_text` | **ADAPT** — the distrust is kept, the mechanism is not: it judged a before/after **screenshot pair**, and we have text. The reviewer now receives per-source excerpts, field-name presence/absence and the session verdict instead of a URL list |
+  | TheAgenticBrowser-main | `core/orchestrator.py:99-132,135-167` (`filter_dom_messages`) | prune stale giant page payloads out of the replayed transcript | `ai-service/app/research/prompts.py:evidence_text` (critique turn only) | **ADAPT + REJECT half** — bounded excerpts for the reviewer, yes; the upstream version **blanks** the content the critique is meant to judge, which is not reproduced, and the submission transcript keeps every page whole because pruning there is how a value is lost |
+  | TheAgenticBrowser-main | `core/orchestrator.py:187-214` | per-agent, per-step token accounting | `ai-service/app/research/state.py` (`turns`) → `graph.py:_metadata` (`turnsByNode`) | **PORT, reduced** — turn counts by node, not tokens: this service's LLM client does not report usage per call, and inventing a token figure would be exactly the kind of number this project refuses |
+  | TheAgenticBrowser-main | `core/utils/dom_helper.py:21-45`, `click_using_selector.py:107,125` | return the opening tag of the element actually acted on | `ai-service/app/research/state.py:InteractionRecord` (prompt + session id + verdict, attached to the source) | **ADAPT** — there is no element to name; what a Firecrawl session can tell you it did is the prompt and the session, and that is what now travels into provenance |
+  | TheAgenticBrowser-main | `core/utils/get_detailed_accessibility_tree.py:40-55,489`, `browser_agent.py:47,218` | indexed accessibility tree, model acts by `[mmid='N']` | — | **NO TAKE** — needs a local browser and a JS injection we cannot do through Firecrawl's `interact`. Its own renumber-from-`let id = 0` on every capture is a latent bug (a cached index silently points elsewhere after a re-render), which is the reason not to half-copy it |
+  | TheAgenticBrowser-main | `core/orchestrator.py:23-48` (`ensure_tool_response_sequence`) | refuse a model turn whose tool calls have no matching responses | — | **NO TAKE** — we never replay provider-native tool-call pairs; the transcript is our own typed `Message` list and `RecordingLlm` calls are one-shot JSON, so there is no pairing to break |
+  | TheAgenticBrowser-main | `agent/browser_agent.py:36,140-144`, `core/enter_text_using_selector.py:243-245`, `core/browser_manager.py:219-221,250-252`, `README.md:112` | login-form filling as a documented capability, `bypass_csp=True`, `--disable-blink-features=AutomationControlled`, reusing the user's real Chrome profile | — | **REFUSED on safety grounds** — credential entry and bot-detection evasion. Our plan literals stay `allowAuthentication=false`, `allowCaptchaBypass=false`, and the failure-path advice is now tested to contain no login/password/captcha/bypass/paywall wording |
+  | data-enrichment-js | `graph.ts:155-225` (`reflect`) | the critique node and its router | already ported (Phase 2), unchanged | **ALREADY IN PLACE** — Phase 6 did not add a loop; it made the loop's two weakest links evidence-based |
+
+  Defects found while doing this:
+
+  | # | Defect | How it surfaced |
+  |---|---|---|
+  | P28 | **A nested-quote f-string with a misplaced closing paren** in `evidence_text` — `…never retrieved')}` — broke `app/main.py`'s import chain, so *every* test in the service failed to collect | `pytest tests/test_research_interact.py` → `ImportError while loading conftest … SyntaxError: f-string: unmatched ')'`. Python 3.14 does not forgive reused quotes inside an f-string; the fix computes the phrase first, which also made the line fit |
+  | P29 | **The reviewer was blind by construction.** Discovered while writing the evidence test, not by a failure: `critique_prompt` interpolated `state.sources` as `- {url} ({source_type})`, so the "adequately evidenced" instruction in `critique.md` had nothing to check against and a fabricated value was invisible to the judge | Reading the prompt the test produced. Now asserted directly: `test_the_reviewer_is_shown_what_was_read_not_only_where_it_came_from` |
+  | P30 | **A test-side invention:** the first draft of the `UNKNOWN` case forced `state.scraped_pages.add(...)` to manufacture the state, which is not how a run reaches it. The real path is a URL that arrived by search and was never read — the evidence rule admits searched URLs, so `UNKNOWN` is ordinary, not pathological | Caught by reading the gate in `run_interact` before finalising the test; the fabricated line is gone and the test states the actual path |
+
+  **Not verified, stated plainly:** no live Firecrawl browser session has ever been driven from this
+  project (`FIRECRAWL_API_KEY` length 0), so the verification's *usefulness* on real pages is
+  unmeasured and its weakness is structural: real pages differ after an action for reasons that have
+  nothing to do with it — timestamps, ads, pagination chrome, A/B shells — so `CHANGED` will be the
+  common answer and says less than it appears to, while `UNCHANGED` is the only finding that reliably
+  means something. `UNKNOWN` frequency depends on how often runs act on searched-but-unread URLs,
+  which is a live-data question. The status rule errs toward reporting, so the first real runs will
+  show whether this is noisy; the knob, if it is, is comparing on a normalised *subset* (the checklist
+  fields) rather than the whole page, and that change should be made against observed sessions, not
+  ahead of them.
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -572,6 +694,11 @@ existed, and that the system was production-ready — each contradicted by its o
 | 2026-09-30 | **Levenshtein is implemented in-house; `rapidfuzz`/`commons-text` were not added.** | Audit `C` suggested a library. One bounded string distance does not justify a compiled dependency in a service whose base install is FastAPI/uvicorn/Pydantic/dotenv, and this project has twice preferred no new dependency over a convenience |
 | 2026-09-30 | **`POST /ai/v1/quality/process` is a synchronous `def`, and the pipeline holds no state.** | An `async def` handler would run CPU-bound text processing on the event loop and stall every other request; a sync handler is dispatched to FastAPI's threadpool. Being pure means nothing is lost on restart, which is what keeps the no-Redis constraint safe |
 | 2026-09-30 | **The wire contract between the two languages is pinned on both sides by one generated fixture.** | `backend/src/test/resources/wire/quality-process.json` is written by the pipeline itself; `test_quality_wire_fixture.py` fails if Python's output drifts from it and `QualityWireContractTest` fails if Java's DTOs stop binding it. A hand-written snapshot on either side would age silently — Spring drops unknown properties, so drift never shows up as a parse error, only as a dataset of nulls three steps later |
+| 2026-09-30 | **Phase 6 is two patterns inside the existing graph, not a browser agent.** `TheAgenticBrowser-main`'s planner/browser/critique trio is refused; its distrust of the executor's own success claim is taken. | Three cooperating agents around a local Playwright instance is the second orchestrator `A` §A.1 exists to prevent, and this service has no browser to drive — Firecrawl's `interact` takes a natural-language action against a session that is already budgeted, policy-checked, evidence-gated and stopped in a `finally`. What was genuinely missing was verification of the action's effect and evidence in front of the reviewer, and both fit in the graph that already runs |
+| 2026-09-30 | **An interaction's effect is reported as `CHANGED` / `UNCHANGED` / `UNKNOWN`, never as success — and an unverifiable one forces `COMPLETED_WITH_WARNINGS`.** | A session replying is not a page moving. Upstream had a screenshot judge precisely because the executor's own claim cannot be trusted (`ss_analysis.py:69`), and we have only text, so the strong claim is unavailable and the weak one is named. A differing page proves nothing about the filter having applied; an identical page proves something. The LLM critique cannot be what closes that doubt, so the status rule does |
+| 2026-09-30 | **The reviewer receives bounded excerpts of what was read, plus which contract field names appear in them; the submission transcript keeps every page whole.** | `critique.md` demanded "adequately evidenced" while the prompt gave the judge a list of URLs — an instruction with nothing to check against, so a fabricated value was invisible. Porting upstream's DOM pruning *wholesale* would have made it worse: `orchestrator.py:99-132` blanks the content the critique is supposed to judge. Bounding for review, never blanking, and never pruning the extractor's own input |
+| 2026-09-30 | **Credential entry, CSP bypass and automation-flag evasion are refused outright, and the refusal is asserted in a test.** | TheAgenticBrowser documents filling `#username`/`#password` (`browser_agent.py:36,140-144`) and launches with `bypass_csp=True` + `--disable-blink-features=AutomationControlled` (`browser_manager.py:219-221`). Our safety literals are constants in `WorkflowPlanner.safetyPolicy`, the brief forbids bypassing access controls, and the corrective advice a failed action produces is now tested to offer another *source* and to contain no login/password/captcha/bypass/paywall wording |
+| 2026-09-30 | **No Java, schema or DTO change for Phase 6.** New signals travel as `metadata.turnsByNode`, `metadata.interactions`, `metadata.interactionsUnverified` and one more `validation.warnings` entry. | `ResearchResult.metadata` is a free-form map that `ExtractStepHandler` already copies into the step summary, so adding to it needed no seam change. A phase that cannot be expressed without touching the authoritative layer would be a sign the change belonged there — this one is a statement about how much a Python-side run can believe about itself |
 
 ## 4. Database / Schema Changes
 
@@ -747,6 +874,30 @@ Also unchanged: the pipeline is reachable through `POST /ai/v1/quality/process` 
 `X-API-Key`, and the workflow endpoints that call it are still unauthenticated, so a caller who can
 start a run can now also make Spring spend Python CPU on it.
 
+### Verification limits introduced by Phase 6
+
+The interaction verification is tested against scripted sessions, which is the only kind of session
+this machine can produce. What that does **not** establish:
+
+- **Whether `CHANGED` is worth anything on real pages.** Live pages differ after an action for reasons
+  unrelated to it — timestamps, ads, pagination chrome, A/B shells — so `CHANGED` is likely to be
+  near-universal and therefore weak, while `UNCHANGED` is the only verdict that reliably means
+  something. The design assumes that asymmetry; it has not measured it.
+- **Whether text comparison is the right comparison.** Firecrawl returns markdown, not a DOM, so an
+  action that changes a control's state without changing visible text (a sort that reorders rows
+  already in the same order, a toggle that only styles) reads as `UNCHANGED` and would be reported as
+  an unverified action. Whether that happens often enough to matter is a live-data question.
+- **The `UNKNOWN` rate**, which depends on how often runs act on searched-but-never-read URLs; the
+  evidence rule admits them, so it is not pathological, just unquantified.
+- **The status rule's cost.** Any unverifiable session now makes a run `PARTIAL`-adjacent
+  (`COMPLETED_WITH_WARNINGS`), so if live runs produce these routinely, a caller watching status will
+  see warnings that are about the browser rather than the data. The knob if that proves noisy is
+  comparing on the checklist fields rather than the whole page — to be turned against observed
+  sessions, not ahead of them.
+- Nothing here exercises the **retry/correct** path beyond the transcript advice the planner is given.
+  Whether models actually change course on `[verification: …]` rather than resubmitting is a live
+  provider behaviour, untested with a real key.
+
 ### Defects found and fixed during Phase 1 (all by running, not reading)
 
 | # | Defect | How it surfaced |
@@ -910,7 +1061,7 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phase 8 is complete; awaiting authorization for the next one.** Phases have been directed out of
+**Phase 6 is complete; awaiting authorization for the next one.** Phases have been directed out of
 `M-phase-plan.md` order, and that drift is now worth stating precisely rather than in a footnote:
 
 | Planned | Delivered | Where it went |
@@ -920,57 +1071,54 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 | Phase 5 — schema generation | part, Phase 3 | `derive_extraction_schema` + `ExtractionSchemaValidator` |
 | Phase 6 — job engine | **Phase 7** | `workflow/` — plan, run, step, job, worker, MySQL queue, retries, leases, cancellation |
 | Phase 7 — source governance | mostly, Phase 5 (at fetch time) | `curation/` — robots, policy, ranking, dedupe, retry, aggregation. **Not** built: host-resolution SSRF and per-domain rate |
-| **Phase 6 — browser planner / critique** | **authorized, explicitly deferred, not started** | the next candidate below |
+| **Phase 6 — browser planner / critique** | **Phase 6** (2026-09-30) | taken as two patterns inside the one existing research graph: `run_interact` verifies its own effect (`CHANGED` / `UNCHANGED` / `UNKNOWN`) and `critique_prompt` receives what was actually read. Upstream's three-agent topology, local Playwright, screenshot judging and CSP/automation evasion were **refused** |
 | Phase 8 — data intelligence pipeline | **Phase 8** (2026-09-30) | `ai-service/app/quality/` behind `POST /ai/v1/quality/process`, executed as the `TRANSFORM` step and disposed of by `RowContractEnforcer` in Java |
-| Phase 8's dataset persistence | **not built** | the pipeline's records live in `workflow_steps.output_summary` JSON, as the collected records did before it |
+| Phase 8's dataset persistence | **not built** | the pipeline's records, and now the graph's interaction verdicts, live in `workflow_steps.output_summary` JSON |
 
 Most valuable next candidates, in dependency order:
 
-1. **Browser planner → act → critique → correct (the plan's Phase 6, already authorized).** The
-   constraint it must be built inside is the one the user set: no second independent agent, Firecrawl
-   stays the actual web engine, and it is used only where a workflow needs browser interaction or
-   verification. `interact` already exists in the graph with a per-run interaction budget and the
-   "URL was retrieved this run" rule (Phase 4), and the critique idea already exists as extraction
-   gate 3 (completeness critique, bounded, exhaustion never reported as success) — so the honest scope
-   is a *verification* pass over a step's result and a bounded correction, not a new planner.
-   `TheAgenticBrowser` is patterns-only under its Community Licence (`docs/control/THIRD-PARTY.md`,
-   open decision **L1**).
-2. **Dataset persistence.** Sharper than it was before Phase 8: the pipeline now produces a typed
+1. **Dataset persistence.** Sharper than it was before Phase 8: the pipeline now produces a typed
    dataset — columns with types, canonical rows, linked duplicates, per-record sources with
-   `verifiedByTool`, conflicts with both sides kept, and Java's own verdict per row — and all of it is
-   serialized into a JSON column on a step row. `datasets` / `dataset_records` / `record_sources` /
-   `record_conflicts` tables would make the pipeline's output queryable and would let a later run
-   resolve against records it stored rather than re-collecting. The `SAVE` and `EXPORT` step types
-   already exist in the ENUM and are still deliberately absent from every plan until there is code
-   behind them.
-3. **Authentication and tenancy (the plan's Phase 3).** `/api/v1/workflows/*` is unauthenticated and
+   `verifiedByTool`, conflicts with both sides kept, Java's own verdict per row — and the graph
+   additionally records which pages were *acted on* and whether each action's effect could be
+   verified. All of it is serialized into a JSON column on a step row. `datasets` /
+   `dataset_records` / `record_sources` / `record_conflicts` tables would make the pipeline's output
+   queryable and would let a later run resolve against records it stored rather than re-collecting.
+   The `SAVE` and `EXPORT` step types already exist in the ENUM and are still deliberately absent
+   from every plan until there is code behind them.
+2. **Authentication and tenancy (the plan's Phase 3).** `/api/v1/workflows/*` is unauthenticated and
    now *starts billed work*, which is worse than the read-only endpoints that came before it: a
-   caller who can POST /runs can spend Firecrawl credits and Gemini quota, and since Phase 8 can also
-   make Spring run a CPU-bound pipeline over records on Python's threadpool. The queue itself is safe
-   to leave as is — the workspace is server-configured and a foreign id answers as not-found — but
-   `FINALAGENT_WORKSPACE_ID` and `Principals.UNAUTHENTICATED` are placeholders that must not survive
-   into a shared deployment, and `workspace_id` / `created_by_id` need their foreign keys (V3).
-4. **SSE monitoring over the durable event log.** `activity_events` is already written before any
+   caller who can POST /runs can spend Firecrawl credits and Gemini quota, can since Phase 8 make
+   Spring run a CPU-bound pipeline over records on Python's threadpool, and — where an operator has
+   enabled it — can since Phase 6's verification make a run drive live browser sessions more
+   deliberately. The queue itself is safe to leave as is — the workspace is server-configured and a
+   foreign id answers as not-found — but `FINALAGENT_WORKSPACE_ID` and `Principals.UNAUTHENTICATED`
+   are placeholders that must not survive into a shared deployment, and `workspace_id` /
+   `created_by_id` need their foreign keys (V3).
+3. **SSE monitoring over the durable event log.** `activity_events` is already written before any
    broadcast and is cursor-addressable (`id > ?`), so the streaming endpoint is a reader over a table
    that exists rather than new plumbing.
-5. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
+4. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
    fetch (private/link-local/loopback refusal) and enforce
    `SearchStrategy.max_requests_per_domain_per_minute`, which is produced and reported but still
    consumed by nothing.
-6. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
+5. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
    the queue retries (`Backoff`), but the Gemini client still surfaces a rate limit as an error —
    normal on a free tier capped at 20 requests/day, not an edge case.
-7. **Right-size the budgets against one real run.** `WORKFLOW_STEP_TIMEOUT_MS=240000` inside
+6. **Right-size the budgets against one real run.** `WORKFLOW_STEP_TIMEOUT_MS=240000` inside
    `WORKFLOW_LEASE_SECONDS=300` was reasoned about, never measured: no step has ever collected from
-   the live web here, and Phase 8 added a second long call (`/ai/v1/quality/process`) under the same
-   budget without measuring that either.
+   the live web here, Phase 8 added a second long call (`/ai/v1/quality/process`) under the same
+   budget, and Phase 6 makes an unverified session *visible*, which is the first thing that will tell
+   us whether real browser sessions complete at all inside the interaction deadline.
 
-Still open: **G1** (demonstration strategy), **G2** (needs a Firecrawl key — see §6 for what Phase 4
-settled and what it did not), **L1** (enrichment-repo licence position — see
-`docs/control/THIRD-PARTY.md`), **S1** (who writes site playbooks), **Q1** (is lexical relevance
-adequate) and **Q2** (should unreadable robots keep refusing), both of which need live web access.
-**B1 is closed.** Nothing new is blocked on the database: it is reachable, migrated, and the queue
-runs on it.
+Still open: **G1** (demonstration strategy), **G2** (narrowed again by Phase 6 — the API shape and
+lifecycle are settled, and sessions are now verifiable in principle, but no live session has run here,
+so whether a real one changes visibly and in time is still unmeasured; see §6), **L1**
+(enrichment-repo licence position, and the Community Licence's competing-service bar on
+`TheAgenticBrowser-main` — see `docs/control/THIRD-PARTY.md`), **S1** (who writes site playbooks),
+**Q1** (is lexical relevance adequate) and **Q2** (should unreadable robots keep refusing), both of
+which need live web access. **B1 is closed.** Nothing new is blocked on the database: it is reachable,
+migrated, and the queue runs on it.
 
 ### Carried forward from Phase 2, still true
 

@@ -42,7 +42,7 @@ from app.firecrawl.client import (
     supports_interact,
     validated_http_url,
 )
-from app.research.state import ResearchState
+from app.research.state import InteractionRecord, ResearchState
 
 
 @dataclass(slots=True)
@@ -220,12 +220,56 @@ async def run_scrape(state: ResearchState, web: WebTool, url: str, *, policy: So
 
     state.scraped_pages.add(page_id)
     state.observe(target, title=page.title, source_type="scrape")
+    # Held so a later browser session on this page can be compared against the state it started
+    # from, rather than the run believing the session's own account of what it achieved.
+    state.remember_page(target, page.markdown)
     return ToolOutcome(
         name="scrape",
         ok=True,
         content=_format_page(page),
         observed_urls=[page.url or target],
     )
+
+
+def _verify_interaction(before: str, after: str) -> tuple[str, str]:
+    """Did the page visibly move, as far as this run can tell?
+
+    Deliberately weak in one direction and strong in the other. It cannot prove an action worked —
+    a session that says "I opened the filter" and returns the same text it would have returned
+    anyway is exactly the failure the reference implementation's screenshot judge existed to catch
+    (`TheAgenticBrowser-main/core/ss_analysis.py:69`, "you have to visually confirm whether the text
+    was actually entered"), and we have no pixels here, only text. So a differing answer is reported
+    as *changed*, never as *succeeded*; an identical one is reported as unverified, which is the
+    finding that matters, because the run was about to treat a page that never moved as a page it
+    had acted on.
+    """
+    if not before.strip():
+        return "UNKNOWN", ("this page was not read before the session, so there is no state to "
+                           "compare the session's answer against")
+    if _comparable(before) == _comparable(after):
+        return "UNCHANGED", ("the session returned the same content the page already had; the action "
+                             "may not have taken effect")
+    return "CHANGED", "the session returned content that differs from the page as previously read"
+
+
+def _comparable(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def _interaction_guidance(verdict: str, detail: str) -> str:
+    """What the planner is told next to the page content, so a verdict can be acted on.
+
+    The upstream orchestrator re-ran the same plan forever after a step that did not take effect,
+    because nothing in its transcript distinguished the two cases
+    (`TheAgenticBrowser-main/core/orchestrator.py:606-615`). Naming the verdict where the model
+    reads the result is what turns it into a correction instead of a repeat.
+    """
+    if verdict == "CHANGED":
+        return (f"[verification: the page state changed after this action ({detail}). Treat the "
+                "content below as the post-action state.]")
+    return (f"[verification: {detail}. Do not report this action as done. Either try a different "
+            "action on this page, read a source that already states the value, or submit from what "
+            "has actually been retrieved — do not infer the value the action was meant to reveal.]")
 
 
 async def run_interact(state: ResearchState, web: WebTool, url: str, prompt: str, *,
@@ -298,7 +342,22 @@ async def run_interact(state: ResearchState, web: WebTool, url: str, prompt: str
         return ToolOutcome(name="interact", ok=False, content="", error=result.error)
 
     state.observe(target, source_type="interact")
-    return ToolOutcome(name="interact", ok=True, content=_format_interaction(result), observed_urls=[target])
+    verdict, detail = _verify_interaction(state.page_for(target), result.output)
+    state.note_interaction(InteractionRecord(
+        url=target,
+        prompt=prompt,
+        session_id=result.session_id or "unknown",
+        verdict=verdict,
+        detail=detail,
+    ))
+    if verdict == "CHANGED":
+        # The post-action state is now the page this run holds, so a second session on the same URL
+        # is compared against where the first one left it rather than against the original read.
+        state.remember_page(target, result.output)
+    body = _format_interaction(result)
+    return ToolOutcome(name="interact", ok=True,
+                       content=f"{_interaction_guidance(verdict, detail)}\n\n{body}",
+                       observed_urls=[target])
 
 
 async def execute_action(state: ResearchState, web: WebTool, action: dict, *,

@@ -85,6 +85,35 @@ class SourceObserved:
 
 
 @dataclass(slots=True)
+class InteractionRecord:
+    """One browser session this run drove, and whether the page visibly moved.
+
+    A session answering with text is not evidence that the action took effect — the provider
+    reports what the page said afterwards, not what the click did. So the run compares the session
+    output against the content it already held for that page and records the outcome, which is what
+    lets a later turn (and the reviewer) distinguish "the filter was applied" from "the page answered
+    the way it already was".
+    """
+
+    url: str
+    prompt: str
+    session_id: str
+    verdict: str  # CHANGED | UNCHANGED | UNKNOWN
+    detail: str
+    at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "url": self.url,
+            "prompt": self.prompt,
+            "sessionId": self.session_id,
+            "verdict": self.verdict,
+            "detail": self.detail,
+            "at": self.at,
+        }
+
+
+@dataclass(slots=True)
 class StepBudget:
     """Every bound the graph respects, checked on every path.
 
@@ -162,6 +191,13 @@ class ResearchState:
     dropped_candidates: list[dict[str, Any]] = field(default_factory=list)
     duplicates_collapsed: int = 0
     scraped_pages: set[str] = field(default_factory=set)
+    # The page text this run holds, keyed by page identity, so an interaction can be compared
+    # against the state it started from instead of taking the session's own answer on trust.
+    page_text: dict[str, str] = field(default_factory=dict)
+    interactions: list[InteractionRecord] = field(default_factory=list)
+    # Model turns per node. The loop bound says how far a run was allowed to go; this says where
+    # the turns actually went, which is the question a slow or expensive run raises.
+    turns: dict[str, int] = field(default_factory=dict)
     # The query plan the run actually used, recorded by the graph so metadata can show what
     # was dropped for duplication or budget.
     search_strategy: dict[str, Any] | None = None
@@ -176,6 +212,34 @@ class ResearchState:
                 max_scrapes=self.limits.max_scrapes_per_run,
                 max_interactions=self.limits.max_interactions_per_run,
             )
+
+    def remember_page(self, url: str, text: str) -> None:
+        """Hold the page content under its identity key, for interaction comparison.
+
+        Keyed by `canonical_key`, not the URL string: a page read at `?utm_source=x` and then driven
+        at `?utm_source=y` is the same page, and comparing it against nothing would report the
+        session's effect as unknown.
+        """
+        from app.curation.canonical import canonical_key
+
+        if not text.strip():
+            return
+        self.page_text[canonical_key(url)] = text
+
+    def page_for(self, url: str) -> str:
+        from app.curation.canonical import canonical_key
+
+        return self.page_text.get(canonical_key(url), "")
+
+    def note_interaction(self, record: InteractionRecord) -> None:
+        self.interactions.append(record)
+
+    def unverified_interactions(self) -> list[InteractionRecord]:
+        """Sessions whose effect this run cannot show, named rather than smoothed over."""
+        return [item for item in self.interactions if item.verdict != "CHANGED"]
+
+    def note_turn(self, node: str) -> None:
+        self.turns[node] = self.turns.get(node, 0) + 1
 
     def add(self, message: Message) -> None:
         self.messages.append(message)
