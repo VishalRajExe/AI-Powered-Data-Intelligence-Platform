@@ -1,5 +1,6 @@
 package ai.finalagent.config;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -16,12 +17,16 @@ class StartupRequirementsValidatorTest {
 
     /** The queue, switched off: the credential and topology rules below are checked regardless. */
     static FinalAgentProperties.Execution disabledExecution() {
-        return new FinalAgentProperties.Execution(false, "", 500, 4, 4, 8, 100, 300, 30, 3, 1, 120, 240_000);
+        return new FinalAgentProperties.Execution(false, 500, 4, 4, 8, 100, 300, 30, 3, 1, 120, 240_000);
     }
 
     /** The shipped defaults: none of these numbers is what a bounds test below is about. */
     static FinalAgentProperties.Export defaultExport() {
         return new FinalAgentProperties.Export("./var/exports", 500, 200_000);
+    }
+
+    static FinalAgentProperties.Auth defaultAuth() {
+        return new FinalAgentProperties.Auth(15, 14, 30, false, 5, 15);
     }
 
     private static FinalAgentProperties properties(String aiServiceKey, String dbPassword,
@@ -31,7 +36,7 @@ class StartupRequirementsValidatorTest {
                 new FinalAgentProperties.Cors(origins),
                 new FinalAgentProperties.Database("127.0.0.1", 3306, "finalagent_dev", dbUser, dbPassword),
                 new FinalAgentProperties.AiService(aiBaseUrl, aiServiceKey, 3000),
-                disabledExecution(), defaultExport());
+                disabledExecution(), defaultExport(), defaultAuth());
     }
 
     private static FinalAgentProperties valid() {
@@ -138,7 +143,7 @@ class StartupRequirementsValidatorTest {
                 badPort.cors(),
                 new FinalAgentProperties.Database("127.0.0.1", 0, "finalagent_dev", "finalagent",
                         "a-real-database-password"),
-                badPort.aiService(), disabledExecution(), defaultExport());
+                badPort.aiService(), disabledExecution(), defaultExport(), defaultAuth());
 
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(withBadPort))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
@@ -148,7 +153,7 @@ class StartupRequirementsValidatorTest {
                 badPort.cors(), badPort.database(),
                 new FinalAgentProperties.AiService("http://127.0.0.1:8000",
                         badPort.aiService().apiKey(), 10),
-                disabledExecution(), defaultExport());
+                disabledExecution(), defaultExport(), defaultAuth());
 
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(withBadTimeout))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
@@ -162,7 +167,7 @@ class StartupRequirementsValidatorTest {
                 base.cors(),
                 new FinalAgentProperties.Database("", 3306, "finalagent_dev", "finalagent",
                         "a-real-database-password"),
-                base.aiService(), disabledExecution(), defaultExport())))
+                base.aiService(), disabledExecution(), defaultExport(), defaultAuth())))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("MYSQL_HOST");
 
@@ -170,7 +175,7 @@ class StartupRequirementsValidatorTest {
                 base.cors(),
                 new FinalAgentProperties.Database("127.0.0.1", 3306, "", "finalagent",
                         "a-real-database-password"),
-                base.aiService(), disabledExecution(), defaultExport())))
+                base.aiService(), disabledExecution(), defaultExport(), defaultAuth())))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("MYSQL_DATABASE");
     }
@@ -189,21 +194,21 @@ class StartupRequirementsValidatorTest {
     private static FinalAgentProperties withExecution(FinalAgentProperties.Execution execution) {
         FinalAgentProperties base = valid();
         return new FinalAgentProperties(base.cors(), base.database(), base.aiService(), execution,
-                defaultExport());
+                defaultExport(), defaultAuth());
     }
 
     private static FinalAgentProperties withExport(FinalAgentProperties.Export export) {
         FinalAgentProperties base = valid();
         return new FinalAgentProperties(base.cors(), base.database(), base.aiService(),
-                disabledExecution(), export);
+                disabledExecution(), export, defaultAuth());
     }
 
-    private static FinalAgentProperties.Execution execution(String workspaceId, int pollInterval,
+    private static FinalAgentProperties.Execution execution(int pollInterval,
                                                             int batch, int core, int max, int queue,
                                                             int lease, int heartbeat, int attempts,
                                                             double backoffBase, double backoffMax,
                                                             int stepTimeout) {
-        return new FinalAgentProperties.Execution(true, workspaceId, pollInterval, batch, core, max,
+        return new FinalAgentProperties.Execution(true, pollInterval, batch, core, max,
                 queue, lease, heartbeat, attempts, backoffBase, backoffMax, stepTimeout);
     }
 
@@ -215,7 +220,7 @@ class StartupRequirementsValidatorTest {
      * lease, which this class rightly refused.
      */
     private static FinalAgentProperties.Execution sound() {
-        return execution(WORKSPACE, 500, 4, 4, 8, 100, 300, 30, 3, 1, 120, 240_000);
+        return execution(500, 4, 4, 8, 100, 300, 30, 3, 1, 120, 240_000);
     }
 
     @Test
@@ -224,14 +229,22 @@ class StartupRequirementsValidatorTest {
                 .doesNotThrowAnyException();
     }
 
+    /**
+     * The queue has no tenant to configure, and this is the test that keeps it that way. The property
+     * existed while {@code FINALAGENT_WORKSPACE_ID} did; deleting the rule along with the placeholder
+     * is worth asserting structurally, because a record component added back "for compatibility" would
+     * silently resurrect a single-tenant default that every service then reads.
+     */
     @Test
-    void anEnabledQueueWithNoWorkspaceIdIsRefused() {
-        // Not "default to some workspace": a run whose tenant is guessed is the tenancy bug this
-        // project was rebuilt to remove.
-        assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution("", 500, 4, 4, 8, 100, 300, 30, 3, 1, 120, 240_000))))
-                .isInstanceOf(MissingRequiredConfigurationException.class)
-                .hasMessageContaining("FINALAGENT_WORKSPACE_ID");
+    void theQueueConfigurationHasNoWorkspaceToDefault() {
+        assertThat(java.util.Arrays.stream(FinalAgentProperties.Execution.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName).toList())
+                .doesNotContain("workspaceId")
+                .contains("enabled", "leaseSeconds", "stepTimeoutMs");
+        assertThat(java.util.Arrays.stream(FinalAgentProperties.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName).toList())
+                .contains("auth")
+                .noneMatch(name -> name.toLowerCase().contains("jwt"));
     }
 
     @Test
@@ -239,7 +252,7 @@ class StartupRequirementsValidatorTest {
         // Lease 30s, step 60s: the step is still running when another worker legitimately claims it,
         // and two workers then produce two answers for one step.
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution(WORKSPACE, 500, 4, 4, 8, 100, 30, 10, 3, 1, 120, 60_000))))
+                withExecution(execution(500, 4, 4, 8, 100, 30, 10, 3, 1, 120, 60_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("WORKFLOW_STEP_TIMEOUT_MS must be shorter than");
     }
@@ -247,12 +260,12 @@ class StartupRequirementsValidatorTest {
     @Test
     void aHeartbeatThatIsNotShorterThanTheLeaseRenewsNothing() {
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution(WORKSPACE, 500, 4, 4, 8, 100, 30, 30, 3, 1, 120, 20_000))))
+                withExecution(execution(500, 4, 4, 8, 100, 30, 30, 3, 1, 120, 20_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("WORKFLOW_HEARTBEAT_SECONDS");
 
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution(WORKSPACE, 500, 4, 4, 8, 100, 30, 2, 3, 1, 120, 20_000))))
+                withExecution(execution(500, 4, 4, 8, 100, 30, 2, 3, 1, 120, 20_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("WORKFLOW_HEARTBEAT_SECONDS");
     }
@@ -260,7 +273,7 @@ class StartupRequirementsValidatorTest {
     @Test
     void aPollIntervalFastEnoughToScanTheTableEveryFewMillisecondsIsRefused() {
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution(WORKSPACE, 20, 4, 4, 8, 100, 300, 30, 3, 1, 120, 240_000))))
+                withExecution(execution(20, 4, 4, 8, 100, 300, 30, 3, 1, 120, 240_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("WORKFLOW_POLL_INTERVAL_MS");
     }
@@ -268,12 +281,12 @@ class StartupRequirementsValidatorTest {
     @Test
     void thePoolIsBoundedAndTheMaxCannotBeSmallerThanTheCore() {
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution(WORKSPACE, 500, 4, 8, 4, 100, 90, 30, 3, 1, 120, 240_000))))
+                withExecution(execution(500, 4, 8, 4, 100, 90, 30, 3, 1, 120, 240_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("WORKFLOW_MAX_POOL_SIZE");
 
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution(WORKSPACE, 500, 4, 4, 200, 100, 90, 30, 3, 1, 120, 240_000))))
+                withExecution(execution(500, 4, 4, 200, 100, 90, 30, 3, 1, 120, 240_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("WORKFLOW_MAX_POOL_SIZE");
     }
@@ -281,12 +294,12 @@ class StartupRequirementsValidatorTest {
     @Test
     void anUnboundedRetryBudgetOrAnInvertedBackoffIsRefused() {
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution(WORKSPACE, 500, 4, 4, 8, 100, 300, 30, 0, 1, 120, 240_000))))
+                withExecution(execution(500, 4, 4, 8, 100, 300, 30, 0, 1, 120, 240_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("WORKFLOW_MAX_ATTEMPTS");
 
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution(WORKSPACE, 500, 4, 4, 8, 100, 300, 30, 3, 120, 1, 240_000))))
+                withExecution(execution(500, 4, 4, 8, 100, 300, 30, 3, 120, 1, 240_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("WORKFLOW_BACKOFF_MAX_SECONDS");
     }
@@ -294,7 +307,7 @@ class StartupRequirementsValidatorTest {
     @Test
     void aBatchSizeOfZeroWouldClaimNothingAndOneHundredWouldClaimEverything() {
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution(WORKSPACE, 500, 0, 4, 8, 100, 300, 30, 3, 1, 120, 240_000))))
+                withExecution(execution(500, 0, 4, 8, 100, 300, 30, 3, 1, 120, 240_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
                 .hasMessageContaining("WORKFLOW_BATCH_SIZE");
     }
@@ -302,9 +315,8 @@ class StartupRequirementsValidatorTest {
     @Test
     void everyQueueProblemIsReportedAtOnceNotOnePerRestart() {
         assertThatThrownBy(() -> StartupRequirementsValidator.validate(
-                withExecution(execution("", 20, 0, 8, 4, 100, 90, 30, 99, 1, 120, 240_000))))
+                withExecution(execution(20, 0, 8, 4, 100, 90, 30, 99, 1, 120, 240_000))))
                 .isInstanceOf(MissingRequiredConfigurationException.class)
-                .hasMessageContaining("FINALAGENT_WORKSPACE_ID")
                 .hasMessageContaining("WORKFLOW_POLL_INTERVAL_MS")
                 .hasMessageContaining("WORKFLOW_BATCH_SIZE")
                 .hasMessageContaining("WORKFLOW_MAX_ATTEMPTS");
@@ -313,7 +325,7 @@ class StartupRequirementsValidatorTest {
     @Test
     void aDisabledQueueIsNotHeldToTheBoundsNothingReads() {
         assertThatCode(() -> StartupRequirementsValidator.validate(
-                withExecution(new FinalAgentProperties.Execution(false, "", 20, 0, 8, 4, 100, 90,
+                withExecution(new FinalAgentProperties.Execution(false, 20, 0, 8, 4, 100, 90,
                         30, 99, 1, 120, 240_000))))
                 .doesNotThrowAnyException();
     }
@@ -345,5 +357,69 @@ class StartupRequirementsValidatorTest {
 
         assertThatCode(() -> StartupRequirementsValidator.validate(valid()))
                 .doesNotThrowAnyException();
+    }
+
+    // ---------------------------------------------------------------- the session's bounds
+
+    private static FinalAgentProperties withAuth(FinalAgentProperties.Auth auth) {
+        FinalAgentProperties base = valid();
+        return new FinalAgentProperties(base.cors(), base.database(), base.aiService(),
+                disabledExecution(), defaultExport(), auth);
+    }
+
+    @Test
+    void anAccessWindowMeasuredInHoursIsALogoutTheUserCannotSee() {
+        assertThatThrownBy(() -> StartupRequirementsValidator.validate(
+                withAuth(new FinalAgentProperties.Auth(600, 14, 30, false, 5, 15))))
+                .isInstanceOf(MissingRequiredConfigurationException.class)
+                .hasMessageContaining("AUTH_ACCESS_TOKEN_TTL_MINUTES");
+
+        assertThatThrownBy(() -> StartupRequirementsValidator.validate(
+                withAuth(new FinalAgentProperties.Auth(0, 14, 30, false, 5, 15))))
+                .isInstanceOf(MissingRequiredConfigurationException.class)
+                .hasMessageContaining("AUTH_ACCESS_TOKEN_TTL_MINUTES");
+    }
+
+    /**
+     * The rule that is easiest to write backwards. Rotation moves the short window and must not move
+     * the ceiling, so a ceiling already behind the renewability window enforces nothing: a session
+     * would be renewed against a deadline that had passed.
+     */
+    @Test
+    void anAbsoluteCeilingBehindTheRenewabilityWindowEnforcesNothing() {
+        assertThatThrownBy(() -> StartupRequirementsValidator.validate(
+                withAuth(new FinalAgentProperties.Auth(15, 30, 7, false, 5, 15))))
+                .isInstanceOf(MissingRequiredConfigurationException.class)
+                .hasMessageContaining("AUTH_ABSOLUTE_TTL_DAYS");
+    }
+
+    @Test
+    void aLockoutNobodyCanTriggerOrNobodyCanEscapeIsRefused() {
+        assertThatThrownBy(() -> StartupRequirementsValidator.validate(
+                withAuth(new FinalAgentProperties.Auth(15, 14, 30, false, 1, 15))))
+                .isInstanceOf(MissingRequiredConfigurationException.class)
+                .hasMessageContaining("AUTH_MAX_FAILED_LOGINS");
+
+        assertThatThrownBy(() -> StartupRequirementsValidator.validate(
+                withAuth(new FinalAgentProperties.Auth(15, 14, 30, false, 5, 0))))
+                .isInstanceOf(MissingRequiredConfigurationException.class)
+                .hasMessageContaining("AUTH_LOCKOUT_MINUTES");
+    }
+
+    /**
+     * The one assertion here about a secret that does not exist. The brief's rule was that the
+     * frontend never receive a JWT secret; this build has no signing key at all, so the strongest
+     * reading of that rule is structural — there is nothing in the configuration to leak, and a
+     * future edit cannot add one without this test naming it.
+     */
+    @Test
+    void thereIsNoSigningSecretForAnythingToReceive() {
+        assertThat(java.util.Arrays.stream(FinalAgentProperties.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName).toList())
+                .contains("auth")
+                .noneMatch(name -> name.toLowerCase().contains("jwt"));
+        assertThat(java.util.Arrays.stream(FinalAgentProperties.Auth.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName).toList())
+                .noneMatch(name -> name.toLowerCase().contains("secret"));
     }
 }

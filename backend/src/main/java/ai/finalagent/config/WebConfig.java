@@ -31,8 +31,14 @@ public class WebConfig implements WebMvcConfigurer {
             registry.addMapping(path)
                     .allowedOrigins(origins)
                     .allowedMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
-                    .allowedHeaders("Authorization", "Content-Type", "X-Workspace-Id", "Last-Event-ID")
-                    .exposedHeaders("Retry-After", "X-Request-Id")
+                    // No `X-Workspace-Id`, and no header at all that could carry a tenant: the
+                    // previous project accepted a client-supplied workspaceId on routes whose auth
+                    // middleware was optional, which is how any caller could read any workspace
+                    // (docs/audit/00-FORENSIC-AUDIT.md §5 item 1). Allowing such a header here would
+                    // leave the door open for that mistake to be made again. `X-Requested-With` is the
+                    // proof-of-origination a mutating request has to carry — see SecurityConfig.
+                    .allowedHeaders("Content-Type", "X-Requested-With", "Last-Event-ID")
+                    .exposedHeaders("Retry-After", "X-Request-Id", "X-Content-Sha256")
                     .allowCredentials(true)
                     .maxAge(3600);
         }

@@ -26,6 +26,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import ai.finalagent.aiclient.AiServiceClient;
+import ai.finalagent.support.TestPrincipal;
 import ai.finalagent.aiclient.dto.ResearchRequest;
 import ai.finalagent.aiclient.dto.ResearchResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -97,7 +98,7 @@ class PipelineControllerTest {
     void parseReturnsTheValidatedContractWithoutCollecting() throws Exception {
         when(aiServiceClient.analyzeRequirement(PROMPT)).thenReturn(analysis(channelsRequirement(), channelSchema()));
 
-        mockMvc.perform(post("/api/v1/requirements/parse")
+        mockMvc.perform(post("/api/v1/requirements/parse").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON).content(promptBody()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requirement.entityType", is("youtube_channel")))
@@ -118,7 +119,7 @@ class PipelineControllerTest {
                         List.of(), List.of(), 0, List.of(), List.of(), List.of()),
                 null));
 
-        mockMvc.perform(post("/api/v1/research/from-prompt")
+        mockMvc.perform(post("/api/v1/research/from-prompt").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON).content(promptBody()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status", is("COMPLETED")))
@@ -137,7 +138,7 @@ class PipelineControllerTest {
                 List.of(), List.of("which country?"), List.of());
         when(aiServiceClient.analyzeRequirement(PROMPT)).thenReturn(analysis(unclear, channelSchema()));
 
-        mockMvc.perform(post("/api/v1/research/from-prompt")
+        mockMvc.perform(post("/api/v1/research/from-prompt").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON).content(promptBody()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status", is("NEEDS_CLARIFICATION")))
@@ -163,7 +164,7 @@ class PipelineControllerTest {
                 List.of(), List.of(), List.of());
         when(aiServiceClient.analyzeRequirement(PROMPT)).thenReturn(analysis(broken, channelSchema()));
 
-        mockMvc.perform(post("/api/v1/research/from-prompt")
+        mockMvc.perform(post("/api/v1/research/from-prompt").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON).content(promptBody()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code", is("INVALID_REQUIREMENT")))
@@ -177,7 +178,7 @@ class PipelineControllerTest {
         var empty = Map.of("type", "object", "properties", Map.of(), "additionalProperties", false);
         when(aiServiceClient.analyzeRequirement(PROMPT)).thenReturn(analysis(channelsRequirement(), empty));
 
-        mockMvc.perform(post("/api/v1/research/from-prompt")
+        mockMvc.perform(post("/api/v1/research/from-prompt").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON).content(promptBody()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code", is("INVALID_EXTRACTION_SCHEMA")));
@@ -187,7 +188,7 @@ class PipelineControllerTest {
 
     @Test
     void aVaguePromptNeverReachesTheAiService() throws Exception {
-        mockMvc.perform(post("/api/v1/research/from-prompt")
+        mockMvc.perform(post("/api/v1/research/from-prompt").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON).content("{\"prompt\":\"jobs\"}"))
                 .andExpect(status().isBadRequest());
 

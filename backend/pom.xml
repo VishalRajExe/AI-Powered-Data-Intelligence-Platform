@@ -30,6 +30,14 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-validation</artifactId>
     </dependency>
+    <!-- Authentication, not authorisation-by-convention. Only two pieces of it are used: the filter
+         chain in SecurityConfig (session cookie, CSRF, the role ladder) and BCryptPasswordEncoder.
+         No form login, no http basic, no OAuth client — each of those would add an endpoint this API
+         does not have. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-actuator</artifactId>
@@ -66,6 +74,15 @@
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- `authentication(...)` and `csrf()`. The non-database controller suites need a principal on
+         the request without a MySQL session to stand behind it; hand-rolling that would mean either a
+         fake SessionRepository in the test context (a second implementation of the thing under test)
+         or a real database in suites that are about something else. -->
+    <dependency>
+      <groupId>org.springframework.security</groupId>
+      <artifactId>spring-security-test</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>

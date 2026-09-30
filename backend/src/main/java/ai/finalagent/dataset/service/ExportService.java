@@ -22,7 +22,7 @@ import ai.finalagent.dataset.repository.ExportRepository;
 import ai.finalagent.workflow.domain.Records.Job;
 import ai.finalagent.workflow.repository.JobRepository;
 import ai.finalagent.workflow.support.Json;
-import ai.finalagent.workflow.support.Principals;
+
 
 /**
  * Requesting, reading and delivering exports.
@@ -82,7 +82,7 @@ public class ExportService {
         String jobId = UUID.randomUUID().toString();
         String name = datasetId + "-" + exportId.substring(0, 8) + "." + chosen.extension();
         exports.insert(new DatasetRows.Export(exportId, workspace, datasetId, jobId, dataset.runId(),
-                Principals.UNAUTHENTICATED, chosen.name(),
+                currentWorkspace.actor(), chosen.name(),
                 Json.write(scope.asScope()), "QUEUED", totalRows, 0, 0, name, null, null, null, null,
                 null, null, null, null));
         if (!jobs.insertExportJob(jobId, workspace, dataset.runId(),

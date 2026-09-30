@@ -45,12 +45,14 @@ import ai.finalagent.workflow.domain.JobStatus;
 import ai.finalagent.workflow.domain.Records.Job;
 import ai.finalagent.workflow.domain.Records.Run;
 import ai.finalagent.workflow.domain.Records.Step;
+import ai.finalagent.support.TestPrincipal;
 import ai.finalagent.workflow.domain.RunStatus;
 import ai.finalagent.workflow.repository.ActivityRepository;
 import ai.finalagent.workflow.repository.JobRepository;
 import ai.finalagent.workflow.repository.RunRepository;
 import ai.finalagent.workflow.repository.StepRepository;
 import ai.finalagent.workflow.repository.WorkflowRepository;
+import ai.finalagent.workflow.support.Principals;
 import ai.finalagent.workflow.service.WorkflowService;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -110,17 +112,37 @@ class WorkflowRunLifecycleMySqlTest {
     @BeforeEach
     void startFromNothingWithTheLoopUnderMyControl() {
         emptyWorkspace();
+        principal = TestPrincipal.bind();
         worker.start();
     }
 
     @AfterEach
-    void stopAndClean() {
+    void stopAndClean() throws Exception {
         worker.stop();
+        principal.close();
         emptyWorkspace();
     }
 
+    /**
+     * The tenant and the actor these fixtures name, made real.
+     *
+     * <p>{@code V5} gave {@code workspace_id} and {@code created_by_id} their foreign keys, so a
+     * fixture that inserts a workflow now has to point at a workspace and a person that exist — which
+     * is the constraint doing its job rather than an obstacle in the way of the test.
+     */
+    private AutoCloseable principal;
+
     private void emptyWorkspace() {
         worker.stop();
+        TestPrincipal.provision(jdbc, WORKSPACE, Principals.SYSTEM);
+        jdbc.update("DELETE FROM dataset_row_sources WHERE workspace_id = ?", WORKSPACE);
+        jdbc.update("DELETE FROM dataset_field_evidence WHERE workspace_id = ?", WORKSPACE);
+        jdbc.update("DELETE FROM dataset_conflicts WHERE workspace_id = ?", WORKSPACE);
+        jdbc.update("DELETE FROM dataset_sources WHERE workspace_id = ?", WORKSPACE);
+        jdbc.update("DELETE FROM dataset_columns WHERE workspace_id = ?", WORKSPACE);
+        jdbc.update("DELETE FROM dataset_rows WHERE workspace_id = ?", WORKSPACE);
+        jdbc.update("DELETE FROM export_jobs WHERE workspace_id = ?", WORKSPACE);
+        jdbc.update("DELETE FROM datasets WHERE workspace_id = ?", WORKSPACE);
         jdbc.update("DELETE FROM activity_events WHERE workspace_id = ?", WORKSPACE);
         jdbc.update("DELETE FROM workflows WHERE workspace_id = ?", WORKSPACE);
     }
@@ -580,7 +602,7 @@ class WorkflowRunLifecycleMySqlTest {
         when(aiServiceClient.analyzeRequirement(PROMPT)).thenReturn(analysis(2));
         collecting(2);
 
-        String created = mockMvc.perform(post("/api/v1/workflows")
+        String created = mockMvc.perform(post("/api/v1/workflows").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
                                 Map.of("prompt", PROMPT, "name", "via http"))))
@@ -589,11 +611,11 @@ class WorkflowRunLifecycleMySqlTest {
                 .andReturn().getResponse().getContentAsString();
         String workflowId = objectMapper.readTree(created).path("workflow").path("id").asText();
 
-        mockMvc.perform(post("/api/v1/workflows/" + workflowId + "/plan"))
+        mockMvc.perform(post("/api/v1/workflows/" + workflowId + "/plan").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.plan.steps").exists());
 
-        String startBody = mockMvc.perform(post("/api/v1/workflows/" + workflowId + "/runs"))
+        String startBody = mockMvc.perform(post("/api/v1/workflows/" + workflowId + "/runs").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest"))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.run.status").value("PENDING"))
                 .andReturn().getResponse().getContentAsString();
@@ -601,7 +623,7 @@ class WorkflowRunLifecycleMySqlTest {
 
         driveToTerminal(runId, Duration.ofSeconds(60));
 
-        mockMvc.perform(get("/api/v1/workflows/runs/" + runId))
+        mockMvc.perform(get("/api/v1/workflows/runs/" + runId).with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.run.status").value(RunStatus.COMPLETED.name()))
                 .andExpect(jsonPath("$.run.progress").value(100))
@@ -609,7 +631,7 @@ class WorkflowRunLifecycleMySqlTest {
                 .andExpect(jsonPath("$.steps", org.hamcrest.Matchers.hasSize(4)))
                 .andExpect(jsonPath("$.jobs[0].payload").doesNotExist());
 
-        mockMvc.perform(get("/api/v1/workflows/runs"))
+        mockMvc.perform(get("/api/v1/workflows/runs").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.runs[0].id").value(runId))
                 .andExpect(jsonPath("$.worker.id").exists());
@@ -623,7 +645,7 @@ class WorkflowRunLifecycleMySqlTest {
                 .hasMessageContaining("no such workflow");
 
         try {
-            mockMvc.perform(post("/api/v1/workflows/" + missing + "/runs"))
+            mockMvc.perform(post("/api/v1/workflows/" + missing + "/runs").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest"))
                     .andExpect(status().isNotFound())
                     .andExpect(jsonPath("$.error.code").value("WORKFLOW_NOT_FOUND"));
         } catch (Exception e) {
@@ -682,15 +704,19 @@ class WorkflowRunLifecycleMySqlTest {
 
         // One queued job, nothing claimed yet: the loop is driven by hand in this class.
         int pending = jobs.countPending();
-        mockMvc.perform(get("/api/v1/ready"))
+        mockMvc.perform(get("/api/v1/ready").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.components.workflowQueue.status").value("UP"))
                 .andExpect(jsonPath("$.components.workflowQueue.details.pendingJobs")
                         .value(pending))
                 .andExpect(jsonPath("$.components.workflowQueue.details.runningJobs").value(0))
                 .andExpect(jsonPath("$.components.workflowQueue.details.activeRuns").value(1))
+                // There is no `workspaceIdConfigured` any more, and this assertion is what keeps it
+                // from coming back: the report used to answer "is a tenant configured?", which was a
+                // question about a placeholder. A tenant is now whatever the caller's session says, and
+                // a readiness probe cannot have one.
                 .andExpect(jsonPath("$.components.workflowQueue.details.workspaceIdConfigured")
-                        .value("present"));
+                        .doesNotExist());
     }
 
     @Test

@@ -47,6 +47,7 @@ import ai.finalagent.workflow.execution.WorkflowJobExecutor;
 import ai.finalagent.workflow.execution.WorkflowWorker;
 import ai.finalagent.workflow.repository.JobRepository;
 import ai.finalagent.workflow.repository.StepRepository;
+import ai.finalagent.support.TestPrincipal;
 import ai.finalagent.workflow.support.Json;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -103,9 +104,27 @@ class ExportProgressMySqlTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /**
+     * The suites in this file call services directly as well as through MockMvc, and a direct call
+     * has no request to carry a session. Bound here so {@code Workspace.current()} resolves the same
+     * tenant the MockMvc post-processor hands to the filter chain — one principal, both paths.
+     */
+    private AutoCloseable principal;
+
+    @BeforeEach
+    void beSomebody() {
+        principal = TestPrincipal.bind();
+    }
+
+    @AfterEach
+    void stopBeingSomebody() throws Exception {
+        principal.close();
+    }
+
     @BeforeEach
     @AfterEach
     void startAndEndWithNothing() throws IOException {
+        TestPrincipal.provision(jdbc, WORKSPACE, NIL);
         jdbc.update("DELETE FROM export_jobs WHERE workspace_id = ?", WORKSPACE);
         jdbc.update("DELETE FROM workflow_jobs WHERE workspace_id = ?", WORKSPACE);
         jdbc.update("DELETE FROM dataset_row_sources WHERE workspace_id = ?", WORKSPACE);
@@ -189,7 +208,7 @@ class ExportProgressMySqlTest {
                 .containsEntry("rowsWritten", 3);
 
         DatasetRows.Export finished = exports.find(WORKSPACE, export.id()).orElseThrow();
-        MvcResult result = mockMvc.perform(get("/api/v1/exports/" + export.id() + "/download"))
+        MvcResult result = mockMvc.perform(get("/api/v1/exports/" + export.id() + "/download").with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andReturn();
         Map<String, Object> doc = mapper.readValue(result.getResponse().getContentAsString(),
@@ -213,6 +232,8 @@ class ExportProgressMySqlTest {
         DatasetRows.Export export = service.request(datasetId, "XLSX", everything());
         Path target = runner.fileFor(export);
 
+        // The checkpoint is the cancellation channel: the runner stops because its own advance refused
+        // to move a record someone had cancelled, not because this test held a flag.
         // The checkpoint is the cancellation channel: the runner stops because its own advance refused
         // to move a record someone had cancelled, not because this test held a flag.
         BooleanSupplier cancelAfterFourRows = () -> {
@@ -343,7 +364,7 @@ class ExportProgressMySqlTest {
         assertThat(finished.writtenRows()).isEqualTo(3);
         assertThat(finished.progressPercent()).isEqualTo(100);
 
-        MvcResult result = mockMvc.perform(get("/api/v1/exports/" + export.id() + "/download"))
+        MvcResult result = mockMvc.perform(get("/api/v1/exports/" + export.id() + "/download").with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andReturn();
         Map<String, Object> doc = mapper.readValue(result.getResponse().getContentAsString(),
@@ -370,15 +391,15 @@ class ExportProgressMySqlTest {
         String datasetId = dataset(2);
         DatasetRows.Export queued = service.request(datasetId, "CSV", everything());
 
-        mockMvc.perform(get("/api/v1/exports/" + queued.id() + "/download"))
+        mockMvc.perform(get("/api/v1/exports/" + queued.id() + "/download").with(TestPrincipal.principal()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("EXPORT_NOT_COMPLETED"));
 
-        mockMvc.perform(get("/api/v1/exports/someone-elses-export"))
+        mockMvc.perform(get("/api/v1/exports/someone-elses-export").with(TestPrincipal.principal()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("EXPORT_NOT_FOUND"));
 
-        MvcResult listing = mockMvc.perform(get("/api/v1/exports?datasetId=" + datasetId))
+        MvcResult listing = mockMvc.perform(get("/api/v1/exports?datasetId=" + datasetId).with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andReturn();
         assertThat(listing.getResponse().getContentAsString()).contains(queued.id());
@@ -447,8 +468,8 @@ class ExportProgressMySqlTest {
     }
 
     private Map<String, Object> getJson(String url) throws Exception {
-        return mapper.readValue(mockMvc.perform(get(url)).andReturn().getResponse()
-                .getContentAsString(), Map.class);
+        return mapper.readValue(mockMvc.perform(get(url).with(TestPrincipal.principal())).andReturn()
+                .getResponse().getContentAsString(), Map.class);
     }
 
     private static Object first(Object listing) {

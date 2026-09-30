@@ -23,7 +23,8 @@ public record FinalAgentProperties(
         @NotNull Database database,
         @NotNull AiService aiService,
         @NotNull Execution execution,
-        @NotNull Export export
+        @NotNull Export export,
+        @NotNull Auth auth
 ) {
 
     public record Cors(List<String> allowedOrigins) {
@@ -50,10 +51,15 @@ public record FinalAgentProperties(
      * eventually exhausts its own connection pool: the poll loop, the worker pool and the queue
      * in front of it are each capped, and the lease is what makes a dead worker recoverable
      * instead of permanently stuck.
+     *
+     * <p>There is no workspace here, deliberately. A configured tenant is the placeholder this
+     * project's audit named as the thing that "must not survive into a shared deployment"
+     * ({@code 00-FORENSIC-AUDIT.md} §5 item 2): with one it is either a single-tenant lie or a
+     * default that silently decides who a request belongs to. The tenant comes from the
+     * authenticated session, and the queue carries it on every job row it already had.
      */
     public record Execution(
             boolean enabled,
-            String workspaceId,
             int pollIntervalMs,
             int batchSize,
             int corePoolSize,
@@ -83,6 +89,35 @@ public record FinalAgentProperties(
             String dir,
             int chunkRows,
             int maxRows
+    ) {
+    }
+
+    /**
+     * Sessions and passwords.
+     *
+     * <p>No secret is bound here, which is the point: sessions are opaque random values compared by
+     * their SHA-256 in MySQL, so there is no signing key for the frontend to be given by mistake. The
+     * audit's requirement that the browser never receive a JWT secret
+     * ({@code 00-FORENSIC-AUDIT.md} §5 item 2) cannot be broken by a future edit against a scheme that
+     * has none.
+     *
+     * @param accessTokenTtlMinutes how long a presented session survives without a refresh
+     * @param refreshTtlDays how long a session may be renewed for
+     * @param absoluteTtlDays the ceiling renewal cannot pass, so a stolen refresh token buys time
+     *                        forever in the scheme this replaces but expires here regardless
+     * @param cookieSecure the {@code Secure} flag. Off by default because the stack runs on http
+     *                     locally, and a deployment that terminates TLS must turn it on — a session
+     *                     cookie sent over plain http is the credential
+     * @param maxFailedLogins attempts before an account is locked
+     * @param lockoutMinutes how long that lock holds, measured on the database clock
+     */
+    public record Auth(
+            int accessTokenTtlMinutes,
+            int refreshTtlDays,
+            int absoluteTtlDays,
+            boolean cookieSecure,
+            int maxFailedLogins,
+            int lockoutMinutes
     ) {
     }
 }

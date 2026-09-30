@@ -67,7 +67,6 @@ public class ReadinessService {
      */
     private ComponentStatus checkWorkflowQueue() {
         Map<String, Object> details = new LinkedHashMap<>();
-        details.put("workspaceIdConfigured", present(properties.execution().workspaceId()));
         try {
             details.put("pendingJobs", jobRepository.countPending());
             details.put("runningJobs", jobRepository.countRunning());

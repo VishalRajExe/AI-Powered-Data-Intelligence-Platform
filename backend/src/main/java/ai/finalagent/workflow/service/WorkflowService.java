@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import ai.finalagent.aiclient.AiServiceClient;
 import ai.finalagent.config.FinalAgentProperties;
+import ai.finalagent.config.Workspace;
 import ai.finalagent.requirement.RequirementAnalysisDto;
 import ai.finalagent.requirement.RequirementValidator;
 import ai.finalagent.research.ExtractionSchemaValidator;
@@ -34,12 +35,14 @@ import ai.finalagent.workflow.support.Principals;
  *
  * <p>Two rules shape every method here.
  *
- * <p><b>Tenancy is server-side.</b> The workspace comes from configuration, never from the
- * request. The previous project read {@code workspaceId} off the request on routes whose auth
- * middleware was optional, so any caller who knew a UUID could read another tenant's data
- * ({@code docs/audit/00-FORENSIC-AUDIT.md} §5 item 1). Until the authentication phase exists this
- * service is single-workspace by construction, and {@link Principals#UNAUTHENTICATED} is written as
- * the actor so no row pretends to know who asked.
+ * <p><b>Tenancy comes from the session.</b> {@link #workspace()} reads the authenticated principal and
+ * nothing else — not the request, and no longer a configured default. The previous project read
+ * {@code workspaceId} off the request on routes whose auth middleware was optional, so any caller who
+ * knew a UUID could read another tenant's data
+ * ({@code docs/audit/00-FORENSIC-AUDIT.md} §5 item 1); a configured single tenant was the stopgap
+ * that replaced it, and it is what {@code V5__baseline_identity.sql} retired. {@link #actor()} writes
+ * the signed-in person into every row this service creates, so a workflow can finally answer who asked
+ * for it.
  *
  * <p><b>An AI answer is a proposal.</b> Planning calls the AI service and then fails the workflow
  * if Java's own validation of the requirement or the extraction schema rejects it. Nothing is
@@ -56,12 +59,12 @@ public class WorkflowService {
     private final ActivityRepository activity;
     private final AiServiceClient aiServiceClient;
     private final WorkflowJobExecutor executor;
-    private final FinalAgentProperties properties;
+    private final Workspace workspaces;
 
     public WorkflowService(WorkflowRepository workflows, RunRepository runs, StepRepository steps,
                            JobRepository jobs, ActivityRepository activity,
                            AiServiceClient aiServiceClient, WorkflowJobExecutor executor,
-                           FinalAgentProperties properties) {
+                           Workspace workspaces) {
         this.workflows = workflows;
         this.runs = runs;
         this.steps = steps;
@@ -69,25 +72,32 @@ public class WorkflowService {
         this.activity = activity;
         this.aiServiceClient = aiServiceClient;
         this.executor = executor;
-        this.properties = properties;
+        this.workspaces = workspaces;
     }
 
+    /**
+     * The tenant this request belongs to, from the one component that resolves it.
+     *
+     * <p>This used to read {@code FINALAGENT_WORKSPACE_ID} here and in {@code DatasetService} and in
+     * two more places, which is the shape of the bug: a security rule copied per service drifts, and a
+     * configured tenant copied four times looks like a design rather than like a placeholder.
+     */
     private String workspace() {
-        String configured = properties.execution().workspaceId();
-        if (configured == null || configured.isBlank()) {
-            throw new IllegalStateException("FINALAGENT_WORKSPACE_ID is not configured; this "
-                    + "service does not accept a workspace id from a request");
-        }
-        return configured;
+        return workspaces.current();
+    }
+
+    /** Who did it, for the columns that record an author rather than a scope. */
+    private String actor() {
+        return workspaces.actor();
     }
 
     @Transactional
     public Workflow create(String name, String prompt) {
         String id = UUID.randomUUID().toString();
         String trimmed = prompt.strip();
-        workflows.insert(id, workspace(), Principals.UNAUTHENTICATED,
+        workflows.insert(id, workspace(), actor(),
                 name == null || name.isBlank() ? abbreviate(trimmed) : name.strip(), trimmed);
-        activity.record(workspace(), null, Principals.UNAUTHENTICATED, "workflow.created",
+        activity.record(workspace(), null, actor(), "workflow.created",
                 "workflow", id, "workflow created from a natural-language request",
                 Map.of("promptLength", trimmed.length()));
         return workflows.findById(id).orElseThrow();
@@ -139,10 +149,10 @@ public class WorkflowService {
         workflows.insertPlan(new Plan(planId, workflow.workspaceId(), workflowId, version,
                 planned.objective(), planned.requirementJson(), planned.extractionSchemaJson(),
                 planned.stepsJson(), planned.searchStrategyJson(), planned.sourcePolicyJson(),
-                planned.completionCriteriaJson(), planned.planHash(), Principals.UNAUTHENTICATED,
+                planned.completionCriteriaJson(), planned.planHash(), actor(),
                 java.time.Instant.now()));
         workflows.markPlanned(workflowId);
-        activity.record(workflow.workspaceId(), null, Principals.UNAUTHENTICATED, "workflow.planned",
+        activity.record(workflow.workspaceId(), null, actor(), "workflow.planned",
                 "workflow_plan", planId, "plan v" + version + " stored; collection has not started",
                 Map.of("steps", planned.steps().size(), "planHash", planned.planHash()));
         return workflows.findPlan(planId).orElseThrow();
@@ -185,7 +195,7 @@ public class WorkflowService {
 
         Run run = runs.findById(runId).orElseThrow();
         List<String> queued = executor.scheduleReadySteps(run, plan);
-        activity.record(run.workspaceId(), runId, Principals.UNAUTHENTICATED, "workflow.run.started",
+        activity.record(run.workspaceId(), runId, actor(), "workflow.run.started",
                 "workflow_run", runId, "run attempt " + attempt + " started",
                 Map.of("planVersion", plan.version(), "steps", sequence, "queuedSteps", queued));
         return run;
@@ -207,7 +217,7 @@ public class WorkflowService {
         steps.cancelPending(runId);
         executor.rollupAndSchedule(runId);
         Run after = runs.findById(runId).orElseThrow();
-        activity.record(after.workspaceId(), runId, Principals.UNAUTHENTICATED, "workflow.run.cancel_requested",
+        activity.record(after.workspaceId(), runId, actor(), "workflow.run.cancel_requested",
                 "workflow_run", runId, "cancellation requested; unstarted work was cancelled",
                 Map.of("status", after.status().name()));
         return after;

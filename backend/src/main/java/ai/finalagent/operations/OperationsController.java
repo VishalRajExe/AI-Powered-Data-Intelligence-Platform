@@ -72,10 +72,20 @@ public class OperationsController {
         return operations.summary();
     }
 
-    @ExceptionHandler({OperationsService.UnknownWorkflowHistoryException.class,
-            OperationsService.UnknownRunHistoryException.class})
+    /**
+     * Both handlers answer the way the lifecycle controller does for the same kind of miss. A history
+     * read that invented its own code would leave a client matching on two strings for one fact, and
+     * the code is what the frontend branches on.
+     */
+    @ExceptionHandler(OperationsService.UnknownWorkflowHistoryException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
-    public ErrorResponse unknown(RuntimeException e) {
-        return ErrorResponse.of("NOT_FOUND", e.getMessage());
+    public ErrorResponse unknownWorkflow(OperationsService.UnknownWorkflowHistoryException e) {
+        return ErrorResponse.of("WORKFLOW_NOT_FOUND", e.getMessage());
+    }
+
+    @ExceptionHandler(OperationsService.UnknownRunHistoryException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorResponse unknownRun(OperationsService.UnknownRunHistoryException e) {
+        return ErrorResponse.of("RUN_NOT_FOUND", e.getMessage());
     }
 }

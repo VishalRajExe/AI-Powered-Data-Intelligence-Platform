@@ -24,6 +24,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import ai.finalagent.aiclient.AiServiceClient;
+import ai.finalagent.support.TestPrincipal;
 import ai.finalagent.aiclient.dto.ResearchRequest;
 import ai.finalagent.aiclient.dto.ResearchResult;
 
@@ -88,7 +89,7 @@ class ResearchControllerTest {
     void delegatesAValidContractToTheResearchGraph() throws Exception {
         when(aiServiceClient.research(any(ResearchRequest.class))).thenReturn(sampleResult());
 
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body(jobSchema(), TOPIC)))
                 .andExpect(status().isOk())
@@ -104,7 +105,7 @@ class ResearchControllerTest {
         Map<String, Object> empty = Map.of("type", "object", "properties", Map.of(),
                 "additionalProperties", false);
 
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body(empty, TOPIC)))
                 .andExpect(status().isBadRequest())
@@ -119,7 +120,7 @@ class ResearchControllerTest {
                 "properties", jobSchema().get("properties"),
                 "required", List.of("jobs"));
 
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body(loose, TOPIC)))
                 .andExpect(status().isBadRequest())
@@ -135,7 +136,7 @@ class ResearchControllerTest {
                 "required", List.of("entites"),
                 "additionalProperties", false);
 
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body(mismatched, TOPIC)))
                 .andExpect(status().isBadRequest())
@@ -147,7 +148,7 @@ class ResearchControllerTest {
 
     @Test
     void aVagueTopicIsRejectedByBeanValidation() throws Exception {
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body(jobSchema(), "jobs")))
                 .andExpect(status().isBadRequest());
@@ -160,7 +161,7 @@ class ResearchControllerTest {
         when(aiServiceClient.research(any(ResearchRequest.class)))
                 .thenThrow(new AiServiceClient.AiServiceException(422, "upstream said no", null));
 
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body(jobSchema(), TOPIC)))
                 .andExpect(status().isUnprocessableEntity())
@@ -172,7 +173,7 @@ class ResearchControllerTest {
         when(aiServiceClient.research(any(ResearchRequest.class)))
                 .thenThrow(new AiServiceClient.AiServiceException(502, "provider down", null));
 
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body(jobSchema(), TOPIC)))
                 .andExpect(status().isBadGateway())
@@ -181,7 +182,7 @@ class ResearchControllerTest {
 
     @Test
     void aRequestForAToolThisBuildDoesNotHaveIsRejectedWithoutCallingTheGraph() throws Exception {
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(bodyWithLimits(Map.of("maxLoops", 6, "allowedTools", List.of("crawl")))))
                 .andExpect(status().isBadRequest())
@@ -193,7 +194,7 @@ class ResearchControllerTest {
 
     @Test
     void aBrowserSessionBudgetForARunThatDidNotAskForSessionsIsRejected() throws Exception {
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(bodyWithLimits(Map.of(
                                 "allowedTools", List.of("search", "scrape"),
@@ -208,7 +209,7 @@ class ResearchControllerTest {
     void anInteractionRequestIsForwardedToTheGraphVerbatim() throws Exception {
         when(aiServiceClient.research(any(ResearchRequest.class))).thenReturn(sampleResult());
 
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(bodyWithLimits(Map.of(
                                 "allowedTools", List.of("search", "scrape", "interact"),
@@ -232,7 +233,7 @@ class ResearchControllerTest {
 
     @Test
     void anImpossibleRelevanceFloorIsRejectedLocally() throws Exception {
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(bodyWithLimits(Map.of("minRelevanceScore", 1.5))))
                 .andExpect(status().isBadRequest())
@@ -245,7 +246,7 @@ class ResearchControllerTest {
     void aCurationRequestWithinBoundsIsForwarded() throws Exception {
         when(aiServiceClient.research(any(ResearchRequest.class))).thenReturn(sampleResult());
 
-        mockMvc.perform(post("/api/v1/research")
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal()).header("X-Requested-With", "XMLHttpRequest")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(bodyWithLimits(Map.of(
                                 "entityType", "job",
@@ -261,5 +262,43 @@ class ResearchControllerTest {
         assertThat(sent.getValue().limits().preferredDomains()).containsExactly("acme.test");
         assertThat(sent.getValue().limits().minRelevanceScore()).isEqualTo(0.2);
         assertThat(sent.getValue().limits().desiredSources()).isEqualTo(25);
+    }
+
+    /**
+     * The endpoint that spends provider credits is no longer reachable by whoever finds the URL.
+     *
+     * <p>Asserted on a suite that mocks the AI service, because that is the point: the refusal happens
+     * before anything is forwarded. {@code verifyNoInteractions} is the assertion, and the 401 body is
+     * the one every other error here uses — an HTML redirect would reach the frontend as a parse
+     * failure and look like a broken backend rather than a sign-in prompt.
+     */
+    @Test
+    void anUnauthenticatedResearchRequestIsRefusedBeforeTheAiServiceIsAsked() throws Exception {
+        mockMvc.perform(post("/api/v1/research").header("X-Requested-With", "XMLHttpRequest")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(jobSchema(), TOPIC)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error.code", is("AUTHENTICATION_REQUIRED")));
+
+        verifyNoInteractions(aiServiceClient);
+    }
+
+    /**
+     * A session cookie authenticates; it does not authorise.
+     *
+     * <p>The same request with the same principal, minus the header, is what a forged call looks like:
+     * ambient credential, no proof of where it came from. Refusing it is the price of a cookie
+     * transport, and the test is what makes that price visible rather than assumed.
+     */
+    @Test
+    void anAuthenticatedRequestWithoutTheStateChangeHeaderIsNotAStateChange() throws Exception {
+        mockMvc.perform(post("/api/v1/research").with(TestPrincipal.principal())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(jobSchema(), TOPIC)))
+                .andExpect(status().isForbidden())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .jsonPath("$.error.code").value("STATE_CHANGE_HEADER_MISSING"));
+
+        verifyNoInteractions(aiServiceClient);
     }
 }

@@ -70,10 +70,9 @@ finalagent:
   # answers health and requirement parsing honestly, instead of failing to boot.
   execution:
     enabled: ${WORKFLOW_EXECUTION_ENABLED:false}
-    # Server-side tenancy root. Deliberately not read from a request: the previous project took a
-    # client-supplied workspaceId on trusted routes, which is how any caller could read any
-    # workspace. The authentication phase replaces this with the token's workspace claim.
-    workspace-id: ${FINALAGENT_WORKSPACE_ID:}
+    # No tenant is configured here. The workspace a request is scoped to comes from the authenticated
+    # session, and the tenant a queue job runs in is carried on the job row. A configured tenant was a
+    # placeholder that made every caller the same person; `V5__baseline_identity.sql` retired it.
     poll-interval-ms: ${WORKFLOW_POLL_INTERVAL_MS:500}
     batch-size: ${WORKFLOW_BATCH_SIZE:4}
     core-pool-size: ${WORKFLOW_CORE_POOL_SIZE:4}
@@ -99,6 +98,20 @@ finalagent:
     # handed to the writer, so this is also how coarsely an export's percentage moves.
     chunk-rows: ${FINALAGENT_EXPORT_CHUNK_ROWS:500}
     max-rows: ${FINALAGENT_EXPORT_MAX_ROWS:200000}
+  auth:
+    # Sessions and passwords. Every value here is a policy number, not a credential, so each has a
+    # default: nothing in this group is a secret, and the design deliberately has no signing key at
+    # all — a session is an opaque random value stored by its SHA-256, so there is no JWT secret that
+    # could ever be handed to the frontend by mistake.
+    access-token-ttl-minutes: ${AUTH_ACCESS_TOKEN_TTL_MINUTES:15}
+    refresh-ttl-days: ${AUTH_REFRESH_TOKEN_TTL_DAYS:14}
+    absolute-ttl-days: ${AUTH_ABSOLUTE_TTL_DAYS:30}
+    # The `Secure` flag on the session cookie. Off for the local stack, which is served over http;
+    # any deployment that terminates TLS must set this to true, because a session cookie sent in clear
+    # text is the credential walking the wire unsealed.
+    cookie-secure: ${AUTH_COOKIE_SECURE:false}
+    max-failed-logins: ${AUTH_MAX_FAILED_LOGINS:5}
+    lockout-minutes: ${AUTH_LOCKOUT_MINUTES:15}
 
 app:
   version: 0.1.0

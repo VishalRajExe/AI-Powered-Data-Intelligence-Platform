@@ -33,6 +33,7 @@ import ai.finalagent.dataset.repository.DatasetQueryRepository.RowQuery;
 import ai.finalagent.dataset.repository.DatasetRepository;
 import ai.finalagent.dataset.service.DatasetAssembler;
 import ai.finalagent.quality.DeclaredContract;
+import ai.finalagent.support.TestPrincipal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -84,12 +85,28 @@ class DatasetPlatformMySqlTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /** See { ExportProgressMySqlTest}: a direct service call has no request to carry a session. */
+    private AutoCloseable principal;
+
+    
+    void beSomebody() {
+        principal = TestPrincipal.bind();
+    }
+
+    
+    void stopBeingSomebody() throws Exception {
+        principal.close();
+    }
+
+
     /** runId → {workflowId, planId}, so a draft points at rows that actually exist. */
     private final Map<String, String[]> parents = new LinkedHashMap<>();
 
     @BeforeEach
     @AfterEach
     void startAndEndWithNothing() {
+        TestPrincipal.provision(jdbc, WORKSPACE, NIL);
+        TestPrincipal.provision(jdbc, OTHER_WORKSPACE, NIL);
         jdbc.update("DELETE FROM dataset_conflicts WHERE workspace_id = ?", WORKSPACE);
         jdbc.update("DELETE FROM dataset_field_evidence WHERE workspace_id = ?", WORKSPACE);
         jdbc.update("DELETE FROM dataset_row_sources WHERE workspace_id = ?", WORKSPACE);
@@ -449,51 +466,51 @@ class DatasetPlatformMySqlTest {
                         "posting_url", "https://jobs.test/b/2")));
         String rowId = firstRow(datasetId);
 
-        mockMvc.perform(get("/api/v1/datasets"))
+        mockMvc.perform(get("/api/v1/datasets").with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.datasets[0].id").value(datasetId))
                 .andExpect(jsonPath("$.datasets[0].rowCount").value(2));
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId))
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId).with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.entityType").value("job_posting"))
                 .andExpect(jsonPath("$.validRowCount").value(2))
                 .andExpect(jsonPath("$.verifiedSourceCount").value(1))
                 .andExpect(jsonPath("$.qualityBasis").value(
                         org.hamcrest.Matchers.containsString("equal-weight mean")));
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/schema"))
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/schema").with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.columnCount").value(4))
                 .andExpect(jsonPath("$.columns[0].key").value("role_title"))
                 .andExpect(jsonPath("$.columns[0].origin").value("PLAN"));
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/rows")
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/rows").with(TestPrincipal.principal())
                         .param("filter", "location:eq:Pune").param("sort", "salary_amount")
                         .param("asc", "false"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.matchedRows").value(1))
                 .andExpect(jsonPath("$.rows[0].values.role_title").value("Data engineer"));
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/search").param("q", "backend"))
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/search").with(TestPrincipal.principal()).param("q", "backend"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rows[0].matchedFields[0]").value("role_title"));
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/filters").param("key", "salary_amount"))
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/filters").with(TestPrincipal.principal()).param("key", "salary_amount"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.filters[0].type").value("NUMBER"))
                 .andExpect(jsonPath("$.operators.text").exists());
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/sources"))
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/sources").with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.sources[0].verifiedByTool").value(true))
                 .andExpect(jsonPath("$.sources[0].citedByRows").value(2));
         mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/sources/"
-                        + sourceIdFor(datasetId, JOB_URL) + "/rows"))
+                        + sourceIdFor(datasetId, JOB_URL) + "/rows").with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.matchedRows").value(2));
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/evidence"))
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/evidence").with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.recordsWithoutEvidence").value(0))
                 .andExpect(jsonPath("$.coverage").exists())
                 .andExpect(jsonPath("$.citedButNeverRetrieved").isEmpty());
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/rows/" + rowId + "/evidence"))
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/rows/" + rowId + "/evidence").with(TestPrincipal.principal()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.runId").value(runId))
                 .andExpect(jsonPath("$.stepId").isNotEmpty())
@@ -505,12 +522,12 @@ class DatasetPlatformMySqlTest {
 
     @Test
     void unknownIdsAnswerAsNotFoundAndAForeignWorkspaceCannotBeProbed() throws Exception {
-        mockMvc.perform(get("/api/v1/datasets/does-not-exist"))
+        mockMvc.perform(get("/api/v1/datasets/does-not-exist").with(TestPrincipal.principal()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("DATASET_NOT_FOUND"));
-        mockMvc.perform(get("/api/v1/datasets/does-not-exist/rows"))
+        mockMvc.perform(get("/api/v1/datasets/does-not-exist/rows").with(TestPrincipal.principal()))
                 .andExpect(status().isNotFound());
-        mockMvc.perform(get("/api/v1/datasets/does-not-exist/evidence"))
+        mockMvc.perform(get("/api/v1/datasets/does-not-exist/evidence").with(TestPrincipal.principal()))
                 .andExpect(status().isNotFound());
 
         String foreignRun = newRun(OTHER_WORKSPACE);
@@ -518,12 +535,12 @@ class DatasetPlatformMySqlTest {
                 List.of(), Map.of("role_title", "Backend engineer", "posting_url", JOB_URL)));
         // Another workspace's dataset answers exactly like one that does not exist: confirming the
         // first is itself a disclosure.
-        mockMvc.perform(get("/api/v1/datasets/" + foreignDataset))
+        mockMvc.perform(get("/api/v1/datasets/" + foreignDataset).with(TestPrincipal.principal()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("DATASET_NOT_FOUND"));
-        mockMvc.perform(get("/api/v1/datasets/" + foreignDataset + "/rows"))
+        mockMvc.perform(get("/api/v1/datasets/" + foreignDataset + "/rows").with(TestPrincipal.principal()))
                 .andExpect(status().isNotFound());
-        mockMvc.perform(get("/api/v1/datasets/" + foreignDataset + "/evidence"))
+        mockMvc.perform(get("/api/v1/datasets/" + foreignDataset + "/evidence").with(TestPrincipal.principal()))
                 .andExpect(status().isNotFound());
         // And the tenant scoping is not decorative: the compound foreign keys mean a dataset's rows
         // reference (dataset_id, workspace_id), so a header cannot be moved out from under them.
@@ -538,16 +555,16 @@ class DatasetPlatformMySqlTest {
         String datasetId = save(runId, jobDraft(runId, List.of(JOB_URL), true, List.of(),
                 Map.of("role_title", "Backend engineer", "posting_url", JOB_URL)));
 
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/rows")
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/rows").with(TestPrincipal.principal())
                         .param("filter", "startup_name:eq:Acme"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_DATASET_QUERY"))
                 .andExpect(jsonPath("$.error.message").value(
                         org.hamcrest.Matchers.containsString("role_title")));
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/rows")
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/rows").with(TestPrincipal.principal())
                         .param("filter", "location:eq"))
                 .andExpect(status().isBadRequest());
-        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/search").param("q", "  "))
+        mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/search").with(TestPrincipal.principal()).param("q", "  "))
                 .andExpect(status().isBadRequest());
     }
 
@@ -774,7 +791,7 @@ class DatasetPlatformMySqlTest {
     private Map<String, Object> rowEvidence(String datasetId, String rowId) {
         try {
             String body = mockMvc.perform(get("/api/v1/datasets/" + datasetId + "/rows/" + rowId
-                    + "/evidence")).andReturn().getResponse().getContentAsString();
+                    + "/evidence").with(TestPrincipal.principal())).andReturn().getResponse().getContentAsString();
             return mapper.readValue(body, Map.class);
         } catch (Exception e) {
             throw new AssertionError("the evidence endpoint did not answer readably: " + e, e);

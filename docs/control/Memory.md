@@ -12,23 +12,28 @@ existed, and that the system was production-ready — each contradicted by its o
 
 ## 1. Current Status
 
-- **Current Phase:** 11 — operations: history, activity, monitoring and CSV/JSON/XLSX exports,
-  **complete**, built on the Phase 9/10 dataset platform immediately before it. An export is now a
-  `workflow_jobs` row with `job_type='EXPORT'` claimed by the same MySQL-backed pool as a step — one
-  lease, one heartbeat, one sweeper, no Redis — and its percentage is derived by the only writer of that
-  column, from `written_rows` against a `COUNT(*)` taken before the first byte. `V4__exports_and_monitoring.sql`
-  adds `export_jobs`; ten new endpoints cover workflow/run/step history, the activity cursor, monitoring
-  and the three file formats. **307 backend tests pass, 58 of them against real MySQL 9.6**; 362
-  ai-service tests pass unchanged, because no Python change was needed. The web layer remains
-  **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real browser session, search, scrape or
-  robots fetch has ever run from this project.
+- **Current Phase:** 12 — Spring Security: identity, sessions and workspace authorization,
+  **complete**, built on the Phase 11 operations surface. A request is now scoped to the workspace its
+  session was issued against: `workspaces`, `users`, `workspace_members` and `auth_sessions` exist
+  (`V5__baseline_identity.sql`), registration creates a person plus a personal workspace plus the OWNER
+  membership that makes it reachable, and `FINALAGENT_WORKSPACE_ID` is **gone** — from the properties
+  record, `application.yml`, `.env.example`, the startup validator and the test profile. Sessions are
+  opaque random values checked by their SHA-256 against MySQL on every request, in an `HttpOnly
+  SameSite=Strict` cookie, with rotation, family-based reuse detection and a database-clock lockout.
+  **There is no JWT secret in this build at all**, so the requirement that the frontend never receive
+  one cannot be broken by a later edit. **330 backend tests pass, 75 of them against real MySQL 9.6**;
+  362 ai-service tests and the frontend gates pass unchanged. Verified over real HTTP as well as
+  MockMvc: anonymous `GET /api/v1/datasets` → 401 envelope, register → 201 +
+  `Set-Cookie: …HttpOnly; SameSite=Strict`, `GET /api/v1/auth/me` → 200, and the session value appears
+  in no body. The web layer remains **mocked-only**: `FIRECRAWL_API_KEY` is still blank, so no real
+  browser session, search, scrape or robots fetch has ever run from this project.
 - **Last updated:** 2026-09-30
 - **Application code written:** three independent processes.
-  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 76 main source files, 30 test classes:
+  - `backend/` — Spring Boot 3.5.16, Java 21, Maven. 86 main source files, 32 test classes:
     `workflow/` (domain, repository, plan, execution, service, web), `quality/`
     (`DeclaredContract`, `RowContractEnforcer`), `dataset/` (domain, repository, service, web,
-    **export** — the writers, the runner and the save step that fills it all) and **`operations/`**
-    (the history, activity and monitoring read model).
+    export), `operations/` (history, activity, monitoring) and **`identity/`** (domain, repository,
+    service, security, web) behind `config/SecurityConfig`.
   - `ai-service/` — FastAPI on Python 3.14 (3.12 pinned for deployment), 46 modules: config,
     contracts, security, logging, `api/v1/{health,research,requirements,quality}`, `llm/`,
     `firecrawl/`, `extraction/`, `requirements/`, `research/` (graph, tools, state, prompts, skills,
@@ -36,30 +41,29 @@ existed, and that the system was production-ready — each contradicted by its o
     aggregation) and `quality/` (contracts, normalize, validate, dedupe, entity_resolution, merge,
     score, pipeline).
   - `frontend/` — Next.js 14.2.35. PirateAgentUI design foundation copied byte-identically
-    (`diff -r` verified), 10 routes, `lib/api/` typed client. **Untouched by Phases 9, 10 and 11** —
-    the dataset and operations APIs are new read surface and no screen consumes them yet.
-  - Plus `database/`, `deploy/`, `scripts/`, `ai-service/skills/` (playbook loader docs), and the
-    root `.env.example`.
+    (`diff -r` verified), 10 routes, `lib/api/` typed client. **Untouched by Phases 9-12**: it still
+    has no login screen and its eight dashboard routes still render their placeholder content, so the
+    Phase 13 wiring is what makes this authentication reachable from a browser.
 - **Runnable:** yes. `scripts/dev-backend.sh`, `dev-ai.sh`, `dev-frontend.sh` each start one
-  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated checks — now all four
-  `*MySqlTest` classes rather than the two the queue needed.
+  process; `scripts/verify.sh` runs every suite and reports the MySQL-gated checks — now five
+  `*MySqlTest` classes. **Run the MySQL suites with no second backend alive**: another process
+  pointed at the same schema polls the same queue and will finish an export a test is mid-cancelling,
+  which looks exactly like a product defect and is not one (P53).
 - **Built:** the workflow planner and job engine, their schema and persistence, fetch-time source
   governance (robots + domain policy + ranking + dedupe), the six-stage data-intelligence pipeline,
   Java-side contract re-enforcement of the pipeline's answer, verified browser actions, the dataset
-  platform with row- and field-level source traceability, and the operations surface — history,
-  activity, monitoring and three export formats written by the queue.
-- **Still not built:** SSE streaming (events are persisted, cursor-paged and now served as a feed, not
-  pushed), export-file retention (nothing sweeps `var/exports`), host-resolution SSRF and per-domain
-  rate, and authentication — which is what makes `FINALAGENT_WORKSPACE_ID` a single-tenant stopgap
-  rather than a design, and which Phase 11 made more urgent: `/api/v1/datasets/*/exports` is
-  unauthenticated and now hands back a file of another tenant's rows the moment tenancy is real.
-  `datasets.workspace_id`, every `dataset_*.workspace_id` and `export_jobs.workspace_id` carry **no
-  foreign key to a `workspaces` table**, because that table does not exist yet; it arrives with
-  identity, now V5.
+  platform with row- and field-level source traceability, the operations surface with three export
+  formats, and identity — accounts, sessions, tenancy and the role ladder.
+- **Still not built:** the frontend's connection to any of it (Phase 13), SSE streaming (events are
+  persisted, cursor-paged and served as a feed, not pushed), export-file and session-row retention
+  (nothing sweeps `var/exports` or old `auth_sessions` rows), host-resolution SSRF and per-domain
+  rate, membership administration (roles are read and enforced; nothing changes them yet), and
+  multi-workspace selection — a person with several workspaces is signed into their primary, and
+  switching is not built.
 - **Repository:** `FINALAIAGENT` is its own git repo, pushed to branch `implementjava` of
   `github.com/VishalRajExe/AI-Powered-Data-Intelligence-Platform.git` after every phase, per the
   standing rule. Its history is independent of `main` (old project), which has never been touched
-  from here. Phase 11 (`fa3eb31`) is pushed; `main` has never been touched from this worktree.
+  from here. Phase 12 is the next commit to make.
 - **Blocked on:** decisions **G1**, **G2**, **S1**, **Q1**, **Q2** and the **L1** licence ruling
   (§6); Python 3.12 before the provider extra is installed. **B1 (the MySQL account) is resolved**
   and no longer blocks anything.
@@ -818,6 +822,75 @@ existed, and that the system was production-ready — each contradicted by its o
      made more urgent by this one: `POST /api/v1/datasets/{id}/exports` both starts billed-adjacent work and
      hands back a file of another tenant's rows the moment tenancy is real.
 
+- [x] **Phase 12 (2026-09-30) — Spring Security: identity, sessions and workspace authorization.**
+      Registration, login, logout, refresh, current user, and the tenancy that every previous phase
+      had faked with one configured workspace. `V5__baseline_identity.sql` adds `users`, `workspaces`,
+      `workspace_members` and `auth_sessions`, and gives `workspace_id` / `created_by_id` /
+      `actor_id` / `requested_by_id` the foreign keys the audit said they needed — 35 referential
+      constraints across 19 tables now, verified by trying to violate one.
+
+  **`FINALAGENT_WORKSPACE_ID` is deleted, not deprecated.** It was in the `Execution` record, the
+  startup validator, `application.yml`, `.env.example`, the test profile and three services; every read
+  of it is gone, and a test asserts the record has no `workspaceId` component to add back. Keeping it
+  as a fallback would have been the demo-mode shape this rebuild exists to remove: a request that
+  reaches a tenant-scoped service without a session now raises
+  {@code Workspace.NoSessionException} instead of being quietly granted somebody's data.
+
+  **No JWT, so there is no JWT secret to leak.** A session is 32 random bytes; MySQL stores its
+  SHA-256 and every request looks the row up. The brief's rule — the frontend must never receive the
+  signing secret — is satisfied by construction rather than by care, and logout is a row delete
+  instead of a request that a stateless claim honour. Rotation revokes the presented row and writes a
+  child in the same `family_id`; **a revoked row presented again ends the whole family**, and that
+  check lives in the request filter, not only in the refresh endpoint, because a copied token is
+  useful to its holder on every route. Refresh and logout are deliberately reachable without a *live*
+  session — that is their purpose.
+
+  **A state change has to carry `X-Requested-With`.** Spring's CSRF filter is off, and the reason is
+  a real defect found over HTTP rather than in MockMvc: with `HttpOnly` cookie auth and Spring 6's
+  lazily-written token, a browser that had never asked for a token was given a session cookie and
+  nothing else, so every correctly-behaving frontend `POST` would have failed closed while a
+  hand-written curl got through. The header is checked for presence, not value — its job is to be
+  something a cross-origin form cannot send without a CORS preflight, and the preflight is answered
+  only for the exact origins `FRONTEND_ORIGIN` names. `SameSite=Strict`, the preflight and the header
+  all have to fail together before a forged state change reaches the queue.
+
+  **The role ladder is enforced where work is spent.** Reads are open to any member. Creating a
+  workflow, starting a run, requesting an export and cancelling need EDITOR, because each one spends
+  credits, quota, a worker or somebody else's in-flight work; a VIEWER gets 403 and the row count
+  afterwards is the assertion that the refusal did not also do the work.
+
+  | Verification | Measured |
+  |---|---|
+  | `mvn -B -ntp test` with `FINALAGENT_TEST_MYSQL=true` | **330 tests, 0 failures, 0 skipped** (was 307; +23), of which **75 run against real MySQL 9.6** across five classes |
+  | `AuthenticationMySqlTest` (17, new) | registration creates person + personal workspace + OWNER membership and a session that works; two accounts created seconds apart cannot read each other's workflow, dataset, schema, rows, evidence or export by id (each answers as not-found, while the owner's own read answers 200); rows written by an authenticated request name the person who asked, and no `workflow.created` event is attributed to the machine any more; the cookie carries `HttpOnly`/`SameSite=Strict`/`Path=/` and the token appears in **no** response body while the database holds only its digest; rotation replaces the credential and a rotated-away token presented later ends the family; an expired access window still renews and a past absolute ceiling never does; logout ends one session and leaves the same person's other device signed in; **five refusals — unknown address, wrong password, locked account, disabled account, the seeded service actor — are byte-identical**; the lockout is a column on the database clock and the correct password does not beat it; a duplicate address leaves no partial account and no orphan workspace; a 12-character floor and a 72-byte ceiling are enforced with the value never echoed; every data endpoint 401s anonymously with the JSON envelope while `/health` and `/ready` still answer; a VIEWER reads and cannot write; the configured AI-service and database secrets appear in none of six endpoint bodies; and a row pointing at a workspace that does not exist is refused by MySQL |
+  | Real HTTP, not MockMvc | booted on a spare port and driven with `curl`: `GET /api/v1/datasets` → 401 `AUTHENTICATION_REQUIRED`; register → 201 with the `Set-Cookie` flags above; `GET /api/v1/auth/me` → 200 with the caller's own workspace; the token in no body. **This is how P51 was found** — MockMvc had been passing `.with(csrf())` for a token no browser ever receives |
+  | `DatasetPlatformMySqlTest` / `ExportProgressMySqlTest` / `WorkflowQueueMySqlTest` / `WorkflowRunLifecycleMySqlTest` | 17 / 11 / 14 / 16 — all still green after the tenancy source moved, now provisioning their tenant row and binding a principal; the readiness report's `workspaceIdConfigured` assertion was inverted to `doesNotExist`, which is what keeps the placeholder from returning |
+  | `StartupRequirementsValidatorTest` (29) | session bounds refused, and two structural tests: the queue's config has no `workspaceId`, and no record component anywhere in the configuration is named like a secret |
+  | `scripts/verify.sh` | all seven checks green: backend tests, package, MySQL queue (five classes), ai tests 362 passed / 8 skipped, frontend typecheck, lint, build |
+  | Secrets to the frontend | no `NEXT_PUBLIC_` variable holds any value; `BACKEND_ORIGIN` stays server-side behind the rewrite; `X-Workspace-Id` removed from the CORS allow-list so no header can name a tenant; `/api/v1/*` bodies carry no credential |
+
+  **Defects found and fixed in this phase.**
+
+  | # | Defect | How it surfaced | Fix |
+  |---|---|---|---|
+  | P47 | **The failed-login counter was rolled back by the exception that reported the failure.** `login()` is `@Transactional` and refuses a bad credential by throwing, so the `UPDATE` that incremented `failed_logins` was undone with everything else — the lockout could never engage, in production, forever. | `theLockoutIsDataAndTheRightPasswordDoesNotBeatIt`: the row still read `locked_until IS NULL` after the budget was spent | `recordFailedLogin` runs in its own transaction (`REQUIRES_NEW`). The general lesson is in the javadoc: a counter written on a path that ends by throwing is a counter that never increments |
+  | P48 | **Rotation ignored the absolute ceiling.** The child inherited the deadline only when it happened to be read; nothing stopped a session past `absolute_expires_at` from being renewed, so the ceiling that exists to end a long-lived stolen token moved forward forever. | `anExpiredWindowStillRenewsButAPastCeilingNeverDoes`: the second refresh answered 200 | the ceiling is part of the guard on the statement that revokes the parent, so the rotate is a no-op once it has passed |
+  | P49 | **Refresh required a live session, which is the one thing it cannot have.** An expired-but-never-revoked credential was refused at the authorization layer before the endpoint could renew it, and logout was reachable only by someone still signed in. | The same test answered 401 where 200 was due | refresh and logout are permitted without a live session and validate the presented token themselves |
+  | P50 | **Reuse detection only existed in the refresh path.** A rotated-away token presented on any other route was silently treated as a bad cookie, so theft was noticed only when the real user happened to renew. | `aRefreshRotatesTheCredentialAndAnOldTokenComingBackEndsTheWholeFamily` found zero `TOKEN_REUSE` rows | the check moved into the request filter, keyed on `revoke_reason = 'ROTATED'` — a logged-out row has no live sibling to protect |
+  | P51 | **The CSRF design could not work for a browser at all.** With `HttpOnly` cookie auth and Spring 6's lazily-written token, a client that had never asked for one got a session cookie and no token, so every frontend `POST` would fail closed — while `curl`, which MockMvc and the tests resembled, sailed through. | Booting the real service and driving it with `curl`, where MockMvc had been green | Spring's CSRF filter is off and replaced by the `X-Requested-With` requirement, with the three compensating controls and the residual gap written into `SecurityConfig` |
+  | P52 | **The filter chain could not be assembled twice-anchored**: ordering a filter relative to another custom filter is not a registered position. | `IllegalArgumentException: The Filter class SessionCookieFilter does not have a registered order` at context startup | both guards anchor on registry filters (`SecurityContextHolderFilter`, `BasicAuthenticationFilter`), which is also what puts the state-change check before authentication |
+  | P53 | **Not a product defect, and worth recording as a verification hazard.** A second backend left running against the same dev schema claimed an export job mid-test and completed it, which read as a cancellation bug and as two "flaky" lifecycle tests. | The runner's own first checkpoint saw `written_rows=6, status=COMPLETED`; the job row named a *different* worker id, and `netstat` named the PID | the process was stopped, the test profile's lease raised to 30s with the reason, and the hazard recorded above and in §7 |
+
+  Reuse records for this phase:
+
+  | Repository | Source file | Feature | Destination | Method |
+  |---|---|---|---|---|
+  | old project | `auth.service.ts`, `jwt.strategy.ts`, the seeded `demo@pirateagent.ai` | registration, login, a signed request | `identity/service/AuthenticationService`, `identity/security/SessionCookieFilter`, `config/SecurityConfig` | **PORT + INVERSION.** Upstream minted a JWT and shipped a seeded account whose specialness lived in the login branch. Here the credential is opaque and revocable and the non-human actor is a column (`password_hash IS NULL`, `status='SERVICE'`) that the login path refuses before it compares anything |
+  | old project | the routes that read `req.headers['x-workspace-id']` | naming the tenant a request works on | nothing — deleted | **REFUSED.** The audit's §5 item 1. `X-Workspace-Id` is gone from the CORS allow-list so the mistake cannot be reintroduced by a header, and a `Workspace` test asserts the config field does not come back |
+  | this project | `docs/audit/00-FORENSIC-AUDIT.md` §5 item 2 | "workspace_id / created_by_id need their foreign keys" | `V5__baseline_identity.sql` | **CLOSED.** The tenants and actors that already appear in the data are materialised into `workspaces` / `users` first, so the constraints can exist without inventing a row the migration had no evidence for |
+  | Spring Security | `BCryptPasswordEncoder`, `SecurityFilterChain`, `OncePerRequestFilter` | password hashing, the filter chain, a state-change guard | `config/SecurityConfig`, `identity/security/*` | **DEPENDENCY TAKEN, SUBSET USED.** Only the chain, the encoder and one filter are used; no form login, no http basic, no OAuth client — each would add an endpoint this API does not have |
+  | anakin, web-agent-main, web-research-agent-master, data-enrichment-js, ai-data-enrichment-agent, TheAgenticBrowser-main | — | nothing | — | **NO TAKE.** None of the six has a tenancy model; `data-enrichment-js` and `ai-data-enrichment-agent` both ship a single shared credential for all users, which is the state this phase removes rather than adopts |
+
 ## 3. Key Architectural Decisions Log
 
 | Date | Decision | Reasoning |
@@ -918,6 +991,11 @@ existed, and that the system was production-ready — each contradicted by its o
 | 2026-09-30 | **Rows Java never judged are saved invalid, and an unjudged row is never defaulted to valid.** | `DatasetAssembler.assemble` receives `record index → Java verdict`; absent means the authoritative gate did not speak, and treating silence as a pass would make this layer the one that fails open |
 | 2026-09-30 | **V3 is the dataset platform; identity is pushed to V4.** | The audit reserved `V3__baseline_identity` for authentication, which is still unbuilt. Rather than create empty tables to fill a slot — the reason V1 is workflows and not identity — the reservation gives way to code that exists. No applied migration was renumbered or edited: Flyway verifies checksums of what it has run |
 
+| 2026-09-30 | **Sessions are opaque values hashed in MySQL, not JWTs.** | The brief's constraint was that the frontend never receive a signing secret. A build with no signing secret satisfies it by construction, and logout becomes a row delete instead of a request that a stateless claim honour. The cost is one indexed lookup per request, which every endpoint already pays to read the data the request is about. Recorded as a deviation because the vocabulary of the brief assumed otherwise. |
+| 2026-09-30 | **`FINALAGENT_WORKSPACE_ID` deleted rather than defaulted.** | A configured tenant makes every caller the same person; a configured tenant kept "just in case" is the same mistake with a compatibility note attached. A tenant-scoped service reached without a session now raises rather than falling back, which is the only shape in which the fallback cannot come back. |
+| 2026-09-30 | **State changes require `X-Requested-With`; Spring's CSRF token is not used.** | Found over HTTP, not MockMvc: with `HttpOnly` cookie auth and Spring 6's lazily-issued token, a browser that had not asked for a token could not send one, so every honest frontend `POST` would fail closed while a hand-written request passed. The header cannot be set cross-origin without a preflight, and the preflight is answered only for exact origins. Deviation documented in `SecurityConfig` with its residual gap. |
+| 2026-09-30 | **A legacy actor becomes a `SERVICE` user with a NULL hash, never a seeded login.** | Pre-authentication rows already name `00000000-…-000000000000`; the FK the audit asked for needs that value to resolve. Making it a real row with no password is honest ("this was not a person"), while giving it a password — or a bypass branch — is how `demo@pirateagent.ai` happened. |
+
 ## 4. Database / Schema Changes
 
 **Phase 7 created the first real schema.** Two Flyway migrations now exist and have been applied
@@ -974,6 +1052,34 @@ Progress has nowhere to be invented. `progress_percent` is derived by `ExportRep
 `written_rows` against `total_rows`, capped at 99 until the record completes, and that is the only
 statement in the codebase that writes the column — the schema offers no slot for a figure a caller
 claimed.
+
+**Phase 12 added `V5__baseline_identity.sql`,** the four identity tables and the constraints the audit
+asked for by name. Applied by Flyway against the same MySQL 9.6.0, and the schema is now **19 tables
+with 35 referential constraints**, all five migrations `success = 1`:
+
+| Object | What it holds | What its keys guarantee |
+|---|---|---|
+| `users` | address, display name, bcrypt hash, status, failed-attempt count, lockout deadline, last login | `uq_user_email` is the *only* thing making `Alex@` and `alex@` one account, and `password_hash NULL` is the only representation of "cannot authenticate" — the service actor and any future machine row live on that column rather than on a branch in the login code |
+| `workspaces` | the tenant, `PERSONAL` or `TEAM` | one row per tenant, so every `workspace_id` elsewhere can be a foreign key rather than a convention |
+| `workspace_members` | the (workspace, person) pair and its role | composite PK means one standing per person per tenant; both FKs cascade, because membership is an attribute of a tenant and not work a tenant did |
+| `auth_sessions` | the SHA-256 of what was presented, its family, and three deadlines | `uq_session_token` makes a presented token one row; `family_id` is what rotation-reuse detection ends; `expires_at` moves on renewal and `absolute_expires_at` never does, so a copied token buys a longer life rather than an unlimited one |
+| FKs added to existing tables | `workflows`, `workflow_plans`, `workflow_runs`, `workflow_steps`, `workflow_jobs`, `activity_events`, `datasets`, `export_jobs` | every `workspace_id` now names a real tenant and every author names a real row. `RESTRICT`, not `CASCADE`: deleting a workspace that still holds runs is not a cascade anyone asked for |
+
+The legacy tenants and actors were **materialised from the data that already existed** — distinct
+`workspace_id` values across the workflow, dataset and export tables became workspace rows, and the
+`created_by_id` values they carried became `SERVICE` users — rather than by inventing ids in DDL.
+`FINALAGENT_WORKSPACE_ID` was an environment value, so no migration could have known to create it, and
+a hardcoded UUID in V5 would have been a placeholder wearing a constraint. The address of every such row
+ends `@invalid.invalid`, a reserved TLD no one can register later.
+
+**Rebuilding the schema rather than patching it.** V5 was applied by hand once while a `UNION` arity
+error in its backfill was being found, which left the constraints in place and Flyway with a
+`success = 0` row for version 5. Re-running it collided on duplicate constraint names, so the dev
+schema was dropped entirely and re-created from V1 → V5 by Flyway, the same way the half-applied V3 was
+handled in Phase 9. The alternative — deleting the history row and keeping the hand-applied schema —
+would have left the running database in a state no migration produces, which is the thing this schema
+is written to make impossible. The 12 rows it discarded were test fixtures; the suites rebuild
+everything they read.
 
 Tenant scoping turned out to be structural rather than polite. Every child carries `workspace_id` and
 foreign-keys to `(dataset_id, workspace_id)`, so MySQL **refuses** to move a dataset header out from
@@ -1211,6 +1317,39 @@ the machinery, not its behaviour at the sizes that matter. What they do **not** 
   file of another workspace's rows the moment tenancy is real, which makes the Phase 12 work on
   `/api/v1/*` more urgent than it was when the only unauthenticated route started work.
 
+### Verification limits introduced by Phase 12
+
+Authentication is real and enforced now, but it is real at the boundary of the API rather than at the
+boundary a user stands at. What this phase does **not** establish:
+
+- **Nothing in the browser uses any of it yet.** The frontend has no login screen and its eight
+  dashboard routes still render placeholders, so the whole surface 401s at a browser today. The
+  credential round trip is proven by `curl` against a running service and by
+  `AuthenticationMySqlTest`; it is not proven against the Next.js rewrite, the `SameSite` interaction
+  with `localhost:3000`, or a real cookie jar. Phase 13 is where that becomes an observation rather
+  than an expectation.
+- **`SameSite=Strict` and the preflight are reasoned about, not attacked.** The state-change header
+  replaced Spring's own token because the token was unreachable for a browser (P51). The reasoning and
+  its residual are written in `SecurityConfig`: if a future client ever sends that header on a request a
+  foreign page can cause, two of the three controls would have to fail together instead of three. No
+  cross-site request has been made against a running instance.
+- **Rate limiting on the credential endpoints does not exist.** There is no Redis and no counter table
+  for per-IP throttling; the lockout is per account, so a password list aimed at many accounts is
+  unthrottled. Recorded, not solved.
+- **Roles are enforced but not managed.** `OWNER`/`EDITOR`/`VIEWER` are honoured on every request, and
+  the only ways to acquire one are registration or a direct row insert. The demotion path that the
+  re-read-membership-per-request design exists to support has no door yet.
+- **A person with several workspaces is signed into one of them.** `primaryMembership` picks the oldest
+  personal workspace and switching is unbuilt — which is precisely why no request path accepts a
+  workspace id from anywhere. The mechanism for choosing deliberately should be written when the need is
+  real rather than guessed at now.
+- **Session rows and export files both accumulate.** `auth_sessions` is revoked but never deleted, and
+  `var/exports` is never swept. One retention job covers both eventually; neither exists.
+- **The hazard P53 exposed is a standing condition of the suite.** A second process pointed at
+  `finalagent_dev` claims work from the shared queue and its effects land inside another test's
+  assertions. Nothing detects that today — the profile's 30-second lease and the note in §7 are the
+  mitigation, and a dedicated schema per run would be the fix.
+
 ### Defects found and fixed during Phase 1 (all by running, not reading)
 
 | # | Defect | How it surfaced |
@@ -1319,25 +1458,36 @@ Toolchain on this machine, all verified present and used by the Phase 1 run:
 
 ### Running the workflow layer locally
 
-The queue is off by default and needs two things: a reachable MySQL and a workspace id.
+The queue is off by default and needs one thing: a reachable MySQL. It does not need a workspace id —
+`FINALAGENT_WORKSPACE_ID` was deleted in Phase 12, and a tenant now exists only because an account
+registered one.
 
 ```bash
 WORKFLOW_EXECUTION_ENABLED=true \
-FINALAGENT_WORKSPACE_ID=$(uuidgen) \
-bash scripts/dev-backend.sh                    # Flyway applies V1 + V2, worker starts claiming
+bash scripts/dev-backend.sh          # Flyway applies V1-V5, the worker starts claiming
+curl -s -X POST localhost:8080/api/v1/auth/register \
+     -H 'Content-Type: application/json' \
+     -d '{"email":"you@test.invalid","password":"a-sufficiently-long-test-password"}'
+     # → 201 + Set-Cookie: finalagent_session=…; HttpOnly; SameSite=Strict
 ```
 
-To exercise the queue's locking, leases and duplicate keys against a real database:
+To exercise the queue's locking, leases, duplicate keys, dataset queries, export checkpoints and the
+whole credential path against a real database:
 
 ```bash
-cd backend && FINALAGENT_TEST_MYSQL=true mvn test     # 185 tests, 30 of them MySQL-backed
-cd backend && mvn test                                # 155 tests; the same 30 ITs report as skipped
+cd backend && FINALAGENT_TEST_MYSQL=true mvn test   # 330 tests, 75 of them MySQL-backed
+cd backend && mvn test                              # 255 tests; the same 75 report as skipped
 ```
 
-Those two classes write to the schema named in the root `.env`, in workspace
-`00000000-0000-0000-0000-000000000ff1`, and delete their own rows before and after each test.
-Point `MYSQL_DATABASE` at a scratch schema before running them against a database you care about.
-`scripts/verify.sh` reports the same check as `SKIP` with the reason when the variable is absent.
+Those five classes write to the schema named in the root `.env`, in workspace
+`00000000-0000-0000-0000-000000000ff1`, which they provision as a real `workspaces` row because V5
+made that a foreign key, and they delete their own rows before and after each test. Point
+`MYSQL_DATABASE` at a scratch schema before running them against a database you care about, and
+**make sure no second backend is pointed at the same schema while they run**: another live worker polls
+the same queue and will claim an export job a test is mid-cancelling, which surfaces as a cancellation
+bug and a flaky lifecycle test rather than as a configuration mistake (P53, and the 30-second lease in
+`application-mysql.properties` exists partly because of it). `scripts/verify.sh` reports the whole
+MySQL check as `SKIP` with the reason when the variable is absent.
 
 ### First time
 
@@ -1374,7 +1524,7 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 
 ## 8. Next Step
 
-**Phase 11 is complete; awaiting authorization for Phase 12 (Spring Security).** Phases have been directed out of
+**Phase 12 is complete; awaiting authorization for Phase 13 (the PirateAgentUI wiring).** Phases have been directed out of
 `M-phase-plan.md` order, and that drift is now worth stating precisely rather than in a footnote:
 
 | Planned | Delivered | Where it went |
@@ -1389,33 +1539,28 @@ No secret value appears in any tracked file. `.env.example` holds names only.
 | Phase 8's dataset persistence | **Phases 9 and 10** (2026-09-30) | `V3__dataset_platform.sql` — seven tables, the `SAVE` step that writes them, and nine read endpoints; Phase 10 completed the traceability through the same schema |
 | Exports | **Phase 11** (2026-09-30) | CSV, JSON and XLSX as `workflow_jobs` rows with `job_type='EXPORT'` — the same claim, lease, heartbeat, sweeper and guarded terminal write that runs a step. `EXPORT` is a **job type**, not a fifth step: it enters no plan, and no run's status or progress moves because somebody downloaded one |
 | Phase 11's history / activity / monitoring | **Phase 11** (2026-09-30) | `operations/` reads the tables the queue already writes: `GET /api/v1/workflows`, `/{id}/runs`, `runs/{id}/steps`, `/api/v1/activity` (cursor on the event id) and `/api/v1/monitoring` |
+| **Phase 3 — authentication** (the plan's numbering) | **Phase 12** (2026-09-30) | `identity/` behind `config/SecurityConfig` — accounts, personal workspaces, membership roles, opaque revocable sessions in MySQL, and `FINALAGENT_WORKSPACE_ID` deleted. `V5`, because the slots the audit reserved for identity were taken by working code in Phases 9 and 11 |
 
 Most valuable next candidates, in dependency order:
 
-1. **Authentication and tenancy (the plan's Phase 3), now `V5`.** It moves to the top because Phase 11
-   gave the API two things a read-only surface never had: an unauthenticated `POST` that starts billed,
-   worker-executed work, and an unauthenticated file download. `POST /api/v1/datasets/{id}/exports`
-   spends a worker and a disk write, and `GET /api/v1/exports/{id}/download` hands back every row of a
-   dataset the requester filtered — so the exposure is no longer "read another tenant's records if the
-   scope is ever widened" but "ask for them as a file". Today the workspace is server-configured, a
-   foreign id answers as not-found, and the compound foreign keys mean neither a dataset nor an export
-   can be re-homed away from its rows (P38, and the same rule in V4) — but `FINALAGENT_WORKSPACE_ID` and
-   `Principals.UNAUTHENTICATED` are single-tenant placeholders, `workspace_id` / `created_by_id` still
-   have no foreign keys, and no `workspaces` / `users` / `refresh_tokens` table exists.
-   `/api/v1/workflows/*` remains unauthenticated too, and can start billed work: Firecrawl credits,
-   Gemini quota, a CPU-bound pipeline pass, and — where an operator enables it — live browser sessions.
+1. **The PirateAgentUI wiring (Phase 13).** Nothing in the browser speaks to any of this: ten routes
+   exist, none reads `/api/v1/workflows`, `/api/v1/datasets`, `/api/v1/exports`, `/api/v1/activity` or
+   `/api/v1/monitoring`, and there is no login screen even though Phase 12 created the thing a login
+   screen needs. This is now the only layer standing between the build and a demonstrable end-to-end
+   run, and every claim in §5 about "verified at the API boundary, not the user's" closes with it. The
+   credential rules it must respect are already written down: cookies only, no token in a body, and a
+   mutating request must carry `X-Requested-With`.
 2. **SSE monitoring over the durable event log.** `activity_events` is already written before any
-   broadcast, is cursor-addressable (`id > ?`), now carries a `workflow.dataset.saved` event and
+   broadcast, is cursor-addressable (`id > ?`), now carries `workflow.dataset.saved` and
    `export.completed` / `export.failed` events, and is served by `/api/v1/activity` as a polled cursor.
    The streaming endpoint is a reader over that same method rather than new plumbing.
-3. **Export-file retention.** Nothing sweeps `var/exports`, so a completed export's file lives forever:
-   `ON DELETE CASCADE` drops the *records* when a dataset goes, and says so in V4, but the disk is an
-   operator concern until a job prunes it. This is a queue job too, for the same reason exports are.
-4. **Frontend for the dataset and operations APIs.** Ten routes exist and none reads
-   `/api/v1/datasets`, `/api/v1/exports` or `/api/v1/monitoring`: a listing, a schema-aware table over
-   the dynamic columns, a row's evidence trail, and an export's progress. The design foundation is
-   byte-identical from `PirateAgentUI` and `lib/api/` is a typed client, so this is new pages rather
-   than a redesign.
+3. **Export-file and session-row retention.** Nothing sweeps `var/exports` and nothing prunes expired
+   `auth_sessions`, so both grow without bound; `ON DELETE CASCADE` drops the records when a dataset
+   goes and says so in V4, but the disk and the table are operator concerns until a job prunes them.
+   This is a queue job too, for the same reason exports are.
+4. **Membership administration.** `OWNER`/`EDITOR`/`VIEWER` are enforced on every request and set only
+   by registration or a direct insert, so the demotion path the per-request membership re-read exists
+   to support has no endpoint yet.
 5. **Finish source governance where Python cannot reach:** resolve a cleared URL's *host* before
    fetch (private/link-local/loopback refusal) and enforce
    `SearchStrategy.max_requests_per_domain_per_minute`, which is produced and reported but still
@@ -1423,13 +1568,14 @@ Most valuable next candidates, in dependency order:
 6. **Provider backoff at the LLM layer** for 429/503. The web layer retries (`curation/retry.py`) and
    the queue retries (`Backoff`), but the Gemini client still surfaces a rate limit as an error —
    normal on a free tier capped at 20 requests/day, not an edge case.
-7. **Right-size the budgets against one real run, and both new reads against one real size.**
+7. **Right-size the budgets against one real run, and every read against one real size.**
    `WORKFLOW_STEP_TIMEOUT_MS=240000` inside `WORKFLOW_LEASE_SECONDS=300` was reasoned about, never
    measured: no step has ever collected from the live web here, Phase 8 added a second long call
    (`/ai/v1/quality/process`) under the same budget, Phase 6 made an unverifiable browser session
-   visible, and Phase 11 added two more unmeasured numbers — a filtered dataset read is a JSON scan
-   nobody has timed (§5), and an export's chunk size is the only thing standing between a large file
-   and a worker held for its duration.
+   visible, Phase 11 added two more unmeasured numbers (a filtered dataset read is a JSON scan nobody
+   has timed, and an export's chunk size is the only thing between a large file and a held worker), and
+   Phase 12 added a per-request session lookup whose cost has not been measured against a loaded suite.
+
 
 Still open: **G1** (demonstration strategy), **G2** (narrowed again by Phase 6 — the API shape and
 lifecycle are settled, and sessions are now verifiable in principle, but no live session has run here,

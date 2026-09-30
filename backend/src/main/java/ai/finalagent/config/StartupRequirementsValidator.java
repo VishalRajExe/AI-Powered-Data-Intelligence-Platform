@@ -70,6 +70,7 @@ public class StartupRequirementsValidator implements InitializingBean {
 
         checkExecution(problems, p.execution());
         checkExport(problems, p.export());
+        checkAuth(problems, p.auth());
 
         if (!problems.isEmpty()) {
             throw new MissingRequiredConfigurationException(
@@ -147,11 +148,6 @@ public class StartupRequirementsValidator implements InitializingBean {
             // service refuse to boot for values nothing reads.
             return;
         }
-        if (execution.workspaceId() == null || execution.workspaceId().isBlank()) {
-            problems.add("FINALAGENT_WORKSPACE_ID must be set when the workflow layer is enabled. "
-                    + "It is taken from configuration, never from a request, because the previous "
-                    + "project trusted a client-supplied workspaceId.");
-        }
         if (execution.pollIntervalMs() < 100 || execution.pollIntervalMs() > 60_000) {
             problems.add("WORKFLOW_POLL_INTERVAL_MS must be between 100 and 60000; a faster poll "
                     + "is a database scan every few milliseconds.");
@@ -219,6 +215,39 @@ public class StartupRequirementsValidator implements InitializingBean {
         if (export.chunkRows() > export.maxRows()) {
             problems.add("FINALAGENT_EXPORT_CHUNK_ROWS must not exceed FINALAGENT_EXPORT_MAX_ROWS, "
                     + "or every export takes one chunk past the ceiling before it is refused.");
+        }
+    }
+
+    /**
+     * Bounds the session lifetimes and the lockout. These are checked even when the workflow queue is
+     * switched off, because registration and login are the only ways to reach any data at all — an
+     * unbounded or inverted session is a service that authenticates people into a state nobody can
+     * end.
+     */
+    static void checkAuth(List<String> problems, FinalAgentProperties.Auth auth) {
+        if (auth == null) {
+            problems.add("finalagent.auth must be configured; this build does not guess how long a "
+                    + "session lives.");
+            return;
+        }
+        if (auth.accessTokenTtlMinutes() < 1 || auth.accessTokenTtlMinutes() > 240) {
+            problems.add("AUTH_ACCESS_TOKEN_TTL_MINUTES must be between 1 and 240. It is the window "
+                    + "in which a revoked session can still be presented, so a long one is a long "
+                    + "logout that did not happen.");
+        }
+        if (auth.refreshTtlDays() < 1 || auth.refreshTtlDays() > 180) {
+            problems.add("AUTH_REFRESH_TOKEN_TTL_DAYS must be between 1 and 180.");
+        }
+        if (auth.absoluteTtlDays() < auth.refreshTtlDays()) {
+            problems.add("AUTH_ABSOLUTE_TTL_DAYS must be at least AUTH_REFRESH_TOKEN_TTL_DAYS, or the "
+                    + "ceiling renewal is supposed to enforce is already behind it.");
+        }
+        if (auth.maxFailedLogins() < 3 || auth.maxFailedLogins() > 20) {
+            problems.add("AUTH_MAX_FAILED_LOGINS must be between 3 and 20. Below 3 a mistyped password "
+                    + "locks a real account; above 20 the counter is decoration.");
+        }
+        if (auth.lockoutMinutes() < 1 || auth.lockoutMinutes() > 1440) {
+            problems.add("AUTH_LOCKOUT_MINUTES must be between 1 and 1440.");
         }
     }
 }
